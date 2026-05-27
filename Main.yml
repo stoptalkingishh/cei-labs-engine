@@ -1,0 +1,99 @@
+---
+# ansible/roles/common/tasks/main.yml
+# Runs on every node. Installs Docker, hardens SSH, sets up firewall.
+
+- name: Update apt cache
+  apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install system packages
+  apt:
+    name:
+      - curl
+      - wget
+      - git
+      - ufw
+      - fail2ban
+      - htop
+      - tmux
+      - unzip
+      - jq
+      - open-iscsi    # required by K3s for persistent volume support
+      - nfs-common    # required for NFS volume mounts
+    state: present
+
+- name: Set timezone to UTC
+  timezone:
+    name: UTC
+
+- name: Harden SSH — disable root login
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PermitRootLogin"
+    line: "PermitRootLogin no"
+  notify: Restart sshd
+
+- name: Harden SSH — disable password auth
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^#?PasswordAuthentication"
+    line: "PasswordAuthentication no"
+  notify: Restart sshd
+
+- name: UFW — allow SSH
+  ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+
+- name: UFW — allow K3s API server (control plane only)
+  ufw:
+    rule: allow
+    port: "6443"
+    proto: tcp
+  when: inventory_hostname in groups['control_plane']
+
+- name: UFW — allow K3s Flannel VXLAN
+  ufw:
+    rule: allow
+    port: "8472"
+    proto: udp
+
+- name: UFW — allow K3s kubelet metrics
+  ufw:
+    rule: allow
+    port: "10250"
+    proto: tcp
+
+- name: UFW — allow HTTP/HTTPS (ingress)
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop: ["80", "443"]
+  when: inventory_hostname in groups['control_plane']
+
+- name: UFW — allow participant SSH ports (analyst containers)
+  ufw:
+    rule: allow
+    port: "2201:2260"
+    proto: tcp
+  when: inventory_hostname in groups['analyst_workers']
+
+- name: Enable UFW
+  ufw:
+    state: enabled
+    policy: deny
+
+- name: Enable fail2ban
+  service:
+    name: fail2ban
+    state: started
+    enabled: true
+
+handlers:
+  - name: Restart sshd
+    service:
+      name: sshd
+      state: restarted
