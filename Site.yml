@@ -1,0 +1,47 @@
+---
+# ansible/site.yml
+# Master playbook. Run this once on fresh Ubuntu 24.04 nodes.
+# Idempotent — safe to re-run after config changes.
+#
+# Usage:
+#   ansible-playbook site.yml -i inventory.ini
+#   ansible-playbook site.yml -i inventory.ini --tags k3s
+#   ansible-playbook site.yml -i inventory.ini --limit node1
+
+- name: Common setup — all nodes
+  hosts: k3s_cluster
+  become: true
+  roles:
+    - common
+
+- name: K3s control plane
+  hosts: control_plane
+  become: true
+  roles:
+    - k3s-server
+    - metallb
+
+- name: K3s worker nodes
+  hosts: workers
+  become: true
+  roles:
+    - k3s-agent
+
+- name: Label Juice Shop worker nodes
+  hosts: control_plane
+  become: true
+  tags: [labels]
+  tasks:
+    - name: Label juiceshop workers
+      command: >
+        kubectl label node {{ item }} role=juiceshop --overwrite
+      loop: "{{ groups['juiceshop_workers'] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Label analyst workers
+      command: >
+        kubectl label node {{ item }} role=analyst --overwrite
+      loop: "{{ groups['analyst_workers'] }}"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
