@@ -1,0 +1,46 @@
+---
+# k8s/namespaces/namespaces.yml
+# All platform namespaces. Apply this first before any other manifests.
+# kubectl apply -f k8s/namespaces/namespaces.yml
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ctfd
+  labels:
+    app.kubernetes.io/part-of: ctf-platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: multijuicer
+  labels:
+    app.kubernetes.io/part-of: ctf-platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: analyst
+  labels:
+    app.kubernetes.io/part-of: ctf-platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: challenges
+  labels:
+    app.kubernetes.io/part-of: ctf-platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: ctf-platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: registry
+  labels:
+    app.kubernetes.io/part-of: ctf-platform
