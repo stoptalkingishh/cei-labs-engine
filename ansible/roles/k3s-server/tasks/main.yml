@@ -17,6 +17,7 @@
       --disable=traefik \
       --disable=servicelb \
       --write-kubeconfig-mode=644 \
+      --service-node-port-range=2201-32767 \
       --token={{ k3s_token }}" \
     sh -
   when: not k3s_binary.stat.exists

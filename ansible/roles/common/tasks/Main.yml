@@ -92,6 +92,9 @@
     state: started
     enabled: true
 
+- name: Flush handlers now
+  meta: flush_handlers
+
 handlers:
   - name: Restart sshd
     service:
