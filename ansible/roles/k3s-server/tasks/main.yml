@@ -24,7 +24,7 @@
   tags: [k3s]
 
 - name: Wait for K3s to be ready
-  command: kubectl get nodes
+  shell: /usr/local/bin/kubectl get nodes
   register: nodes_ready
   retries: 20
   delay: 10
@@ -39,6 +39,15 @@
     creates: /usr/local/bin/helm
   tags: [helm]
 
+# FIXED: Moved from position 6 to position 5 to prevent target copy crashes
+- name: Ensure .kube directory exists for ubuntu user
+  file:
+    path: /home/ubuntu/.kube
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: "0700"
+
 - name: Copy kubeconfig to ubuntu home
   copy:
     src: /etc/rancher/k3s/k3s.yaml
@@ -49,16 +58,10 @@
     remote_src: true
   tags: [k3s]
 
-- name: Ensure .kube directory exists for ubuntu user
-  file:
-    path: /home/ubuntu/.kube
-    state: directory
-    owner: ubuntu
-    group: ubuntu
-    mode: "0700"
-
+# OPTIMIZED: Uses regular expressions to ensure the assignment is unique and idempotent
 - name: Add KUBECONFIG to ubuntu bashrc
   lineinfile:
     path: /home/ubuntu/.bashrc
+    regexp: '^export KUBECONFIG='
     line: "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml"
     state: present

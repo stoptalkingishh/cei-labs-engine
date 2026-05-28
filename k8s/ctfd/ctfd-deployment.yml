@@ -1,21 +1,15 @@
----
-# k8s/ctfd/ctfd-secret.yml
-# Kubernetes Secret for CTFd credentials.
-# Replace base64 values with: echo -n "yourvalue" | base64
-# kubectl apply -f k8s/ctfd/ctfd-secret.yml -n ctfd
+# k8s/ctfd/ctfd-infrastructure.yml
 apiVersion: v1
 kind: Secret
 metadata:
   name: ctfd-secrets
-  namespace: ctfd
+  namespace: apps
 type: Opaque
 data:
-  # echo -n "CHANGE_ME_RANDOM_32_CHARS" | base64
+  # Base64 encodings of your target configuration parameters
   secret-key: Q0hBTkdFX01FX1JBTkRPTV8zMl9DSEFSU19DSEFOR0VfTUU=
-  # echo -n "CHANGE_ME" | base64
   db-password: Q0hBTkdFX01F
   db-root-password: Q0hBTkdFX01F
-  # echo -n "mysql+pymysql://ctfd:CHANGE_ME@ctfd-db/ctfd" | base64
   database-url: bXlzcWwrcHlteXNxbC8vY3RmZDpDSEFOR0VfTUVAY3RmZC1kYi9jdGZk
 ---
 # MariaDB StatefulSet
@@ -23,7 +17,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: ctfd-db
-  namespace: ctfd
+  namespace: apps
 spec:
   serviceName: ctfd-db
   replicas: 1
@@ -36,7 +30,7 @@ spec:
         app: ctfd-db
     spec:
       nodeSelector:
-        node-role.kubernetes.io/master: "true"
+        node-role.kubernetes.io/control-plane: "true"
       containers:
         - name: mariadb
           image: mariadb:10.11
@@ -57,6 +51,7 @@ spec:
                   key: db-password
           ports:
             - containerPort: 3306
+              name: mysql
           volumeMounts:
             - name: db-data
               mountPath: /var/lib/mysql
@@ -80,7 +75,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ctfd-db
-  namespace: ctfd
+  namespace: apps
 spec:
   selector:
     app: ctfd-db
@@ -94,7 +89,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ctfd-redis
-  namespace: ctfd
+  namespace: apps
 spec:
   replicas: 1
   selector:
@@ -106,7 +101,7 @@ spec:
         app: ctfd-redis
     spec:
       nodeSelector:
-        node-role.kubernetes.io/master: "true"
+        node-role.kubernetes.io/control-plane: "true"
       containers:
         - name: redis
           image: redis:7-alpine
@@ -124,7 +119,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ctfd-redis
-  namespace: ctfd
+  namespace: apps
 spec:
   selector:
     app: ctfd-redis
@@ -137,7 +132,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ctfd
-  namespace: ctfd
+  namespace: apps
   labels:
     app: ctfd
     version: "3.8.2"
@@ -152,15 +147,19 @@ spec:
         app: ctfd
     spec:
       nodeSelector:
-        node-role.kubernetes.io/master: "true"
+        node-role.kubernetes.io/control-plane: "true"
       initContainers:
-        # Fix upload directory permissions (CTFd 3.8.2 runs as non-root)
+        # Fix upload directory permissions (CTFd runs as UID 1001)
         - name: fix-permissions
           image: busybox
           command: ["sh", "-c", "chown -R 1001:1001 /var/uploads"]
           volumeMounts:
             - name: uploads
               mountPath: /var/uploads
+        # BLOCKING RESOLVER: Halts CTFd until MariaDB is accepting socket calls
+        - name: wait-for-db
+          image: busybox
+          command: ["sh", "-c", "until nc -z -w 2 ctfd-db 3306; do echo waiting for mariadb; sleep 2; done"]
       containers:
         - name: ctfd
           image: ctfd/ctfd:3.8.2
@@ -200,17 +199,18 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "1000m"
+          # FIXED: Swapped endpoints from broken healthcheck route to raw root validation path
           livenessProbe:
             httpGet:
-              path: /healthcheck
+              path: /
               port: 8000
-            initialDelaySeconds: 30
+            initialDelaySeconds: 45
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /healthcheck
+              path: /
               port: 8000
-            initialDelaySeconds: 15
+            initialDelaySeconds: 30
             periodSeconds: 10
       volumes:
         - name: uploads
@@ -221,7 +221,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: ctfd-uploads
-  namespace: ctfd
+  namespace: apps
 spec:
   accessModes:
     - ReadWriteOnce
@@ -233,7 +233,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ctfd
-  namespace: ctfd
+  namespace: apps
 spec:
   selector:
     app: ctfd
