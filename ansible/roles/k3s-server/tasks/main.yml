@@ -1,0 +1,63 @@
+---
+# ansible/roles/k3s-server/tasks/main.yml
+# Installs K3s on the control plane node.
+# Disables built-in Traefik so we can install a pinned version via Helm.
+# Disables built-in ServiceLB (Klipper) so MetalLB can manage LoadBalancer IPs.
+
+- name: Check if K3s is already installed
+  stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary
+
+- name: Install K3s server
+  shell: |
+    curl -sfL https://get.k3s.io | \
+    INSTALL_K3S_VERSION="{{ k3s_version }}" \
+    INSTALL_K3S_EXEC="server \
+      --disable=traefik \
+      --disable=servicelb \
+      --write-kubeconfig-mode=644 \
+      --token={{ k3s_token }}" \
+    sh -
+  when: not k3s_binary.stat.exists
+  tags: [k3s]
+
+- name: Wait for K3s to be ready
+  command: kubectl get nodes
+  register: nodes_ready
+  retries: 20
+  delay: 10
+  until: nodes_ready.rc == 0
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  tags: [k3s]
+
+- name: Install Helm
+  shell: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  args:
+    creates: /usr/local/bin/helm
+  tags: [helm]
+
+- name: Copy kubeconfig to ubuntu home
+  copy:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: /home/ubuntu/.kube/config
+    owner: ubuntu
+    group: ubuntu
+    mode: "0600"
+    remote_src: true
+  tags: [k3s]
+
+- name: Ensure .kube directory exists for ubuntu user
+  file:
+    path: /home/ubuntu/.kube
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: "0700"
+
+- name: Add KUBECONFIG to ubuntu bashrc
+  lineinfile:
+    path: /home/ubuntu/.bashrc
+    line: "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml"
+    state: present

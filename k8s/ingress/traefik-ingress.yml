@@ -1,0 +1,107 @@
+---
+# k8s/ingress/traefik-install.yml
+# Install Traefik v3 via Helm (K3s v1.32 bundles Traefik v3 but we manage
+# it explicitly here for full configuration control).
+# K3s was started with --disable=traefik so this Helm install is the real one.
+#
+# Install:
+#   helm repo add traefik https://traefik.github.io/charts
+#   helm repo update
+#   helm upgrade --install traefik traefik/traefik \
+#     -f k8s/ingress/traefik-values.yml \
+#     --namespace traefik \
+#     --create-namespace
+
+# ── traefik-values.yml content ──────────────────────────────────────────────
+# (inline here as a ConfigMap for documentation — actual install uses Helm)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: traefik-helm-values-doc
+  namespace: traefik
+data:
+  values.yml: |
+    # Traefik v3 values for CTF platform
+    service:
+      type: LoadBalancer
+      # MetalLB will assign an IP from the pool
+    
+    ports:
+      web:
+        port: 80
+        expose:
+          default: true
+      websecure:
+        port: 443
+        expose:
+          default: true
+      # SSH passthrough for analyst containers (2201-2260)
+      ssh-analysts:
+        port: 2201
+        expose:
+          default: true
+        protocol: TCP
+    
+    logs:
+      general:
+        level: INFO
+    
+    # Node selector — Traefik runs on control plane
+    nodeSelector:
+      node-role.kubernetes.io/master: "true"
+    
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "500m"
+---
+# CTFd IngressRoute
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: ctfd-ingress
+  namespace: ctfd
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`ctfd.ctf.local`)
+      kind: Rule
+      services:
+        - name: ctfd
+          port: 80
+---
+# MultiJuicer IngressRoute
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: multijuicer-ingress
+  namespace: multijuicer
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`juiceshop.ctf.local`)
+      kind: Rule
+      services:
+        - name: multi-juicer
+          port: 3000
+---
+# Registry IngressRoute
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: registry-ingress
+  namespace: registry
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`registry.ctf.local`)
+      kind: Rule
+      services:
+        - name: registry
+          port: 5000

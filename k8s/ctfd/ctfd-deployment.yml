@@ -1,0 +1,237 @@
+---
+# k8s/ctfd/ctfd-secret.yml
+# Kubernetes Secret for CTFd credentials.
+# Replace base64 values with: echo -n "yourvalue" | base64
+# kubectl apply -f k8s/ctfd/ctfd-secret.yml -n ctfd
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ctfd-secrets
+  namespace: ctfd
+type: Opaque
+data:
+  # echo -n "CHANGE_ME_RANDOM_32_CHARS" | base64
+  secret-key: Q0hBTkdFX01FX1JBTkRPTV8zMl9DSEFSU19DSEFOR0VfTUU=
+  # echo -n "CHANGE_ME" | base64
+  db-password: Q0hBTkdFX01F
+  db-root-password: Q0hBTkdFX01F
+---
+# MariaDB StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ctfd-db
+  namespace: ctfd
+spec:
+  serviceName: ctfd-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ctfd-db
+  template:
+    metadata:
+      labels:
+        app: ctfd-db
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/master: "true"
+      containers:
+        - name: mariadb
+          image: mariadb:10.11
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ctfd-secrets
+                  key: db-root-password
+            - name: MYSQL_DATABASE
+              value: ctfd
+            - name: MYSQL_USER
+              value: ctfd
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ctfd-secrets
+                  key: db-password
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: db-data
+              mountPath: /var/lib/mysql
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+  volumeClaimTemplates:
+    - metadata:
+        name: db-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ctfd-db
+  namespace: ctfd
+spec:
+  selector:
+    app: ctfd-db
+  ports:
+    - port: 3306
+      targetPort: 3306
+  clusterIP: None
+---
+# Redis Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ctfd-redis
+  namespace: ctfd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ctfd-redis
+  template:
+    metadata:
+      labels:
+        app: ctfd-redis
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/master: "true"
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ctfd-redis
+  namespace: ctfd
+spec:
+  selector:
+    app: ctfd-redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+# CTFd Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ctfd
+  namespace: ctfd
+  labels:
+    app: ctfd
+    version: "3.8.2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ctfd
+  template:
+    metadata:
+      labels:
+        app: ctfd
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/master: "true"
+      initContainers:
+        # Fix upload directory permissions (CTFd 3.8.2 runs as non-root)
+        - name: fix-permissions
+          image: busybox
+          command: ["sh", "-c", "chown -R 1001:1001 /var/uploads"]
+          volumeMounts:
+            - name: uploads
+              mountPath: /var/uploads
+      containers:
+        - name: ctfd
+          image: ctfd/ctfd:3.8.2
+          env:
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ctfd-secrets
+                  key: secret-key
+            - name: DATABASE_URL
+              value: "mysql+pymysql://ctfd:$(DB_PASSWORD)@ctfd-db/ctfd"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ctfd-secrets
+                  key: db-password
+            - name: REDIS_URL
+              value: "redis://ctfd-redis:6379"
+            - name: UPLOAD_FOLDER
+              value: "/var/uploads"
+            - name: REVERSE_PROXY
+              value: "true"
+            - name: WORKERS
+              value: "4"
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: uploads
+              mountPath: /var/uploads
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /healthcheck
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: ctfd-uploads
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ctfd-uploads
+  namespace: ctfd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ctfd
+  namespace: ctfd
+spec:
+  selector:
+    app: ctfd
+  ports:
+    - port: 80
+      targetPort: 8000

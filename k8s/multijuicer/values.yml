@@ -1,0 +1,78 @@
+# k8s/multijuicer/values.yml
+# MultiJuicer v10.0.0 Helm values.
+#
+# Install command:
+#   helm install multi-juicer oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer \
+#     -f k8s/multijuicer/values.yml \
+#     --namespace multijuicer \
+#     --create-namespace
+#
+# Upgrade command:
+#   helm upgrade multi-juicer oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer \
+#     -f k8s/multijuicer/values.yml \
+#     --namespace multijuicer
+
+# Maximum concurrent Juice Shop instances
+# Set to your participant count. Each instance uses ~400MB RAM.
+maxInstances: 30
+
+# CTF key — seeds all flag generation
+# MUST match the key used when running juice-shop-ctf-cli
+# Change this before every event — all flags change with it
+ctfKey: "CHANGE_ME_BEFORE_EVERY_EVENT"
+
+# Admin password for MultiJuicer dashboard
+adminPassword: "CHANGE_ME"
+
+# Pin Juice Shop instances to the juiceshop worker node
+juiceShop:
+  nodeSelector:
+    role: juiceshop
+  resources:
+    requests:
+      memory: "300Mi"
+      cpu: "100m"
+    limits:
+      memory: "500Mi"
+      cpu: "500m"
+  # CTF mode configuration
+  # Full config reference: https://pwning.owasp-juice.shop/companion-guide/latest/part4/customization.html
+  config: |
+    application:
+      name: "CTF Training Platform"
+      welcomeBanner:
+        showOnFirstStart: true
+        title: "Welcome to the CTF Platform"
+        message: "Complete challenges to earn points. Submit flags in CTFd at http://ctfd.ctf.local"
+    ctf:
+      showFlagsInNotifications: false
+
+# MultiJuicer balancer — runs on control plane
+nodeSelector:
+  node-role.kubernetes.io/master: "true"
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+# Ingress via Traefik
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: traefik
+  hosts:
+    - host: juiceshop.ctf.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+# Instance cleanup — remove inactive instances after 2 hours
+instanceLifetime: 120m
+
+# Metrics for monitoring (optional — enable if deploying Prometheus)
+metrics:
+  enabled: false
