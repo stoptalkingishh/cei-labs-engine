@@ -1,16 +1,12 @@
 # k8s/multijuicer/values.yml
 # MultiJuicer v10.0.0 Helm values.
 #
-# Install command:
-#   helm install multi-juicer oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer \
+# Install/Upgrade command (Synchronized with platform-up.sh release identity):
+#   helm upgrade --install multijuicer oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer \
 #     -f k8s/multijuicer/values.yml \
 #     --namespace multijuicer \
-#     --create-namespace
-#
-# Upgrade command:
-#   helm upgrade multi-juicer oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer \
-#     -f k8s/multijuicer/values.yml \
-#     --namespace multijuicer
+#     --create-namespace \
+#     --wait
 
 # Maximum concurrent Juice Shop instances
 # Set to your participant count. Each instance uses ~400MB RAM.
@@ -47,28 +43,25 @@ juiceShop:
     ctf:
       showFlagsInNotifications: false
 
-# MultiJuicer balancer — runs on control plane
-nodeSelector:
-  node-role.kubernetes.io/master: "true"
+# MultiJuicer balancer configuration
+balancer:
+  repository: ghcr.io/juice-shop/multi-juicer/balancer
+  # FIXED: Target the modern K3s v1.32 canonical control-plane node label boundary
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: "true"
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  cookie:
+    secure: false # Change to true once cert-manager handles explicit TLS termination
 
-resources:
-  requests:
-    memory: "256Mi"
-    cpu: "100m"
-  limits:
-    memory: "512Mi"
-    cpu: "500m"
-
-# Ingress via Traefik
+# FIXED: Native Ingress generation disabled to yield cleanly to k8s/ingress/traefik-ingress.yml
 ingress:
-  enabled: true
-  annotations:
-    kubernetes.io/ingress.class: traefik
-  hosts:
-    - host: juiceshop.ctf.local
-      paths:
-        - path: /
-          pathType: Prefix
+  enabled: false
 
 # Instance cleanup — remove inactive instances after 2 hours
 instanceLifetime: 120m

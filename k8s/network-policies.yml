@@ -1,0 +1,25 @@
+# k8s/network-policies.yml
+apiVersion: networks.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-analyst-to-platform
+  namespace: analyst
+spec:
+  podSelector:
+    matchLabels:
+      app: analyst
+  policyTypes:
+    - Egress
+  egress:
+    # Allow local DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    # Deny direct lateral movement into core platform namespaces
+    - to:
+        - namespaceSelector:
+            notIn: ["ctfd", "traefik", "registry"]

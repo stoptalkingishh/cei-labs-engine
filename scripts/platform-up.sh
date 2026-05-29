@@ -15,9 +15,24 @@ export KUBECONFIG
 
 DRY_RUN=false
 SKIP_IMAGES=false
-for arg in "$@"; do
-  [[ "$arg" == "--dry-run" ]] && DRY_RUN=true
-  [[ "$arg" == "--skip-images" ]] && SKIP_IMAGES=true
+
+# ── FIXED 1: Hardened Standard While-Loop Argument Parser ─────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --skip-images)
+      SKIP_IMAGES=true
+      shift
+      ;;
+    *)
+      echo "[-] Unknown validation parameter passed: $1"
+      echo "Usage: $0 [--dry-run] [--skip-images]"
+      exit 1
+      ;;
+  esac
 done
 
 run() {
@@ -43,9 +58,20 @@ echo ""
 echo "── Step 2: Internal Air-Gap Image Registry ─────────"
 if [ -f "k8s/registry/registry.yml" ]; then
   run "kubectl apply -f k8s/registry/registry.yml"
-  run "kubectl rollout status deployment/local-registry -n registry --timeout=60s"
+  # FIXED 2: Corrected deployment name target from local-registry to registry to match resource specification
+  run "kubectl rollout status deployment/registry -n registry --timeout=60s"
 else
   echo "[!] Local registry configuration sheet missing. Skipping deployment..."
+fi
+
+# ── Image Pre-Pull Optimization Hook ─────────────────────────────────────────
+if [[ "$SKIP_IMAGES" == "false" && "$DRY_RUN" == "false" ]]; then
+  echo ""
+  echo "── Optional Step: Core Infrastructure Image Pre-Pull ─"
+  echo "[*] Optimizing worker caching nodes (Caching CTFd & DB engines)..."
+  # Pre-cache heavy images to prevent rollout tracking from hitting timeouts later
+  crictl pull docker.io/library/mariadb:10.11 2>/dev/null || true
+  crictl pull docker.io/library/redis:7.0 2>/dev/null || true
 fi
 
 # ── 3. Traefik ingress controller ────────────────────────────────────────────
@@ -54,7 +80,6 @@ echo "── Step 3: Traefik v3 Ingress Core ───────────�
 run "helm repo add traefik https://traefik.github.io/charts 2>/dev/null || true"
 run "helm repo update"
 
-# FIXED: Swapped out legacy master label injection for the canonical control-plane value file
 if [ -f "k8s/ingress/traefik-values.yml" ]; then
   run "helm upgrade --install traefik traefik/traefik \
     --namespace traefik \
@@ -80,7 +105,6 @@ echo "    CTFd score server initialized at http://ctfd.ctf.local"
 # ── 5. MultiJuicer ───────────────────────────────────────────────────────────
 echo ""
 echo "── Step 5: MultiJuicer Component Cluster ────────────"
-# FIXED: Name switched from multi-juicer to multijuicer to align with platform-down.sh purge hooks
 run "helm upgrade --install multijuicer \
   oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer \
   -f k8s/multijuicer/values.yml \
@@ -102,7 +126,7 @@ echo "    ./scripts/juice-shop-ctf-import.sh"
 # ── 8. Load CTFd challenges ──────────────────────────────────────────────────
 echo ""
 echo "── Step 8: Load Challenge Specifications ───────────"
-echo "    Run separately after CTFd admin token is set in group_vars/all.yml:"
+echo "    Run separately after CTFd admin token is generated:"
 echo "    ./scripts/challenges-load.sh"
 
 echo ""
@@ -117,8 +141,6 @@ echo ""
 echo "  Next steps:"
 echo "    1. Visit http://ctfd.ctf.local — complete setup wizard"
 echo "    2. Create admin account, note the API token"
-echo "    3. Update ctfd_admin_token in ansible/group_vars/all.yml"
-echo "    4. Run ./scripts/juice-shop-ctf-import.sh"
-echo "    5. Run ./scripts/challenges-load.sh"
-echo "    6. Run ./scripts/spawn-analysts.sh roster.txt"
+echo "    3. Run ./scripts/challenges-load.sh"
+echo "    4. Run .\scripts\spawn-analysts.ps1 -Roster .\roster.txt"
 echo "═══════════════════════════════════════════════════"

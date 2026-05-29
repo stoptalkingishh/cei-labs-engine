@@ -52,3 +52,14 @@
       kubernetes.core.k8s:
         state: present
         src: "{{ playbook_dir }}/../k8s/namespaces/namespaces.yml"
+
+- name: Phase 6 - Deploy Shared Core Application Engines
+  hosts: control_plane[0]
+  tags: ["apps", "platform"]
+  tasks:
+    - name: Trigger core platform services initialization script
+      ansible.builtin.command:
+        cmd: "./scripts/platform-up.sh"
+        chdir: "{{ playbook_dir }}/.."
+      environment:
+        KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"

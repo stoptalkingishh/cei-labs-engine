@@ -8,62 +8,84 @@
 #   ./scripts/spawn-analysts.sh roster.txt
 #   ./scripts/spawn-analysts.sh --teardown
 #   ./scripts/spawn-analysts.sh --status
-#
-# roster.txt format — one username per line:
-#   smith_j
-#   jones_a
-#   davis_k
 
 set -euo pipefail
 
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
-# FIXED (Item 3): Isolated back to the dedicated analyst tracking workspace
 NAMESPACE="analyst"
 IMAGE="ghcr.io/${GITHUB_ORG:-your-org}/ctf-platform/ctf-analyst:latest"
-# FIXED: Shifted port baseline into the strict K8s default range (30000-32767)
 BASE_PORT=30001
 CREDS_FILE="creds.txt"
 
+# ── FIXED 1: Hardened, Accurate Control-Plane IP Parsing Engine ──────────────
 BASTION_IP="${BASTION_IP:-}"
 if [[ -z "$BASTION_IP" ]]; then
-  BASTION_IP=$(kubectl get nodes -o wide | grep "control-plane" | awk '{print $6}' || true)
-  if [[ -z "$BASTION_IP" ]]; then
-    BASTION_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "127.0.0.1")
-  fi
+  BASTION_IP=$(kubectl get nodes -l node-role.kubernetes.io/control-plane=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "127.0.0.1")
 fi
 
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 
+log_info()  { echo -e "${GREEN}[+]${NC} $*"; }
+log_warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+log_error() { echo -e "${RED}[-]${NC} $*" >&2; }
+
+# Initialize Namespace Bound
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
-# ── Teardown ──────────────────────────────────────────────────────────────────
-if [[ "${1:-}" == "--teardown" ]]; then
-  echo -e "${YELLOW}[!] Removing all analyst pods...${NC}"
+TEARDOWN=false
+STATUS=false
+ROSTER=""
+
+# ── FIXED 2: Standardized While-Loop Positional Argument Parser ───────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --teardown)
+      TEARDOWN=true
+      shift
+      ;;
+    --status)
+      STATUS=true
+      shift
+      ;;
+    -*)
+      log_error "Unknown validation parameter passed: $1"
+      echo "Usage: $0 [--teardown] [--status] [roster.txt]"
+      exit 1
+      ;;
+    *)
+      ROSTER="$1"
+      shift
+      ;;
+  esac
+done
+
+# Execute Actions Based on Evaluated State Flags
+if [[ "$TEARDOWN" == "true" ]]; then
+  log_warn "Removing all active analyst pods and routing rules..."
   kubectl delete pods -n "${NAMESPACE}" -l "app=analyst" --grace-period=5 --ignore-not-found=true
   kubectl delete services -n "${NAMESPACE}" -l "app=analyst" --ignore-not-found=true
-  echo -e "${GREEN}[+] All analyst pods removed.${NC}"
+  log_info "All analyst components evicted cleanly."
   exit 0
 fi
 
-# ── Status ────────────────────────────────────────────────────────────────────
-if [[ "${1:-}" == "--status" ]]; then
-  echo "Analyst pods:"
+if [[ "$STATUS" == "true" ]]; then
+  echo "=== Analyst Workspaces Running Status ==="
   kubectl get pods -n "${NAMESPACE}" -l "app=analyst" -o wide
   echo ""
-  echo "Analyst services (SSH ports):"
+  echo "=== Live NodePort Port Assignment Mapping ==="
   kubectl get services -n "${NAMESPACE}" -l "app=analyst"
   exit 0
 fi
 
-# ── Spawn ─────────────────────────────────────────────────────────────────────
-ROSTER="${1:-}"
 if [[ -z "$ROSTER" || ! -f "$ROSTER" ]]; then
-  echo "Usage: $0 [--teardown|--status] <roster.txt>"
+  log_error "Error: Missing valid participant roster target file."
+  echo "Usage: $0 [roster.txt]"
   exit 1
 fi
 
+# Initialize Clean Output Matrix
 > "${CREDS_FILE}"
 echo "# CTF Event Credentials — $(date)" >> "${CREDS_FILE}"
 echo "# Bastion IP: ${BASTION_IP}" >> "${CREDS_FILE}"
@@ -81,7 +103,7 @@ while IFS= read -r username || [[ -n "$username" ]]; do
   POD_NAME="analyst-${username}"
   SVC_NAME="analyst-svc-${username}"
 
-  # Create the Pod
+  # Create Individual Analyst Workspace Pods
   kubectl apply -n "${NAMESPACE}" -f - << EOF
 apiVersion: v1
 kind: Pod
@@ -92,7 +114,6 @@ metadata:
     app: analyst
     participant: "${username}"
 spec:
-  # FIXED (Item 4): Targets the explicit custom key assigned by Ansible to Node 3
   nodeSelector:
     role: analyst
   restartPolicy: Always
@@ -122,7 +143,7 @@ spec:
         type: DirectoryOrCreate
 EOF
 
-  # Create NodePort Service for SSH access
+  # Expose Dedicated Isolation NodePort Interface
   kubectl apply -n "${NAMESPACE}" -f - << EOF
 apiVersion: v1
 kind: Service
@@ -151,5 +172,4 @@ EOF
 done < "${ROSTER}"
 
 echo ""
-echo -e "${GREEN}[+] Credentials written to ${CREDS_FILE}${NC}"
-echo "    Distribute individual rows — do NOT share the full file."
+log_info "Credentials compiled successfully into: ${CREDS_FILE}"
