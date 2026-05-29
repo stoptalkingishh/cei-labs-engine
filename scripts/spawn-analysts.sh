@@ -16,10 +16,10 @@ export KUBECONFIG
 
 VARS_FILE="ansible/group_vars/all.yml"
 DEFAULT_PORT=30001
-DEFAULT_TAG="v1.0.4"
+DEFAULT_TAG="latest"
 DEFAULT_ORG="your-org"
 
-# FIXED 1: Dynamically extract configuration values directly from Ansible group_vars
+# FIXED: Dynamically extract configuration values directly from Ansible group_vars
 if [[ -f "$VARS_FILE" ]]; then
   BASE_PORT=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('analyst_base_port', $DEFAULT_PORT))" 2>/dev/null || echo "$DEFAULT_PORT")
   TAG=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('analyst_image_tag', '$DEFAULT_TAG'))" 2>/dev/null || echo "$DEFAULT_TAG")
@@ -31,8 +31,8 @@ else
 fi
 
 NAMESPACE="analyst"
-# FIXED 3: Hardened image tag string to avoid volatile :latest usage in production
-IMAGE="ghcr.io/${ORG}/ctf-platform/ctf-analyst:${TAG}"
+# FIXED: Realigned the target GHCR path layout to cleanly match standard package output subdirectories
+IMAGE="ghcr.io/${ORG}/ctf-analyst:${TAG}"
 CREDS_FILE="creds.txt"
 
 # Hardened Control-Plane IP Parsing Engine
@@ -141,7 +141,7 @@ spec:
           value: "${PASSWORD}"
       ports:
         - containerPort: 22
-      # FIXED 2: Added Startup Probe to guarantee SSH readiness detection
+      # Added Startup Probe to guarantee SSH readiness detection before passing traffic
       startupProbe:
         tcpSocket:
           port: 22

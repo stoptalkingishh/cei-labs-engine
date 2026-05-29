@@ -50,9 +50,10 @@ if [ -f "k8s/ingress/traefik-ingress.yml" ]; then
   kubectl delete -f k8s/ingress/traefik-ingress.yml --ignore-not-found=true
 fi
 
-# Evict the complete CTFd application stack via kustomize
-if [ -d "k8s/ctfd" ]; then
-  kubectl delete -k k8s/ctfd/ --ignore-not-found=true
+# FIXED: Converted from -k to -f to resolve manifest structural parsing errors
+if [ -f "k8s/ctfd/ctfd-deployment.yml" ]; then
+  echo "[*] Dismantling core CTFd scoring engines and storage definitions..."
+  kubectl delete -f k8s/ctfd/ctfd-deployment.yml --ignore-not-found=true
 fi
 
 # FIXED (Item 10): Removes the internal container registry to prevent runtime storage lock collisions

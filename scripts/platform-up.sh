@@ -80,15 +80,17 @@ echo "── Step 3: Traefik v3 Ingress Core ───────────�
 run "helm repo add traefik https://traefik.github.io/charts 2>/dev/null || true"
 run "helm repo update"
 
-# FIXED (Item 6): Updated the path to target the correct k8s/traefik/ directory matching your repository structure
-if [ -f "k8s/traefik/traefik-values.yml" ]; then
+# FIXED: Realigned lookup string to point to the actual k8s/ingress/ path layout
+if [ -f "k8s/ingress/traefik-values.yml" ]; then
   run "helm upgrade --install traefik traefik/traefik \
     --namespace traefik \
-    -f k8s/traefik/traefik-values.yml \
+    --create-namespace \
+    -f k8s/ingress/traefik-values.yml \
     --wait"
 else
   run "helm upgrade --install traefik traefik/traefik \
     --namespace traefik \
+    --create-namespace \
     --set nodeSelector.'node-role\.kubernetes\.io/control-plane'=true \
     --set service.type=LoadBalancer \
     --wait"

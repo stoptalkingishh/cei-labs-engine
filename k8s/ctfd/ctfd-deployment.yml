@@ -1,15 +1,17 @@
-# k8s/ctfd/ctfd-deployment.yml
+---
 apiVersion: v1
 kind: Secret
 metadata:
   name: ctfd-secrets
   namespace: ctfd
 type: Opaque
-data:
-  secret-key: Q0hBTkdFX01FX1JBTkRPTV8zMl9DSEFSU19DSEFOR0VfTUU=
-  db-password: Q0hBTkdFX01F
-  db-root-password: Q0hBTkdFX01F
-  database-url: bXlzcWwrcHlteXNxbC8vY3RmZDpDSEFOR0VfTUVAY3RmZC1kYi9jdGZk
+# stringData allows cleartext input; Kubernetes automatically encodes it to base64 on submission.
+# Replace these default parameters with real, cryptographically secure production secrets prior to kickoff.
+stringData:
+  secret-key: "CHANGE_ME_RANDOM_32_CHARS_LONG_OR_GREATER"
+  db-password: "CHANGE_ME_SECURE_DATABASE_USER_PASSWORD"
+  db-root-password: "CHANGE_ME_SECURE_DATABASE_ROOT_PASSWORD"
+  database-url: "mysql+pymysql://ctfd:CHANGE_ME_SECURE_DATABASE_USER_PASSWORD@ctfd-db/ctfd"
 ---
 apiVersion: apps/v1
 kind: StatefulSet
