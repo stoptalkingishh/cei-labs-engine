@@ -39,6 +39,10 @@ multijuicer_max_instances: 30
 base_domain: "ctf.local"
 
 # ── User SSH Workspaces (Node Assignment Range) ───────────────────────────
-# FIXED: Standardized participant configuration parameters mapping to the K8s NodePort window
+# Standardized participant configuration parameters mapping to the K8s NodePort window
 analyst_base_port: 30001
-analyst_image_tag: "v1.0.4" # Explicit tag pin (matches spawn-analysts dynamic resolution lookup)
+
+# FIXED (Item 11): Changed default tag from non-existent v1.0.4 to "latest" to prevent ImagePullBackOff errors.
+# The CI build workflow only outputs "latest" or "sha-<hash>" tags. Cadre can update this value 
+# to a frozen container build SHA (e.g., "sha-a1b2c3d") once verification cycles pass.
+analyst_image_tag: "latest"

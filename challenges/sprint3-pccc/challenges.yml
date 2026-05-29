@@ -1,0 +1,25 @@
+---
+apiVersion: k8s.cei-labs.local/v1
+kind: ChallengePack
+metadata:
+  name: sprint3-pccc-infrastructure
+  namespace: ctf-challenges
+spec:
+  sprint: 3
+  category: "SIGINT & Infrastructure Operations"
+  challenges:
+    - id: "crapi-idor"
+      title: "crAPI Insecure Direct Object Reference"
+      difficulty: "Medium"
+      points: 300
+      description: "Manipulate sequential backend REST API payload indices to harvest sensitive customer driver metrics profiles."
+      flag_type: "static"
+      secret: "CTF{broken_object_level_authorization_success}"
+
+    - id: "pccc-skilling-sigint"
+      title: "PCCC Skilling Lab: Signal Analysis"
+      difficulty: "Hard"
+      points: 500
+      description: "Reconstruct raw hex payload captures extracted from a compromised network communication vector."
+      flag_type: "static"
+      secret: "CTF{high_frequency_spectrum_reconstructed}"

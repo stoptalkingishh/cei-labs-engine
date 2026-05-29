@@ -19,7 +19,6 @@
   roles:
     - role: k3s-server
 
-# FIXED: Realigned targeting matrix to map precisely to 'workers' and 'analyst_workers' group names
 - name: Phase 3 - Join Worker & Analyst Nodes to Cluster Runtime
   hosts: workers:analyst_workers
   become: true
@@ -36,31 +35,27 @@
       ansible.builtin.include_role:
         name: metallb
 
-- name: Phase 5 - Verify Cluster Structural Readiness & Deploy Spaces
+- name: Phase 5 - Verify Cluster Structural Readiness & Seed Environments
   hosts: control_plane[0]
   tags: ["apps", "bootstrap"]
   tasks:
+    # FIXED (Item 3): Replaced heavy k8s modules with native, fast kubectl shell checks
     - name: Validate all worker cluster nodes are reporting Ready state
-      ansible.builtin.kubernetes.k8s_info:
-        kind: Node
-        wait: true
-        wait_condition:
-          type: Ready
-          status: "True"
-        wait_timeout: 300
-
-    - name: Seed internal cluster namespace topologies
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ playbook_dir }}/../k8s/namespaces/namespaces.yml"
-
-- name: Phase 6 - Deploy Shared Core Application Engines
-  hosts: control_plane[0]
-  tags: ["apps", "platform"]
-  tasks:
-    - name: Trigger core platform services initialization script
-      ansible.builtin.command:
-        cmd: "./scripts/platform-up.sh"
-        chdir: "{{ playbook_dir }}/.."
+      ansible.builtin.shell: |
+        kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' | grep -qv "False"
+      register: nodes_ready
+      until: nodes_ready.rc == 0
+      retries: 30
+      delay: 10
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
+
+    # FIXED (Item 3): Standard kubectl shell application ensures zero-dependency execution
+    - name: Seed internal cluster namespace topologies
+      ansible.builtin.shell: |
+        kubectl apply -f "{{ playbook_dir }}/../k8s/namespaces/namespaces.yml"
+      environment:
+        KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
+
+# NOTE: Phase 6 has been deleted per Item 7 design requirements.
+# Post-provisioning setup should be completed manually by executing `./scripts/platform-up.sh` on the control plane.

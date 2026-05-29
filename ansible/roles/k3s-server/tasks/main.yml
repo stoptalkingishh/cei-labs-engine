@@ -5,26 +5,26 @@
 # Disables built-in ServiceLB (Klipper) so MetalLB can manage LoadBalancer IPs.
 
 - name: Check if K3s is already installed
-  stat:
+  ansible.builtin.stat:
     path: /usr/local/bin/k3s
   register: k3s_binary
 
 - name: Install K3s server
-  shell: |
+  ansible.builtin.shell: |
     curl -sfL https://get.k3s.io | \
     INSTALL_K3S_VERSION="{{ k3s_version }}" \
     INSTALL_K3S_EXEC="server \
       --disable=traefik \
       --disable=servicelb \
       --write-kubeconfig-mode=644 \
-      --service-node-port-range=2201-32767 \
+      --service-node-port-range=30000-32767 \
       --token={{ k3s_token }}" \
     sh -
   when: not k3s_binary.stat.exists
   tags: [k3s]
 
 - name: Wait for K3s to be ready
-  shell: /usr/local/bin/kubectl get nodes
+  ansible.builtin.shell: /usr/local/bin/kubectl get nodes
   register: nodes_ready
   retries: 20
   delay: 10
@@ -34,14 +34,14 @@
   tags: [k3s]
 
 - name: Install Helm
-  shell: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  ansible.builtin.shell: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
   args:
     creates: /usr/local/bin/helm
   tags: [helm]
 
 # FIXED: Moved from position 6 to position 5 to prevent target copy crashes
 - name: Ensure .kube directory exists for ubuntu user
-  file:
+  ansible.builtin.file:
     path: /home/ubuntu/.kube
     state: directory
     owner: ubuntu
@@ -49,7 +49,7 @@
     mode: "0700"
 
 - name: Copy kubeconfig to ubuntu home
-  copy:
+  ansible.builtin.copy:
     src: /etc/rancher/k3s/k3s.yaml
     dest: /home/ubuntu/.kube/config
     owner: ubuntu
@@ -59,8 +59,9 @@
   tags: [k3s]
 
 # OPTIMIZED: Uses regular expressions to ensure the assignment is unique and idempotent
+# FIXED: Guaranteed a clean trailing newline terminating boundaries with no structural merge artifacts
 - name: Add KUBECONFIG to ubuntu bashrc
-  lineinfile:
+  ansible.builtin.lineinfile:
     path: /home/ubuntu/.bashrc
     regexp: '^export KUBECONFIG='
     line: "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml"

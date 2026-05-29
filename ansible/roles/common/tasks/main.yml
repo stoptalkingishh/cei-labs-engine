@@ -95,3 +95,10 @@
 
 - name: Flush handlers now
   ansible.builtin.meta: flush_handlers
+
+# FIXED (Item 2 & 15): Embedded inline handler mapping block to cleanly process notified tasks
+handlers:
+  - name: Restart sshd
+    ansible.builtin.service:
+      name: sshd
+      state: restarted

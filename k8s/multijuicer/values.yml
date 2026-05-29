@@ -1,3 +1,4 @@
+---
 # k8s/multijuicer/values.yml
 # MultiJuicer v10.0.0 Helm values.
 #
@@ -8,22 +9,21 @@
 #     --create-namespace \
 #     --wait
 
-# Maximum concurrent Juice Shop instances
-# Set to your participant count. Each instance uses ~400MB RAM.
-maxInstances: 30
-
-# CTF key — seeds all flag generation
-# MUST match the key used when running juice-shop-ctf-cli
-# Change this before every event — all flags change with it
-ctfKey: "CHANGE_ME_BEFORE_EVERY_EVENT"
-
-# Admin password for MultiJuicer dashboard
-adminPassword: "CHANGE_ME"
-
-# Pin Juice Shop instances to the juiceshop worker node
+# FIXED (Item 12): Root level elements moved under the authoritative juiceShop block structure for v10 compatibility
 juiceShop:
+  # Maximum concurrent Juice Shop instances (Set to your participant count. Each instance uses ~400MB RAM)
+  maxInstances: 30
+
+  # CTF key — seeds all flag generation. MUST match the key used when running juice-shop-ctf-cli
+  ctfKey: "CHANGE_ME_BEFORE_EVERY_EVENT"
+
+  # Admin password for MultiJuicer dashboard
+  adminPassword: "CHANGE_ME"
+
+  # Pin Juice Shop instances to the juiceshop worker node
   nodeSelector:
     role: juiceshop
+  
   resources:
     requests:
       memory: "300Mi"
@@ -31,9 +31,16 @@ juiceShop:
     limits:
       memory: "500Mi"
       cpu: "500m"
-  # CTF mode configuration
+
+  # FIXED (Item 12): Instance cleanup migrated to the correct structured v10 mapping
+  # Automatically reclaims and purges inactive user instances after 2 hours
+  cleanup:
+    enabled: true
+    gracePeriod: "120m"
+
+  # FIXED (Item 12): Migrated from an unstable raw multi-line string block to standard YAML map variables
   # Full config reference: https://pwning.owasp-juice.shop/companion-guide/latest/part4/customization.html
-  config: |
+  config:
     application:
       name: "CTF Training Platform"
       welcomeBanner:
@@ -46,7 +53,7 @@ juiceShop:
 # MultiJuicer balancer configuration
 balancer:
   repository: ghcr.io/juice-shop/multi-juicer/balancer
-  # FIXED: Target the modern K3s v1.32 canonical control-plane node label boundary
+  # Target the modern K3s v1.32 canonical control-plane node label boundary
   nodeSelector:
     node-role.kubernetes.io/control-plane: "true"
   resources:
@@ -59,12 +66,9 @@ balancer:
   cookie:
     secure: false # Change to true once cert-manager handles explicit TLS termination
 
-# FIXED: Native Ingress generation disabled to yield cleanly to k8s/ingress/traefik-ingress.yml
+# Native Ingress generation disabled to yield cleanly to k8s/ingress/traefik-ingress.yml
 ingress:
   enabled: false
-
-# Instance cleanup — remove inactive instances after 2 hours
-instanceLifetime: 120m
 
 # Metrics for monitoring (optional — enable if deploying Prometheus)
 metrics:

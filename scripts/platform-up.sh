@@ -16,7 +16,7 @@ export KUBECONFIG
 DRY_RUN=false
 SKIP_IMAGES=false
 
-# ── FIXED 1: Hardened Standard While-Loop Argument Parser ─────────────────────
+# Standard While-Loop Argument Parser
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
@@ -58,8 +58,8 @@ echo ""
 echo "── Step 2: Internal Air-Gap Image Registry ─────────"
 if [ -f "k8s/registry/registry.yml" ]; then
   run "kubectl apply -f k8s/registry/registry.yml"
-  # FIXED 2: Corrected deployment name target from local-registry to registry to match resource specification
-  run "kubectl rollout status deployment/registry -n registry --timeout=60s"
+  # FIXED (Item 5): Points to the true, valid manifest deployment target name: local-registry
+  run "kubectl rollout status deployment/local-registry -n registry --timeout=60s"
 else
   echo "[!] Local registry configuration sheet missing. Skipping deployment..."
 fi
@@ -80,10 +80,11 @@ echo "── Step 3: Traefik v3 Ingress Core ───────────�
 run "helm repo add traefik https://traefik.github.io/charts 2>/dev/null || true"
 run "helm repo update"
 
-if [ -f "k8s/ingress/traefik-values.yml" ]; then
+# FIXED (Item 6): Updated the path to target the correct k8s/traefik/ directory matching your repository structure
+if [ -f "k8s/traefik/traefik-values.yml" ]; then
   run "helm upgrade --install traefik traefik/traefik \
     --namespace traefik \
-    -f k8s/ingress/traefik-values.yml \
+    -f k8s/traefik/traefik-values.yml \
     --wait"
 else
   run "helm upgrade --install traefik traefik/traefik \
@@ -142,5 +143,6 @@ echo "  Next steps:"
 echo "    1. Visit http://ctfd.ctf.local — complete setup wizard"
 echo "    2. Create admin account, note the API token"
 echo "    3. Run ./scripts/challenges-load.sh"
-echo "    4. Run .\scripts\spawn-analysts.ps1 -Roster .\roster.txt"
+# FIXED (Item 8): Eradicated Windows PowerShell execution instructions completely
+echo "    4. Run ./scripts/spawn-analysts.sh roster.txt"
 echo "═══════════════════════════════════════════════════"

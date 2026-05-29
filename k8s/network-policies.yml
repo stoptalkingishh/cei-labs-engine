@@ -1,5 +1,6 @@
+---
 # k8s/network-policies.yml
-apiVersion: networks.k8s.io/v1
+apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: deny-analyst-to-platform
@@ -19,7 +20,17 @@ spec:
       ports:
         - protocol: UDP
           port: 53
+        - protocol: TCP
+          port: 53
+
+    # FIXED: Replaced invalid shorthand string array with an explicit matchExpressions NotIn filter block
     # Deny direct lateral movement into core platform namespaces
     - to:
         - namespaceSelector:
-            notIn: ["ctfd", "traefik", "registry"]
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: NotIn
+                values:
+                  - ctfd
+                  - traefik
+                  - registry
