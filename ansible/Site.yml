@@ -1,47 +1,54 @@
 ---
 # ansible/site.yml
-# Master playbook. Run this once on fresh Ubuntu 24.04 nodes.
-# Idempotent — safe to re-run after config changes.
-#
-# Usage:
-#   ansible-playbook site.yml -i inventory.ini
-#   ansible-playbook site.yml -i inventory.ini --tags k3s
-#   ansible-playbook site.yml -i inventory.ini --limit node1
+# Top-level playbook orchestrating the CEI Labs Engine infrastructure.
+# Usage: ansible-playbook -i ansible/inventory.ini ansible/site.yml
 
-- name: Common setup — all nodes
-  hosts: k3s_cluster
+- name: Phase 1 - Global Prerequisite & Security Hardening Baseline
+  hosts: all
   become: true
+  serial: "100%"
+  tags: ["always", "common"]
   roles:
-    - common
+    - role: common
 
-- name: K3s control plane
+- name: Phase 2 - Initialize Control Plane Infrastructure
   hosts: control_plane
   become: true
+  serial: 1 # Provision primary cluster masters sequentially to avoid split-brain join states
+  tags: ["infra", "k3s-server"]
   roles:
-    - k3s-server
-    - metallb
+    - role: k3s-server
 
-- name: K3s worker nodes
-  hosts: workers
+- name: Phase 3 - Join Worker & Analyst Nodes to Cluster Runtime
+  hosts: worker_nodes:analyst_nodes
   become: true
+  serial: "50%"
+  tags: ["infra", "k3s-agent"]
   roles:
-    - k3s-agent
+    - role: k3s-agent
 
-- name: Label Juice Shop worker nodes
-  hosts: control_plane
-  become: true
-  tags: [labels]
+- name: Phase 4 - Provision Core Networking & Bare-Metal Load Balancer
+  hosts: control_plane[0]
+  tags: ["networking", "metallb"]
   tasks:
-    - name: Label juiceshop workers
-      command: >
-        kubectl label node {{ item }} role=juiceshop --overwrite
-      loop: "{{ groups['juiceshop_workers'] }}"
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    - name: Deploy MetalLB layer-2 infrastructure routing rules
+      ansible.builtin.include_role:
+        name: metallb
 
-    - name: Label analyst workers
-      command: >
-        kubectl label node {{ item }} role=analyst --overwrite
-      loop: "{{ groups['analyst_workers'] }}"
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+- name: Phase 5 - Verify Cluster Structural Readiness & Deploy Spaces
+  hosts: control_plane[0]
+  tags: ["apps", "bootstrap"]
+  tasks:
+    - name: Validate all worker cluster nodes are reporting Ready state
+      ansible.builtin.kubernetes.k8s_info:
+        kind: Node
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+
+    - name: Seed internal cluster namespace topologies
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../k8s/namespaces/namespaces.yml"

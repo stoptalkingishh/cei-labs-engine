@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 # scripts/spawn-analysts.sh
+# Creates one SSH-accessible analyst pod per participant.
+# Pods are pinned to the analyst worker node via nodeSelector.
+# Each pod gets a unique port mapping and random password.
+#
+# Usage:
+#   ./scripts/spawn-analysts.sh roster.txt
+#   ./scripts/spawn-analysts.sh --teardown
+#   ./scripts/spawn-analysts.sh --status
+#
+# roster.txt format — one username per line:
+#   smith_j
+#   jones_a
+#   davis_k
+
 set -euo pipefail
 
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
@@ -8,7 +22,8 @@ export KUBECONFIG
 # FIXED (Item 3): Isolated back to the dedicated analyst tracking workspace
 NAMESPACE="analyst"
 IMAGE="ghcr.io/${GITHUB_ORG:-your-org}/ctf-platform/ctf-analyst:latest"
-BASE_PORT=2201
+# FIXED: Shifted port baseline into the strict K8s default range (30000-32767)
+BASE_PORT=30001
 CREDS_FILE="creds.txt"
 
 BASTION_IP="${BASTION_IP:-}"
@@ -23,6 +38,7 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
+# ── Teardown ──────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--teardown" ]]; then
   echo -e "${YELLOW}[!] Removing all analyst pods...${NC}"
   kubectl delete pods -n "${NAMESPACE}" -l "app=analyst" --grace-period=5 --ignore-not-found=true
@@ -31,6 +47,7 @@ if [[ "${1:-}" == "--teardown" ]]; then
   exit 0
 fi
 
+# ── Status ────────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--status" ]]; then
   echo "Analyst pods:"
   kubectl get pods -n "${NAMESPACE}" -l "app=analyst" -o wide
@@ -40,6 +57,7 @@ if [[ "${1:-}" == "--status" ]]; then
   exit 0
 fi
 
+# ── Spawn ─────────────────────────────────────────────────────────────────────
 ROSTER="${1:-}"
 if [[ -z "$ROSTER" || ! -f "$ROSTER" ]]; then
   echo "Usage: $0 [--teardown|--status] <roster.txt>"
@@ -63,6 +81,7 @@ while IFS= read -r username || [[ -n "$username" ]]; do
   POD_NAME="analyst-${username}"
   SVC_NAME="analyst-svc-${username}"
 
+  # Create the Pod
   kubectl apply -n "${NAMESPACE}" -f - << EOF
 apiVersion: v1
 kind: Pod
@@ -103,6 +122,7 @@ spec:
         type: DirectoryOrCreate
 EOF
 
+  # Create NodePort Service for SSH access
   kubectl apply -n "${NAMESPACE}" -f - << EOF
 apiVersion: v1
 kind: Service
@@ -129,3 +149,7 @@ EOF
 
   PORT=$(( PORT + 1 ))
 done < "${ROSTER}"
+
+echo ""
+echo -e "${GREEN}[+] Credentials written to ${CREDS_FILE}${NC}"
+echo "    Distribute individual rows — do NOT share the full file."
