@@ -1,11 +1,11 @@
 ---
 # ansible/group_vars/all.yml.example
-# Copy this to all.yml and fill in every value.
-# all.yml is gitignored — never commit real secrets.
+# Copy this file to all.yml in the same directory and fill in every value.
+# Note: all.yml is explicitly gitignored — never commit real production secrets.
 
 # ── Cluster Configuration ──────────────────────────────────────────────────
 k3s_version: "v1.32.5+k3s1"
-# Unique cluster token used by Node 2 and Node 3 to securely authenticate to Node 1
+# Unique cluster token used by workers and analyst nodes to securely join control_plane
 k3s_token: "CHANGE_ME_RANDOM_64_CHARS"
 
 # Internal LAN IP range for MetalLB to allocate to Ingress routers
@@ -27,7 +27,7 @@ ctfd_admin_token: "CHANGE_ME_AFTER_FIRST_LOGIN"
 # ── MultiJuicer / Juice Shop Configuration ───────────────────────────────
 # Seeds flag generation for all Juice Shop pods.
 # IMPORTANT: Change this before every event — flags alter when this changes.
-juiceshop_ctf_key: "CHANGE_ME_BEFORE_EVERY_EVENT"
+multijuicer_ctf_key: "CHANGE_ME_BEFORE_EVERY_EVENT"
 multijuicer_admin_password: "CHANGE_ME_SECURE_DASHBOARD_PASSWORD"
 
 # Maximum concurrent Juice Shop instances (typically maps to participant count)
@@ -35,10 +35,10 @@ multijuicer_max_instances: 30
 
 # ── Network Routing & Domain Ingress ──────────────────────────────────────
 # For air-gapped/local area network environments, use a '.local' domain with /etc/hosts injection
-# For open-internet deployments, point a wildcard domain (e.g., *.ctf.yourdomain.com) to metallb_ip_range
+# For open-internet deployments, point a wildcard domain (e.g., *.yourdomain.com) to metallb_ip_range
 base_domain: "ctf.local"
 
-# ── User SSH Workspaces (Node 3 Execution) ────────────────────────────────
-# Base port for target SSH analyst containers (increments sequentially per participant)
-# Mapping sequence relies on the broadened K3s NodePort engine range (2201-32767)
-analyst_base_port: 2201
+# ── User SSH Workspaces (Node Assignment Range) ───────────────────────────
+# FIXED: Standardized participant configuration parameters mapping to the K8s NodePort window
+analyst_base_port: 30001
+analyst_image_tag: "v1.0.4" # Explicit tag pin (matches spawn-analysts dynamic resolution lookup)

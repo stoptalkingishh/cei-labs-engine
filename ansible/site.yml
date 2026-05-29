@@ -19,8 +19,9 @@
   roles:
     - role: k3s-server
 
+# FIXED: Realigned targeting matrix to map precisely to 'workers' and 'analyst_workers' group names
 - name: Phase 3 - Join Worker & Analyst Nodes to Cluster Runtime
-  hosts: worker_nodes:analyst_nodes
+  hosts: workers:analyst_workers
   become: true
   serial: "50%"
   tags: ["infra", "k3s-agent"]

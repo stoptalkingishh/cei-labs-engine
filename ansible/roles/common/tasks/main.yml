@@ -1,14 +1,14 @@
 ---
 # ansible/roles/common/tasks/main.yml
-# Runs on every node. Installs Docker, hardens SSH, sets up firewall.
+# Runs on every node. Installs prerequisites, hardens SSH, sets up firewall.
 
 - name: Update apt cache
-  apt:
+  ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 3600
 
 - name: Install system packages
-  apt:
+  ansible.builtin.apt:
     name:
       - curl
       - wget
@@ -24,79 +24,74 @@
     state: present
 
 - name: Set timezone to UTC
-  timezone:
+  community.general.timezone:
     name: UTC
 
 - name: Harden SSH — disable root login
-  lineinfile:
+  ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
     regexp: "^#?PermitRootLogin"
     line: "PermitRootLogin no"
   notify: Restart sshd
 
 - name: Harden SSH — disable password auth
-  lineinfile:
+  ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication no"
   notify: Restart sshd
 
 - name: UFW — allow SSH
-  ufw:
+  community.general.ufw:
     rule: allow
     port: "22"
     proto: tcp
 
 - name: UFW — allow K3s API server (control plane only)
-  ufw:
+  community.general.ufw:
     rule: allow
     port: "6443"
     proto: tcp
   when: inventory_hostname in groups['control_plane']
 
 - name: UFW — allow K3s Flannel VXLAN
-  ufw:
+  community.general.ufw:
     rule: allow
     port: "8472"
     proto: udp
 
 - name: UFW — allow K3s kubelet metrics
-  ufw:
+  community.general.ufw:
     rule: allow
     port: "10250"
     proto: tcp
 
 - name: UFW — allow HTTP/HTTPS (ingress)
-  ufw:
+  community.general.ufw:
     rule: allow
     port: "{{ item }}"
     proto: tcp
   loop: ["80", "443"]
   when: inventory_hostname in groups['control_plane']
 
+# FIXED: Realigned port window to K8s NodePort bounds and verified group variable names
 - name: UFW — allow participant SSH ports (analyst containers)
-  ufw:
+  community.general.ufw:
     rule: allow
-    port: "2201:2260"
+    port: "30000:32767"
     proto: tcp
   when: inventory_hostname in groups['analyst_workers']
 
 - name: Enable UFW
-  ufw:
+  community.general.ufw:
     state: enabled
     policy: deny
 
 - name: Enable fail2ban
-  service:
+  ansible.builtin.service:
     name: fail2ban
     state: started
     enabled: true
 
 - name: Flush handlers now
-  meta: flush_handlers
-
-handlers:
-  - name: Restart sshd
-    service:
-      name: sshd
-      state: restarted
+  ansible.builtin.meta: flush_handlers

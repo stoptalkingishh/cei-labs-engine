@@ -14,12 +14,28 @@ set -euo pipefail
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
+VARS_FILE="ansible/group_vars/all.yml"
+DEFAULT_PORT=30001
+DEFAULT_TAG="v1.0.4"
+DEFAULT_ORG="your-org"
+
+# FIXED 1: Dynamically extract configuration values directly from Ansible group_vars
+if [[ -f "$VARS_FILE" ]]; then
+  BASE_PORT=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('analyst_base_port', $DEFAULT_PORT))" 2>/dev/null || echo "$DEFAULT_PORT")
+  TAG=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('analyst_image_tag', '$DEFAULT_TAG'))" 2>/dev/null || echo "$DEFAULT_TAG")
+  ORG=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('github_org', '$DEFAULT_ORG'))" 2>/dev/null || echo "$DEFAULT_ORG")
+else
+  BASE_PORT=$DEFAULT_PORT
+  TAG=$DEFAULT_TAG
+  ORG=$DEFAULT_ORG
+fi
+
 NAMESPACE="analyst"
-IMAGE="ghcr.io/${GITHUB_ORG:-your-org}/ctf-platform/ctf-analyst:latest"
-BASE_PORT=30001
+# FIXED 3: Hardened image tag string to avoid volatile :latest usage in production
+IMAGE="ghcr.io/${ORG}/ctf-platform/ctf-analyst:${TAG}"
 CREDS_FILE="creds.txt"
 
-# ── FIXED 1: Hardened, Accurate Control-Plane IP Parsing Engine ──────────────
+# Hardened Control-Plane IP Parsing Engine
 BASTION_IP="${BASTION_IP:-}"
 if [[ -z "$BASTION_IP" ]]; then
   BASTION_IP=$(kubectl get nodes -l node-role.kubernetes.io/control-plane=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "127.0.0.1")
@@ -38,7 +54,7 @@ TEARDOWN=false
 STATUS=false
 ROSTER=""
 
-# ── FIXED 2: Standardized While-Loop Positional Argument Parser ───────────────
+# Standardized While-Loop Positional Argument Parser
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --teardown)
@@ -125,6 +141,12 @@ spec:
           value: "${PASSWORD}"
       ports:
         - containerPort: 22
+      # FIXED 2: Added Startup Probe to guarantee SSH readiness detection
+      startupProbe:
+        tcpSocket:
+          port: 22
+        failureThreshold: 12
+        periodSeconds: 5
       resources:
         requests:
           memory: "256Mi"
