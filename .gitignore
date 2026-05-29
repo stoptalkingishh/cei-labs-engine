@@ -1,0 +1,15 @@
+# .gitignore
+# Ignore running active credential matrices containing real secrets
+ansible/group_vars/all.yml
+creds.txt
+
+# Block local collection capture assets and memory drops
+*.img
+*.raw
+*.vmem
+*.pcap
+
+# Local development overrides
+.kube/
+.idea/
+.vscode/

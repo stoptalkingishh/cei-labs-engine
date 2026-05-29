@@ -1,34 +1,19 @@
 #!/usr/bin/env bash
 # scripts/spawn-analysts.sh
-# Creates one SSH-accessible analyst pod per participant.
-# Pods are pinned to the analyst worker node via nodeSelector.
-# Each pod gets a unique port mapping and random password.
-#
-# Usage:
-#   ./scripts/spawn-analysts.sh roster.txt
-#   ./scripts/spawn-analysts.sh --teardown
-#   ./scripts/spawn-analysts.sh --status
-#
-# roster.txt format — one username per line:
-#   smith_j
-#   jones_a
-#   davis_k
-
 set -euo pipefail
 
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
-NAMESPACE="challenges"
+# FIXED (Item 3): Isolated back to the dedicated analyst tracking workspace
+NAMESPACE="analyst"
 IMAGE="ghcr.io/${GITHUB_ORG:-your-org}/ctf-platform/ctf-analyst:latest"
 BASE_PORT=2201
 CREDS_FILE="creds.txt"
 
-# ── FIX 1: Robust Bastion IP Detection targeting modern control-plane label ──
 BASTION_IP="${BASTION_IP:-}"
 if [[ -z "$BASTION_IP" ]]; then
   BASTION_IP=$(kubectl get nodes -o wide | grep "control-plane" | awk '{print $6}' || true)
-  # Fallback: grab the first available node's InternalIP if string matches are tricky
   if [[ -z "$BASTION_IP" ]]; then
     BASTION_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "127.0.0.1")
   fi
@@ -36,10 +21,8 @@ fi
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
-# Ensure namespace exists before applying any templates
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
-# ── Teardown ──────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--teardown" ]]; then
   echo -e "${YELLOW}[!] Removing all analyst pods...${NC}"
   kubectl delete pods -n "${NAMESPACE}" -l "app=analyst" --grace-period=5 --ignore-not-found=true
@@ -48,7 +31,6 @@ if [[ "${1:-}" == "--teardown" ]]; then
   exit 0
 fi
 
-# ── Status ────────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--status" ]]; then
   echo "Analyst pods:"
   kubectl get pods -n "${NAMESPACE}" -l "app=analyst" -o wide
@@ -58,7 +40,6 @@ if [[ "${1:-}" == "--status" ]]; then
   exit 0
 fi
 
-# ── Spawn ─────────────────────────────────────────────────────────────────────
 ROSTER="${1:-}"
 if [[ -z "$ROSTER" || ! -f "$ROSTER" ]]; then
   echo "Usage: $0 [--teardown|--status] <roster.txt>"
@@ -75,8 +56,6 @@ PORT=$BASE_PORT
 
 while IFS= read -r username || [[ -n "$username" ]]; do
   [[ -z "$username" || "$username" == \#* ]] && continue
-  
-  # Trim spaces/newlines
   username=$(echo "${username}" | tr -d '\r' | xargs)
   [[ -z "$username" ]] && continue
 
@@ -84,7 +63,6 @@ while IFS= read -r username || [[ -n "$username" ]]; do
   POD_NAME="analyst-${username}"
   SVC_NAME="analyst-svc-${username}"
 
-  # Create the Pod
   kubectl apply -n "${NAMESPACE}" -f - << EOF
 apiVersion: v1
 kind: Pod
@@ -95,9 +73,9 @@ metadata:
     app: analyst
     participant: "${username}"
 spec:
-  # FIX 2: Swapped to standard structural architecture label definition
+  # FIXED (Item 4): Targets the explicit custom key assigned by Ansible to Node 3
   nodeSelector:
-    node-role.kubernetes.io/worker: "true"
+    role: analyst
   restartPolicy: Always
   containers:
     - name: analyst
@@ -125,7 +103,6 @@ spec:
         type: DirectoryOrCreate
 EOF
 
-  # Create NodePort Service for SSH access
   kubectl apply -n "${NAMESPACE}" -f - << EOF
 apiVersion: v1
 kind: Service
@@ -142,19 +119,13 @@ spec:
   ports:
     - port: 22
       targetPort: 22
-      # FIX 3: Runs cleanly thanks to the extended custom service-node-port-range
       nodePort: ${PORT}
 EOF
 
   SSH_CMD="ssh operator@${BASTION_IP} -p ${PORT}"
   printf "%-20s | port %-5s | pass %-14s | %s\n" \
     "${username}" "${PORT}" "${PASSWORD}" "${SSH_CMD}" >> "${CREDS_FILE}"
-
-  echo -e "${GREEN}[+]${NC} ${username} → port ${YELLOW}${PORT}${NC} pass ${YELLOW}${PASSWORD}${NC}"
+  echo -e "${GREEN}[+]${NC} ${username} → port ${YELLOW}${PORT}${NC}"
 
   PORT=$(( PORT + 1 ))
 done < "${ROSTER}"
-
-echo ""
-echo -e "${GREEN}[+] Credentials written to ${CREDS_FILE}${NC}"
-echo "    Distribute individual rows — do NOT share the full file."

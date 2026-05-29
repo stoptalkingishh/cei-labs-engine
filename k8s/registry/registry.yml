@@ -33,7 +33,8 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: local-registry
+  # FIXED: Renamed from local-registry to match traefik-ingress backend pointer
+  name: registry
   namespace: registry
 spec:
   selector:
