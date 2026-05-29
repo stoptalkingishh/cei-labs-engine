@@ -66,6 +66,20 @@ balancer:
   cookie:
     secure: false # Change to true once cert-manager handles explicit TLS termination
 
+  # FIXED: Added native health probes to the balancer to ensure high-availability routing validation
+  livenessProbe:
+    httpGet:
+      path: /balancer/
+      port: 3000
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /balancer/
+      port: 3000
+    initialDelaySeconds: 15
+    periodSeconds: 5
+
 # Native Ingress generation disabled to yield cleanly to k8s/ingress/traefik-ingress.yml
 ingress:
   enabled: false

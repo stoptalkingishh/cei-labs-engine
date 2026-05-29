@@ -58,10 +58,26 @@ echo ""
 echo "── Step 2: Internal Air-Gap Image Registry ─────────"
 if [ -f "k8s/registry/registry.yml" ]; then
   run "kubectl apply -f k8s/registry/registry.yml"
-  # FIXED (Item 5): Points to the true, valid manifest deployment target name: local-registry
+  # Points to the true, valid manifest deployment target name: local-registry
   run "kubectl rollout status deployment/local-registry -n registry --timeout=60s"
 else
   echo "[!] Local registry configuration sheet missing. Skipping deployment..."
+fi
+
+# ── 2.5. Cert-Manager Core Setup (ADDED FOR PRODUCTION TLS) ───────────────────
+echo ""
+echo "── Step 2.5: Deploying Cert-Manager Core ──────────"
+run "helm repo add jetstack https://charts.jetstack.io 2>/dev/null || true"
+run "helm repo update"
+run "helm upgrade --install cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --version v1.14.4 \
+  --set installCRDs=true \
+  --wait"
+
+if [ -f "k8s/ingress/cert-issuer.yml" ]; then
+  run "kubectl apply -f k8s/ingress/cert-issuer.yml"
 fi
 
 # ── Image Pre-Pull Optimization Hook ─────────────────────────────────────────
@@ -80,7 +96,7 @@ echo "── Step 3: Traefik v3 Ingress Core ───────────�
 run "helm repo add traefik https://traefik.github.io/charts 2>/dev/null || true"
 run "helm repo update"
 
-# FIXED: Realigned lookup string to point to the actual k8s/ingress/ path layout
+# Realigned lookup string to point to the actual k8s/ingress/ path layout
 if [ -f "k8s/ingress/traefik-values.yml" ]; then
   run "helm upgrade --install traefik traefik/traefik \
     --namespace traefik \
@@ -100,10 +116,17 @@ fi
 echo ""
 echo "── Step 4: CTFd Core Ecosystem (MariaDB + Redis) ───"
 run "kubectl apply -f k8s/ctfd/ctfd-deployment.yml"
+
+# ADDED: Automated Secrets Injection Vector (Pulls directly from ansible group_vars)
+if [[ -x "./scripts/patch-secrets.sh" && "$DRY_RUN" == "false" ]]; then
+  echo "[*] Diverting to secure secrets injection pipeline..."
+  ./scripts/patch-secrets.sh || echo "[!] Warning: Secrets patch execution bypassed or failed."
+fi
+
 run "kubectl rollout status statefulset/ctfd-db -n ctfd --timeout=120s"
 run "kubectl rollout status deployment/ctfd-redis -n ctfd --timeout=60s"
 run "kubectl rollout status deployment/ctfd -n ctfd --timeout=120s"
-echo "    CTFd score server initialized at http://ctfd.ctf.local"
+echo "    CTFd score server initialized at https://ctfd.ctf.local"
 
 # ── 5. MultiJuicer ───────────────────────────────────────────────────────────
 echo ""
@@ -113,7 +136,7 @@ run "helm upgrade --install multijuicer \
   -f k8s/multijuicer/values.yml \
   --namespace multijuicer \
   --wait"
-echo "    MultiJuicer gate running at: http://juiceshop.ctf.local/balancer/admin"
+echo "    MultiJuicer gate running at: https://juiceshop.ctf.local/balancer/admin"
 
 # ── 6. Traefik ingress routes ────────────────────────────────────────────────
 echo ""
@@ -137,14 +160,14 @@ echo "════════════════════════�
 echo "  Platform deployment complete."
 echo ""
 echo "  Access points (add to /etc/hosts or local DNS):"
-echo "    ctfd.ctf.local       → CTFd scoring platform"
-echo "    juiceshop.ctf.local  → MultiJuicer (Juice Shop)"
+echo "    ctfd.ctf.local       → CTFd scoring platform (HTTPS)"
+echo "    juiceshop.ctf.local  → MultiJuicer (Juice Shop) (HTTPS)"
 echo "    registry.ctf.local   → Internal Storage Hub"
 echo ""
 echo "  Next steps:"
-echo "    1. Visit http://ctfd.ctf.local — complete setup wizard"
+echo "    1. Visit https://ctfd.ctf.local — complete setup wizard"
 echo "    2. Create admin account, note the API token"
 echo "    3. Run ./scripts/challenges-load.sh"
-# FIXED (Item 8): Eradicated Windows PowerShell execution instructions completely
+# Eradicated Windows PowerShell execution instructions completely
 echo "    4. Run ./scripts/spawn-analysts.sh roster.txt"
 echo "═══════════════════════════════════════════════════"
