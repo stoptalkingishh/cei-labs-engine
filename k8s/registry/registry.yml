@@ -1,0 +1,43 @@
+# k8s/registry/registry.yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-registry
+  namespace: registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: local-registry
+  template:
+    metadata:
+      labels:
+        app: local-registry
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      containers:
+        - name: registry
+          image: registry:2
+          ports:
+            - containerPort: 5000
+          volumeMounts:
+            - name: registry-vol
+              mountPath: /var/lib/registry
+      volumes:
+        - name: registry-vol
+          hostPath:
+            path: /var/lib/ctf-registry
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: local-registry
+  namespace: registry
+spec:
+  selector:
+    app: local-registry
+  ports:
+    - port: 5000
+      targetPort: 5000

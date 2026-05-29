@@ -1,23 +1,21 @@
-# k8s/ctfd/ctfd-infrastructure.yml
+# k8s/ctfd/ctfd-deployment.yml
 apiVersion: v1
 kind: Secret
 metadata:
   name: ctfd-secrets
-  namespace: apps
+  namespace: ctfd
 type: Opaque
 data:
-  # Base64 encodings of your target configuration parameters
   secret-key: Q0hBTkdFX01FX1JBTkRPTV8zMl9DSEFSU19DSEFOR0VfTUU=
   db-password: Q0hBTkdFX01F
   db-root-password: Q0hBTkdFX01F
   database-url: bXlzcWwrcHlteXNxbC8vY3RmZDpDSEFOR0VfTUVAY3RmZC1kYi9jdGZk
 ---
-# MariaDB StatefulSet
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: ctfd-db
-  namespace: apps
+  namespace: ctfd
 spec:
   serviceName: ctfd-db
   replicas: 1
@@ -51,7 +49,7 @@ spec:
                   key: db-password
           ports:
             - containerPort: 3306
-              name: mysql
+              name: dbport
           volumeMounts:
             - name: db-data
               mountPath: /var/lib/mysql
@@ -75,7 +73,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ctfd-db
-  namespace: apps
+  namespace: ctfd
 spec:
   selector:
     app: ctfd-db
@@ -84,12 +82,11 @@ spec:
       targetPort: 3306
   clusterIP: None
 ---
-# Redis Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ctfd-redis
-  namespace: apps
+  namespace: ctfd
 spec:
   replicas: 1
   selector:
@@ -119,7 +116,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ctfd-redis
-  namespace: apps
+  namespace: ctfd
 spec:
   selector:
     app: ctfd-redis
@@ -127,12 +124,11 @@ spec:
     - port: 6379
       targetPort: 6379
 ---
-# CTFd Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ctfd
-  namespace: apps
+  namespace: ctfd
   labels:
     app: ctfd
     version: "3.8.2"
@@ -149,14 +145,12 @@ spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
       initContainers:
-        # Fix upload directory permissions (CTFd runs as UID 1001)
         - name: fix-permissions
           image: busybox
           command: ["sh", "-c", "chown -R 1001:1001 /var/uploads"]
           volumeMounts:
             - name: uploads
               mountPath: /var/uploads
-        # BLOCKING RESOLVER: Halts CTFd until MariaDB is accepting socket calls
         - name: wait-for-db
           image: busybox
           command: ["sh", "-c", "until nc -z -w 2 ctfd-db 3306; do echo waiting for mariadb; sleep 2; done"]
@@ -199,7 +193,6 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "1000m"
-          # FIXED: Swapped endpoints from broken healthcheck route to raw root validation path
           livenessProbe:
             httpGet:
               path: /
@@ -221,7 +214,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: ctfd-uploads
-  namespace: apps
+  namespace: ctfd
 spec:
   accessModes:
     - ReadWriteOnce
@@ -233,7 +226,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ctfd
-  namespace: apps
+  namespace: ctfd
 spec:
   selector:
     app: ctfd

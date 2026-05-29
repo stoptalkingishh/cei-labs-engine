@@ -19,19 +19,31 @@ set -euo pipefail
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
-NAMESPACE="analyst"
+NAMESPACE="challenges"
 IMAGE="ghcr.io/${GITHUB_ORG:-your-org}/ctf-platform/ctf-analyst:latest"
 BASE_PORT=2201
 CREDS_FILE="creds.txt"
-BASTION_IP="${BASTION_IP:-$(kubectl get nodes -o wide | grep master | awk '{print $6}')}"
+
+# ── FIX 1: Robust Bastion IP Detection targeting modern control-plane label ──
+BASTION_IP="${BASTION_IP:-}"
+if [[ -z "$BASTION_IP" ]]; then
+  BASTION_IP=$(kubectl get nodes -o wide | grep "control-plane" | awk '{print $6}' || true)
+  # Fallback: grab the first available node's InternalIP if string matches are tricky
+  if [[ -z "$BASTION_IP" ]]; then
+    BASTION_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "127.0.0.1")
+  fi
+fi
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+
+# Ensure namespace exists before applying any templates
+kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
 # ── Teardown ──────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--teardown" ]]; then
   echo -e "${YELLOW}[!] Removing all analyst pods...${NC}"
-  kubectl delete pods -n "${NAMESPACE}" -l "app=analyst" --grace-period=5
-  kubectl delete services -n "${NAMESPACE}" -l "app=analyst"
+  kubectl delete pods -n "${NAMESPACE}" -l "app=analyst" --grace-period=5 --ignore-not-found=true
+  kubectl delete services -n "${NAMESPACE}" -l "app=analyst" --ignore-not-found=true
   echo -e "${GREEN}[+] All analyst pods removed.${NC}"
   exit 0
 fi
@@ -63,6 +75,10 @@ PORT=$BASE_PORT
 
 while IFS= read -r username || [[ -n "$username" ]]; do
   [[ -z "$username" || "$username" == \#* ]] && continue
+  
+  # Trim spaces/newlines
+  username=$(echo "${username}" | tr -d '\r' | xargs)
+  [[ -z "$username" ]] && continue
 
   PASSWORD=$(tr -dc 'a-km-np-zA-HJ-NP-Z2-9' </dev/urandom | head -c 12)
   POD_NAME="analyst-${username}"
@@ -79,8 +95,9 @@ metadata:
     app: analyst
     participant: "${username}"
 spec:
+  # FIX 2: Swapped to standard structural architecture label definition
   nodeSelector:
-    role: analyst
+    node-role.kubernetes.io/worker: "true"
   restartPolicy: Always
   containers:
     - name: analyst
@@ -125,6 +142,7 @@ spec:
   ports:
     - port: 22
       targetPort: 22
+      # FIX 3: Runs cleanly thanks to the extended custom service-node-port-range
       nodePort: ${PORT}
 EOF
 

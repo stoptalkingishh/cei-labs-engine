@@ -1,235 +1,49 @@
-# k8s/ctfd/ctfd-all-in-one.yml
+# k8s/namespaces/namespaces.yml
 apiVersion: v1
-kind: Secret
+kind: Namespace
 metadata:
-  name: ctfd-secrets
-  namespace: apps
-type: Opaque
-data:
-  secret-key: Q0hBTkdFX01FX1JBTkRPTV8zMl9DSEFSU19DSEFOR0VfTUU=
-  db-password: Q0hBTkdFX01F
-  db-root-password: Q0hBTkdFX01F
-  database-url: bXlzcWwrcHlteXNxbC8vY3RmZDpDSEFOR0VfTUVAY3RmZC1kYi9jdGZk
----
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: ctfd-db
-  namespace: apps
-spec:
-  serviceName: ctfd-db
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ctfd-db
-  template:
-    metadata:
-      labels:
-        app: ctfd-db
-    spec:
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: "true"
-      containers:
-        - name: mariadb
-          image: mariadb:10.11
-          env:
-            - name: MYSQL_ROOT_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ctfd-secrets
-                  key: db-root-password
-            - name: MYSQL_DATABASE
-              value: ctfd
-            - name: MYSQL_USER
-              value: ctfd
-            - name: MYSQL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ctfd-secrets
-                  key: db-password
-          ports:
-            - containerPort: 3306
-              name: dbport
-          volumeMounts:
-            - name: db-data
-              mountPath: /var/lib/mysql
-          resources:
-            requests:
-              memory: "512Mi"
-              cpu: "250m"
-            limits:
-              memory: "1Gi"
-              cpu: "1000m"
-  volumeClaimTemplates:
-    - metadata:
-        name: db-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 10Gi
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ctfd-db
-  namespace: apps
-spec:
-  selector:
-    app: ctfd-db
-  ports:
-    - port: 3306
-      targetPort: 3306
-  clusterIP: None
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ctfd-redis
-  namespace: apps
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ctfd-redis
-  template:
-    metadata:
-      labels:
-        app: ctfd-redis
-    spec:
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: "true"
-      containers:
-        - name: redis
-          image: redis:7-alpine
-          ports:
-            - containerPort: 6379
-          resources:
-            requests:
-              memory: "128Mi"
-              cpu: "100m"
-            limits:
-              memory: "256Mi"
-              cpu: "250m"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ctfd-redis
-  namespace: apps
-spec:
-  selector:
-    app: ctfd-redis
-  ports:
-    - port: 6379
-      targetPort: 6379
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ctfd
-  namespace: apps
+  name: traefik
   labels:
-    app: ctfd
-    version: "3.8.2"
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ctfd
-  template:
-    metadata:
-      labels:
-        app: ctfd
-    spec:
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: "true"
-      initContainers:
-        - name: fix-permissions
-          image: busybox
-          command: ["sh", "-c", "chown -R 1001:1001 /var/uploads"]
-          volumeMounts:
-            - name: uploads
-              mountPath: /var/uploads
-        - name: wait-for-db
-          image: busybox
-          command: ["sh", "-c", "until nc -z -w 2 ctfd-db 3306; do echo waiting for mariadb; sleep 2; done"]
-      containers:
-        - name: ctfd
-          image: ctfd/ctfd:3.8.2
-          env:
-            - name: SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: ctfd-secrets
-                  key: secret-key
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: ctfd-secrets
-                  key: database-url
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: ctfd-secrets
-                  key: db-password
-            - name: REDIS_URL
-              value: "redis://ctfd-redis:6379"
-            - name: UPLOAD_FOLDER
-              value: "/var/uploads"
-            - name: REVERSE_PROXY
-              value: "true"
-            - name: WORKERS
-              value: "4"
-          ports:
-            - containerPort: 8000
-          volumeMounts:
-            - name: uploads
-              mountPath: /var/uploads
-          resources:
-            requests:
-              memory: "512Mi"
-              cpu: "250m"
-            limits:
-              memory: "1Gi"
-              cpu: "1000m"
-          livenessProbe:
-            httpGet:
-              path: /
-              port: 8000
-            initialDelaySeconds: 45
-            periodSeconds: 30
-          readinessProbe:
-            httpGet:
-              path: /
-              port: 8000
-            initialDelaySeconds: 30
-            periodSeconds: 10
-      volumes:
-        - name: uploads
-          persistentVolumeClaim:
-            claimName: ctfd-uploads
+    app.kubernetes.io/part-of: cei-labs-engine
 ---
 apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ctfd-uploads
-  namespace: apps
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 5Gi
----
-apiVersion: v1
-kind: Service
+kind: Namespace
 metadata:
   name: ctfd
-  namespace: apps
-spec:
-  selector:
-    app: ctfd
-  ports:
-    - port: 80
-      targetPort: 8000
+  labels:
+    app.kubernetes.io/part-of: cei-labs-engine
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: multijuicer
+  labels:
+    app.kubernetes.io/part-of: cei-labs-engine
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: analyst
+  labels:
+    app.kubernetes.io/part-of: cei-labs-engine
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: challenges
+  labels:
+    app.kubernetes.io/part-of: cei-labs-engine
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: cei-labs-engine
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: registry
+  labels:
+    app.kubernetes.io/part-of: cei-labs-engine
