@@ -19,7 +19,7 @@ DEFAULT_PORT=30001
 DEFAULT_TAG="latest"
 DEFAULT_ORG="your-org"
 
-# FIXED: Dynamically extract configuration values directly from Ansible group_vars
+# Extract configuration values directly from Ansible group_vars
 if [[ -f "$VARS_FILE" ]]; then
   BASE_PORT=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('analyst_base_port', $DEFAULT_PORT))" 2>/dev/null || echo "$DEFAULT_PORT")
   TAG=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('analyst_image_tag', '$DEFAULT_TAG'))" 2>/dev/null || echo "$DEFAULT_TAG")
@@ -31,14 +31,13 @@ else
 fi
 
 NAMESPACE="analyst"
-# FIXED (Item 6): Realigned the target GHCR path layout to cleanly include the platform repository layer 
 IMAGE="ghcr.io/${ORG}/cei-labs-engine/ctf-analyst:${TAG}"
 CREDS_FILE="creds.txt"
 
-# Hardened Control-Plane IP Parsing Engine
+# Hardened Control-Plane IP Parsing Engine (Fixed Item 1 label schema mismatch)
 BASTION_IP="${BASTION_IP:-}"
 if [[ -z "$BASTION_IP" ]]; then
-  BASTION_IP=$(kubectl get nodes -l node-role.kubernetes.io/control-plane=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "127.0.0.1")
+  BASTION_IP=$(kubectl get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "127.0.0.1")
 fi
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -141,7 +140,6 @@ spec:
           value: "${PASSWORD}"
       ports:
         - containerPort: 22
-      # Added Startup Probe to guarantee SSH readiness detection before passing traffic
       startupProbe:
         tcpSocket:
           port: 22

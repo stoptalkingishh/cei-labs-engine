@@ -1,8 +1,19 @@
 ---
 # k8s/network-policies.yml
-# Defensive Zero-Trust Egress Filtering Policy for Analyst Workspaces.
-# Restricts lateral cluster movement and blocks unauthorized outbound manipulation.
+# Zero-Trust Isolation Architecture for the CEI Labs Infrastructure Stack.
+# Establishes absolute namespace boundaries and locks down lateral cluster movement.
 
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: analyst-default-deny-ingress
+  namespace: analyst
+spec:
+  # Selecting an empty podSelector drops all ingress traffic by default across the namespace
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -26,9 +37,9 @@ spec:
         - protocol: TCP
           port: 53
 
-    # FIXED (Item 3): Switched from a leaky inverted black-list to an explicit target allow-list.
-    # This allows analyst pods to communicate with target systems in the challenges namespace,
-    # while automatically dropping traffic to ctfd, traefik, registry, or external internet networks.
+    # Rule 2: Explicit target allow-list mapping to the labs environment
+    # Restricts analyst environments to designated target systems in the challenges namespace,
+    # dropping all lateral traffic to administrative tools (ctfd, traefik, registry) or external networks.
     - to:
         - namespaceSelector:
             matchLabels:

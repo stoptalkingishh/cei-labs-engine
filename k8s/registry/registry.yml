@@ -7,7 +7,6 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  # Leverages K3s's native, zero-dependency storage class provider
   storageClassName: local-path
   resources:
     requests:
@@ -28,14 +27,33 @@ spec:
       labels:
         app: local-registry
     spec:
-      # Explicitly restricts the registry workload to the control-plane node bounds
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: "true"
+      # Hardened Node Affinity (Fixed Item 1): Evaluates existence of the label key 
+      # to support key-only syntax variations commonly implemented by K3s engines
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
       containers:
         - name: registry
           image: registry:2
           ports:
             - containerPort: 5000
+          # Operational Probes (Fixed Item 3): Prevents routing traffic to a deadlocked registry service
+          livenessProbe:
+            httpGet:
+              path: /v2/
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /v2/
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             requests:
               cpu: "100m"
@@ -48,7 +66,7 @@ spec:
               mountPath: /var/lib/registry
       volumes:
         - name: registry-vol
-          # FIXED (Item 4): Switched from volatile hostPath to the decoupled PVC backend
+          # Decoupled Storage Backend (Fixed Item 4): Replaces volatile hostPath
           persistentVolumeClaim:
             claimName: local-registry-pvc
 ---

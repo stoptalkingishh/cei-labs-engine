@@ -39,7 +39,7 @@
   hosts: control_plane[0]
   tags: ["apps", "bootstrap"]
   tasks:
-    # FIXED (Item 3): Upgraded readiness check to mathematically confirm that 
+    # Upgraded readiness check to mathematically confirm that 
     # the total number of nodes matching a strict 'True' state satisfies the inventory size.
     - name: Validate all worker cluster nodes are reporting Ready state
       ansible.builtin.shell: |
@@ -49,8 +49,13 @@
       changed_when: false
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
-      # Summates expected group arrays down to a single integer dynamically
-      until: ready_nodes_count.stdout | int == (groups['control_plane'] | length + groups['workers'] | length + groups['analyst_workers'] | length)
+      # Guarded group lookups prevent dictionary failures if worker profiles are omitted from inventory variations
+      until: >
+        ready_nodes_count.stdout | int == (
+        (groups.get('control_plane', []) | length) +
+        (groups.get('workers', []) | length) +
+        (groups.get('analyst_workers', []) | length)
+        )
       retries: 30
       delay: 10
 
@@ -60,6 +65,3 @@
         kubectl apply -f "{{ playbook_dir }}/../k8s/namespaces/namespaces.yml"
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
-
-# NOTE: Phase 6 has been deleted per Item 7 design requirements.
-# Post-provisioning setup should be completed manually by executing `./scripts/platform-up.sh` on the control plane.
