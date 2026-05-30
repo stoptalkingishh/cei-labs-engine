@@ -1,4 +1,18 @@
-# k8s/registry/registry.yml
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: local-registry-pvc
+  namespace: registry
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Leverages K3s's native, zero-dependency storage class provider
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,6 +28,7 @@ spec:
       labels:
         app: local-registry
     spec:
+      # Explicitly restricts the registry workload to the control-plane node bounds
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
       containers:
@@ -21,19 +36,25 @@ spec:
           image: registry:2
           ports:
             - containerPort: 5000
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
           volumeMounts:
             - name: registry-vol
               mountPath: /var/lib/registry
       volumes:
         - name: registry-vol
-          hostPath:
-            path: /var/lib/ctf-registry
-            type: DirectoryOrCreate
+          # FIXED (Item 4): Switched from volatile hostPath to the decoupled PVC backend
+          persistentVolumeClaim:
+            claimName: local-registry-pvc
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  # FIXED: Renamed from local-registry to match traefik-ingress backend pointer
   name: registry
   namespace: registry
 spec:
@@ -42,3 +63,4 @@ spec:
   ports:
     - port: 5000
       targetPort: 5000
+      protocol: TCP

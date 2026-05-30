@@ -39,18 +39,22 @@
   hosts: control_plane[0]
   tags: ["apps", "bootstrap"]
   tasks:
-    # FIXED (Item 3): Replaced heavy k8s modules with native, fast kubectl shell checks
+    # FIXED (Item 3): Upgraded readiness check to mathematically confirm that 
+    # the total number of nodes matching a strict 'True' state satisfies the inventory size.
     - name: Validate all worker cluster nodes are reporting Ready state
       ansible.builtin.shell: |
-        kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' | grep -qv "False"
-      register: nodes_ready
-      until: nodes_ready.rc == 0
-      retries: 30
-      delay: 10
+        set -o pipefail
+        kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' | tr ' ' '\n' | grep -c '^True$'
+      register: ready_nodes_count
+      changed_when: false
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
+      # Summates expected group arrays down to a single integer dynamically
+      until: ready_nodes_count.stdout | int == (groups['control_plane'] | length + groups['workers'] | length + groups['analyst_workers'] | length)
+      retries: 30
+      delay: 10
 
-    # FIXED (Item 3): Standard kubectl shell application ensures zero-dependency execution
+    # Standard kubectl shell application ensures zero-dependency execution
     - name: Seed internal cluster namespace topologies
       ansible.builtin.shell: |
         kubectl apply -f "{{ playbook_dir }}/../k8s/namespaces/namespaces.yml"

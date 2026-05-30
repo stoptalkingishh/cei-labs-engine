@@ -3,6 +3,8 @@ name: Validate
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main] # Also run on merges to main to catch integrations
 
 jobs:
   validate-k8s:
@@ -13,11 +15,11 @@ jobs:
       - name: Install kubeconform
         run: |
           curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
-            | tar xz -C /usr/local/bin
+            | sudo tar xz -C /usr/local/bin kubeconform
 
       - name: Validate Kubernetes manifests
         run: |
-          find k8s/ -name "*.yml" -o -name "*.yaml" | \
+          find k8s/ -type f \( -name "*.yml" -o -name "*.yaml" \) | \
           xargs kubeconform \
             -strict \
             -ignore-missing-schemas \
@@ -29,11 +31,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install ansible-lint
-        run: pip install ansible-lint
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Lint Ansible playbooks
-        run: ansible-lint ansible/site.yml
+      - name: Install ansible-lint
+        run: pip install ansible-lint ansible-core
+
+      # FIXED (Item 5): Expanded scope to target the complete ansible directory asset tree
+      - name: Lint Ansible Ecosystem Roles and Tasks
+        run: ansible-lint ansible/
 
   validate-dockerfiles:
     runs-on: ubuntu-latest
@@ -45,3 +53,14 @@ jobs:
         with:
           recursive: true
           ignore: DL3008,DL3009   # apt pin versions — acceptable for this use case
+
+  # FIXED (Item 6): Added standard script testing regression baseline
+  validate-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Execute ShellCheck Analysis
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          find scripts/ -type f -name "*.sh" | xargs shellcheck --severity=warning
