@@ -1,0 +1,8 @@
+---
+# ansible/roles/common/handlers/main.yml
+# FIXED (Item 2 & 10): Handlers migrated to dedicated, valid structural location
+
+- name: Restart sshd
+  ansible.builtin.service:
+    name: sshd
+    state: restarted

@@ -115,14 +115,15 @@ fi
 # ── 4. CTFd stack ────────────────────────────────────────────────────────────
 echo ""
 echo "── Step 4: CTFd Core Ecosystem (MariaDB + Redis) ───"
-run "kubectl apply -f k8s/ctfd/ctfd-deployment.yml"
 
-# ADDED: Automated Secrets Injection Vector (Pulls directly from ansible group_vars)
+# FIXED (Item 5): Moved secrets patching ahead of the manifest deployment.
+# This injects real group_vars secrets before MariaDB initializes its storage directory.
 if [[ -x "./scripts/patch-secrets.sh" && "$DRY_RUN" == "false" ]]; then
   echo "[*] Diverting to secure secrets injection pipeline..."
   ./scripts/patch-secrets.sh || echo "[!] Warning: Secrets patch execution bypassed or failed."
 fi
 
+run "kubectl apply -f k8s/ctfd/ctfd-deployment.yml"
 run "kubectl rollout status statefulset/ctfd-db -n ctfd --timeout=120s"
 run "kubectl rollout status deployment/ctfd-redis -n ctfd --timeout=60s"
 run "kubectl rollout status deployment/ctfd -n ctfd --timeout=120s"

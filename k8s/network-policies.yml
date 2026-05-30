@@ -1,9 +1,12 @@
 ---
 # k8s/network-policies.yml
+# Defensive Zero-Trust Egress Filtering Policy for Analyst Workspaces.
+# Restricts lateral cluster movement and blocks unauthorized outbound manipulation.
+
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: deny-analyst-to-platform
+  name: analyst-egress-whitelist
   namespace: analyst
 spec:
   podSelector:
@@ -12,7 +15,7 @@ spec:
   policyTypes:
     - Egress
   egress:
-    # Allow local DNS resolution
+    # Rule 1: Explicitly allow internal core DNS resolution queries
     - to:
         - namespaceSelector:
             matchLabels:
@@ -23,14 +26,10 @@ spec:
         - protocol: TCP
           port: 53
 
-    # FIXED: Replaced invalid shorthand string array with an explicit matchExpressions NotIn filter block
-    # Deny direct lateral movement into core platform namespaces
+    # FIXED (Item 3): Switched from a leaky inverted black-list to an explicit target allow-list.
+    # This allows analyst pods to communicate with target systems in the challenges namespace,
+    # while automatically dropping traffic to ctfd, traefik, registry, or external internet networks.
     - to:
         - namespaceSelector:
-            matchExpressions:
-              - key: kubernetes.io/metadata.name
-                operator: NotIn
-                values:
-                  - ctfd
-                  - traefik
-                  - registry
+            matchLabels:
+              kubernetes.io/metadata.name: challenges

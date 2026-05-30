@@ -9,16 +9,16 @@
 #     --create-namespace \
 #     --wait
 
-# FIXED (Item 12): Root level elements moved under the authoritative juiceShop block structure for v10 compatibility
+# FIXED (Item 7): Shifted core parameters to the top-level root per v10 schema constraints.
+# Seeds all flag generation — MUST match the key used when running juice-shop-ctf-cli.
+ctfKey: "CHANGE_ME_BEFORE_EVERY_EVENT"
+
+# Centralized administrator access credential for the MultiJuicer manager dashboard.
+adminPassword: "CHANGE_ME_SECURE_ADMIN_PASS"
+
 juiceShop:
   # Maximum concurrent Juice Shop instances (Set to your participant count. Each instance uses ~400MB RAM)
   maxInstances: 30
-
-  # CTF key — seeds all flag generation. MUST match the key used when running juice-shop-ctf-cli
-  ctfKey: "CHANGE_ME_BEFORE_EVERY_EVENT"
-
-  # Admin password for MultiJuicer dashboard
-  adminPassword: "CHANGE_ME"
 
   # Pin Juice Shop instances to the juiceshop worker node
   nodeSelector:
@@ -32,13 +32,13 @@ juiceShop:
       memory: "500Mi"
       cpu: "500m"
 
-  # FIXED (Item 12): Instance cleanup migrated to the correct structured v10 mapping
+  # Instance cleanup migrated to the correct structured v10 mapping
   # Automatically reclaims and purges inactive user instances after 2 hours
   cleanup:
     enabled: true
     gracePeriod: "120m"
 
-  # FIXED (Item 12): Migrated from an unstable raw multi-line string block to standard YAML map variables
+  # Migrated from an unstable raw multi-line string block to standard YAML map variables
   # Full config reference: https://pwning.owasp-juice.shop/companion-guide/latest/part4/customization.html
   config:
     application:
@@ -66,7 +66,7 @@ balancer:
   cookie:
     secure: false # Change to true once cert-manager handles explicit TLS termination
 
-  # FIXED: Added native health probes to the balancer to ensure high-availability routing validation
+  # Native health probes to the balancer to ensure high-availability routing validation
   livenessProbe:
     httpGet:
       path: /balancer/

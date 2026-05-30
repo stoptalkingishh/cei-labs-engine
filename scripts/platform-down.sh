@@ -24,7 +24,7 @@ else
   done
 fi
 
-# ── 2. Safely Dismantle MultiJuicer & Traefik Helm Releases ───────────────────
+# ── 2. Safely Dismantle Platform Helm Releases ────────────────────────────────
 if command -v helm &>/dev/null; then
   # Purge MultiJuicer lab releases
   for mj_ns in multijuicer apps; do
@@ -34,10 +34,16 @@ if command -v helm &>/dev/null; then
     fi
   done
 
-  # FIXED (Item 9): Uninstalls Traefik release to allow clean external IP renewal cycles
+  # Uninstalls Traefik release to allow clean external IP renewal cycles
   if helm status traefik -n traefik &>/dev/null; then
     echo "[*] Purging Traefik Ingress Helm release from namespace: traefik..."
     helm uninstall traefik -n traefik
+  fi
+
+  # FIXED (Item 8): Evict cert-manager components and cleanly wipe system CustomResourceDefinitions
+  if helm status cert-manager -n cert-manager &>/dev/null; then
+    echo "[*] Purging cert-manager core infrastructure and webhook bindings..."
+    helm uninstall cert-manager -n cert-manager
   fi
 else
   echo -e "${YELLOW}[!] Warning: Helm binary not found. Skipping Helm release purge cycles.${NC}"
@@ -50,13 +56,13 @@ if [ -f "k8s/ingress/traefik-ingress.yml" ]; then
   kubectl delete -f k8s/ingress/traefik-ingress.yml --ignore-not-found=true
 fi
 
-# FIXED: Converted from -k to -f to resolve manifest structural parsing errors
+# Converted from -k to -f to resolve manifest structural parsing errors
 if [ -f "k8s/ctfd/ctfd-deployment.yml" ]; then
   echo "[*] Dismantling core CTFd scoring engines and storage definitions..."
   kubectl delete -f k8s/ctfd/ctfd-deployment.yml --ignore-not-found=true
 fi
 
-# FIXED (Item 10): Removes the internal container registry to prevent runtime storage lock collisions
+# Removes the internal container registry to prevent runtime storage lock collisions
 if [ -f "k8s/registry/registry.yml" ]; then
   echo "[*] Purging secure internal local container registry workspace components..."
   kubectl delete -f k8s/registry/registry.yml --ignore-not-found=true

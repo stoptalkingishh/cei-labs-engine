@@ -31,8 +31,8 @@ else
 fi
 
 NAMESPACE="analyst"
-# FIXED: Realigned the target GHCR path layout to cleanly match standard package output subdirectories
-IMAGE="ghcr.io/${ORG}/ctf-analyst:${TAG}"
+# FIXED (Item 6): Realigned the target GHCR path layout to cleanly include the platform repository layer 
+IMAGE="ghcr.io/${ORG}/cei-labs-engine/ctf-analyst:${TAG}"
 CREDS_FILE="creds.txt"
 
 # Hardened Control-Plane IP Parsing Engine
@@ -43,8 +43,8 @@ fi
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 
-log_info()  { echo -e "${GREEN}[+]${NC} $*"; }
-log_warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+log_info()   { echo -e "${GREEN}[+]${NC} $*"; }
+log_warn()   { echo -e "${YELLOW}[!]${NC} $*"; }
 log_error() { echo -e "${RED}[-]${NC} $*" >&2; }
 
 # Initialize Namespace Bound
