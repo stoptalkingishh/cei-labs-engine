@@ -4,19 +4,22 @@
 # MetalLB gives Traefik and other LoadBalancer services a real LAN IP.
 
 - name: Add MetalLB Helm repo
-  command: helm repo add metallb https://metallb.github.io/metallb
+  # FIXED: Converted module to fully-qualified collection name (FQCN)
+  ansible.builtin.command: helm repo add metallb https://metallb.github.io/metallb
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   changed_when: false
 
 - name: Update Helm repos
-  command: helm repo update
+  # FIXED: Converted module to FQCN
+  ansible.builtin.command: helm repo update
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   changed_when: false
 
 - name: Install MetalLB
-  command: >
+  # FIXED: Converted module to FQCN
+  ansible.builtin.command: >
     helm upgrade --install metallb metallb/metallb
     --namespace metallb-system
     --create-namespace
@@ -28,15 +31,21 @@
   changed_when: "'already deployed' not in metallb_install.stdout"
 
 - name: Wait for MetalLB pods to be ready
-  command: kubectl rollout status deployment/metallb-controller -n metallb-system
+  # FIXED: Converted module to FQCN
+  ansible.builtin.command: kubectl rollout status deployment/metallb-controller -n metallb-system
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  # FIXED: Prevented arbitrary state updates during polling checks
+  changed_when: false
   retries: 10
   delay: 15
 
 - name: Apply MetalLB IP address pool
-  copy:
+  # FIXED: Converted module to FQCN
+  ansible.builtin.copy:
     dest: /tmp/metallb-ippool.yml
+    # FIXED: Added explicit permission boundaries to resolve security parameters
+    mode: "0644"
     content: |
       apiVersion: metallb.io/v1beta1
       kind: IPAddressPool
@@ -57,6 +66,10 @@
           - ctf-pool
 
 - name: Apply MetalLB pool manifest
-  command: kubectl apply -f /tmp/metallb-ippool.yml
+  # FIXED: Converted module to FQCN
+  ansible.builtin.command: kubectl apply -f /tmp/metallb-ippool.yml
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: metallb_pool_apply
+  # FIXED: Tracks real configuration adjustments to the live routing field
+  changed_when: "'configured' in metallb_pool_apply.stdout or 'created' in metallb_pool_apply.stdout"

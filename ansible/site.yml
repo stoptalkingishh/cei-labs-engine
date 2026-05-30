@@ -56,7 +56,6 @@
       changed_when: false
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
-      # Deduplicates group nodes using 'unique' to avoid double counting across overlapping assignments
       until: >
         ready_nodes_count.stdout | int == (
         (groups.get('control_plane', []) + 
@@ -72,6 +71,9 @@
         kubectl label node {{ item }} role=analyst --overwrite
       loop: "{{ groups.get('analyst_workers', []) | default([]) }}"
       when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') != 'single'
+      register: tag_analyst
+      # FIXED: Only reports a change if the label state was explicitly modified rather than evaluated
+      changed_when: "'not labeled' not in tag_analyst.stdout and 'labeled' in tag_analyst.stdout"
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
 
@@ -80,6 +82,9 @@
         kubectl label node {{ item }} role=juiceshop --overwrite
       loop: "{{ groups.get('juiceshop_workers', []) | default([]) }}"
       when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') != 'single'
+      register: tag_juiceshop
+      # FIXED: Only reports a change if the label state was explicitly modified
+      changed_when: "'not labeled' not in tag_juiceshop.stdout and 'labeled' in tag_juiceshop.stdout"
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
 
@@ -88,11 +93,17 @@
         kubectl label node --all role=analyst --overwrite
         kubectl label node --all role=juiceshop --overwrite
       when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') == 'single'
+      register: tag_standalone
+      # FIXED: Prevented continuous change loops by matching label string feedback parameters
+      changed_when: "'not labeled' not in tag_standalone.stdout and 'labeled' in tag_standalone.stdout"
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
 
     - name: Seed internal cluster namespace topologies
       ansible.builtin.shell: |
         kubectl apply -f "{{ playbook_dir }}/../k8s/namespaces/namespaces.yml"
+      register: seed_namespaces
+      # FIXED: Tracks actual API changes over the resource manifest topology
+      changed_when: "'created' in seed_namespaces.stdout or 'configured' in seed_namespaces.stdout"
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
