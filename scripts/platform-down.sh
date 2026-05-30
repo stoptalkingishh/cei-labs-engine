@@ -40,10 +40,13 @@ if command -v helm &>/dev/null; then
     helm uninstall traefik -n traefik
   fi
 
-  # FIXED (Item 8): Evict cert-manager components and cleanly wipe system CustomResourceDefinitions
+  # FIXED (Item F3): Evict cert-manager components and cleanly wipe system CustomResourceDefinitions
   if helm status cert-manager -n cert-manager &>/dev/null; then
     echo "[*] Purging cert-manager core infrastructure and webhook bindings..."
     helm uninstall cert-manager -n cert-manager
+    
+    echo "[*] Enforcing deep purge of lingering cluster-wide cert-manager CRDs..."
+    kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.4/cert-manager.crds.yaml --ignore-not-found=true || true
   fi
 else
   echo -e "${YELLOW}[!] Warning: Helm binary not found. Skipping Helm release purge cycles.${NC}"
@@ -68,5 +71,11 @@ if [ -f "k8s/registry/registry.yml" ]; then
   kubectl delete -f k8s/registry/registry.yml --ignore-not-found=true
 fi
 
+# ── 4. Flush Remaining Resources Across Core Namespaces ───────────────────────
+echo "[*] Flushing lingering namespace workload remnants..."
+for ns in ctfd multijuicer registry traefik; do
+  kubectl delete configmaps,secrets,services --all -n "$ns" --ignore-not-found=true 2>/dev/null || true
+done
+
 echo ""
-echo -e "${GREEN}[+] CEI Labs Engine Stopped. Persistence volumes preserved on Node 1.${NC}"
+echo -e "${GREEN}[+] CEI Labs Engine Stopped. Core persistence volumes preserved on Node 1.${NC}"

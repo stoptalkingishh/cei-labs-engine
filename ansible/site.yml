@@ -1,7 +1,15 @@
 ---
 # ansible/site.yml
-# Top-level playbook orchestrating the CEI Labs Engine infrastructure.
+# Top-level playbook orchestrating elastic cyber range infrastructure layers.
 # Usage: ansible-playbook -i ansible/inventory.ini ansible/site.yml
+
+- name: Phase 0 - Dependency & Collection Acquisition Baseline
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Ensure prerequisite external collections are locally cached
+      ansible.builtin.command: ansible-galaxy collection install -r requirements.yml
+      changed_when: false
 
 - name: Phase 1 - Global Prerequisite & Security Hardening Baseline
   hosts: all
@@ -20,7 +28,7 @@
     - role: k3s-server
 
 - name: Phase 3 - Join Worker & Analyst Nodes to Cluster Runtime
-  hosts: workers:analyst_workers
+  hosts: workers:analyst_workers:juiceshop_workers
   become: true
   serial: "50%"
   tags: ["infra", "k3s-agent"]
@@ -34,14 +42,13 @@
     - name: Deploy MetalLB layer-2 infrastructure routing rules
       ansible.builtin.include_role:
         name: metallb
+      when: hostvars[groups['control_plane'][0]]['use_metallb'] | default(true) | bool
 
-- name: Phase 5 - Verify Cluster Structural Readiness & Seed Environments
+- name: Phase 5 - Verify Cluster Structural Readiness & Target Tagging
   hosts: control_plane[0]
   tags: ["apps", "bootstrap"]
   tasks:
-    # Upgraded readiness check to mathematically confirm that 
-    # the total number of nodes matching a strict 'True' state satisfies the inventory size.
-    - name: Validate all worker cluster nodes are reporting Ready state
+    - name: Validate unique physical cluster nodes are reporting Ready state
       ansible.builtin.shell: |
         set -o pipefail
         kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' | tr ' ' '\n' | grep -c '^True$'
@@ -49,17 +56,41 @@
       changed_when: false
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
-      # Guarded group lookups prevent dictionary failures if worker profiles are omitted from inventory variations
+      # Deduplicates group nodes using 'unique' to avoid double counting across overlapping assignments
       until: >
         ready_nodes_count.stdout | int == (
-        (groups.get('control_plane', []) | length) +
-        (groups.get('workers', []) | length) +
-        (groups.get('analyst_workers', []) | length)
+        (groups.get('control_plane', []) + 
+         groups.get('workers', []) + 
+         groups.get('analyst_workers', []) + 
+         groups.get('juiceshop_workers', [])) | unique | length
         )
       retries: 30
       delay: 10
 
-    # Standard kubectl shell application ensures zero-dependency execution
+    - name: Explicitly tag designated target compute spaces with topology labels
+      ansible.builtin.shell: |
+        kubectl label node {{ item }} role=analyst --overwrite
+      loop: "{{ groups.get('analyst_workers', []) | default([]) }}"
+      when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') != 'single'
+      environment:
+        KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
+
+    - name: Explicitly tag designated Juice Shop compute spaces with topology labels
+      ansible.builtin.shell: |
+        kubectl label node {{ item }} role=juiceshop --overwrite
+      loop: "{{ groups.get('juiceshop_workers', []) | default([]) }}"
+      when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') != 'single'
+      environment:
+        KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
+
+    - name: Tag local single host with all roles when running in standalone mode
+      ansible.builtin.shell: |
+        kubectl label node --all role=analyst --overwrite
+        kubectl label node --all role=juiceshop --overwrite
+      when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') == 'single'
+      environment:
+        KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
+
     - name: Seed internal cluster namespace topologies
       ansible.builtin.shell: |
         kubectl apply -f "{{ playbook_dir }}/../k8s/namespaces/namespaces.yml"

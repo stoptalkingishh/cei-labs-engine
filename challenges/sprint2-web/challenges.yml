@@ -14,7 +14,8 @@ spec:
       points: 100
       description: "Inspect target raw DOM structures to extract primary configuration passcodes."
       flag_type: "static"
-      secret: "CTF{source_code_inspection_is_fundamental}"
+      # FIXED (Item M5): Standardized flag format wrapper to match canonical CTFd regex schema parameters
+      secret: "flag{source_code_inspection_is_fundamental}"
 
     - id: "juice-shop-xss"
       title: "JuiceShop Cross-Site Scripting (XSS)"
@@ -23,3 +24,5 @@ spec:
       description: "Inject a malicious payload to compromise the active administrator browser session matrix."
       flag_type: "dynamic"
       generator: "multijuicer-webhook-verify"
+      # FIXED (Item M5): Appended flag formatting structural hint string parameters for automated validation mapping
+      flag_format_hint: "flag{[a-f0-9]{32}}"

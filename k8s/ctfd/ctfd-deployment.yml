@@ -29,8 +29,13 @@ spec:
       labels:
         app: ctfd-db
     spec:
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: "true"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
       containers:
         - name: mariadb
           image: mariadb:10.11
@@ -99,8 +104,13 @@ spec:
       labels:
         app: ctfd-redis
     spec:
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: "true"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
       containers:
         - name: redis
           image: redis:7-alpine
@@ -144,8 +154,13 @@ spec:
       labels:
         app: ctfd
     spec:
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: "true"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
       initContainers:
         - name: fix-permissions
           image: busybox

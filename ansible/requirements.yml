@@ -1,0 +1,6 @@
+---
+# ansible/requirements.yml
+# External dependencies required for security baselines and host management
+collections:
+  - name: community.general
+    version: ">=9.0.0"

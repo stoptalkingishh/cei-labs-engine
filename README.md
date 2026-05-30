@@ -2,7 +2,7 @@
 CEI Labs is a modular, multi-tenant cyber range engineered on a lightweight K3s mini-PC cluster. Built to decouple core infrastructure from individual modules, CEI Labs functions as an evolving platform capable of orchestrating diverse capture-the-flag environments, threat hunting sandboxes, and deep network analysis pipelines.
 
 # CEI Labs // CTF Infrastructure Engine
-A self-hosted, progressive cybersecurity training platform built for the President's Cup Cybersecurity Competition (PCCC) pipeline. Three-node K3s cluster running CTFd, MultiJuicer (OWASP Juice Shop), SSH analyst containers, Kali noVNC workstations, and self-hosted target wrappers.
+A self-hosted, progressive cybersecurity training platform built for the President's Cup Cybersecurity Competition (PCCC) pipeline. Flexible K3s topology supporting standalone single-host, dual-host, or high-availability three-node hardware configurations running CTFd, MultiJuicer (OWASP Juice Shop), SSH analyst containers, Kali noVNC workstations, and self-hosted target wrappers.
 
 ## Confirmed Dependency Versions
 | Component | Version | Source / Notes |
@@ -15,12 +15,24 @@ A self-hosted, progressive cybersecurity training platform built for the Preside
 | **MetalLB** | `latest` | Bare-metal Layer 2 LoadBalancer pool |
 | **Traefik** | `v3.x` | Managed Helm Ingress handling dedicated external TLS routing |
 | **MariaDB** | `10.11` | Pinned PVC storage backing ctfd-db |
-| **Redis** | `7-alpine` | CTFd caching layer |
+| **Redis** | `7-alpine` | Banking CTFd caching layer |
 | **Ubuntu** | `24.04 LTS` | Node base operating system |
 
 ---
 
-## Hardware Layout & Topology
+## Technical Hardware Performance Profiles
+
+Before initiating a deployment, update `ansible/group_vars/all.yml` to reflect your physical target hardware limits:
+
+| Deployment Mode | Managed Host Nodes | Target vCPUs | Baseline RAM | Target Storage Size | Max Target Participants |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`single`** | 1 Node (Combined) | 4 Cores | 16 GB | 100 GB SSD | Up to 10 Users |
+| **`dual`** | 2 Nodes (Segregated) | 4 + 4 Cores | 16 + 16 GB | 100 + 100 GB SSD | Up to 20 Users |
+| **`cluster`** | 3 Nodes (HA Dedicated) | 4 + 4 + 4 Cores | 32 + 16 + 16 GB | 256 + 100 + 100 GB SSD | Up to 30 Users |
+
+---
+
+## Hardware Layout & Topology (Production Cluster Example)
 ┌─────────────────────────────┐   ┌─────────────────────────────┐
 │  NODE 1 — Control Plane     │   │  NODE 2 — Juice Shop        │
 │  Hardware: OptiPlex 7080    │   │  Hardware: N100 Mini PC     │
@@ -71,22 +83,27 @@ A self-hosted, progressive cybersecurity training platform built for the Preside
 git clone [https://github.com/](https://github.com/)<your-org>/cei-labs-engine
 cd cei-labs-engine
 
-# 2. Configure inventory and secrets
+# 2. Configure inventory and cluster variable parameters
 cp ansible/group_vars/all.yml.example ansible/group_vars/all.yml
 nano ansible/group_vars/all.yml
 nano ansible/inventory.ini
 
-# 3. Execute cluster provisioning
-# (Installs Ubuntu dependencies, secures runtimes, and provisions K3s environment)
-ansible-playbook ansible/site.yml -i ansible/inventory.ini
+# 3. Provision the host forensic file structures and mount points
+./scripts/setup-cases.sh
 
-# 4. Spin up Core Engine Services
-# (Deploys Local Registry PVC, MetalLB, CTFd, cert-manager, and MultiJuicer via Helm)
+# 4. Execute cluster provisioning playbook
+# (Installs OS updates, secures runtimes, handles token acquisition, and brings up K3s)
+ansible-playbook -i ansible/inventory.ini ansible/site.yml
+
+# 5. Spin up Core Engine Platforms
+# (Deploys Core Namespaces, Local Registry PVC, cert-manager, Traefik, CTFd, and MultiJuicer)
 ./scripts/platform-up.sh
 
-# 5. Populate curriculum flags via ctfcli
+# 6. Populate curriculum challenges and scoring engines
+# (Run after initial administrative account setup steps)
+./scripts/juice-shop-ctf-import.sh
 ./scripts/challenges-load.sh
 
-# 6. Audit local range status
+# 7. Audit local operational range state
 kubectl get nodes -o wide
 kubectl get pods -A

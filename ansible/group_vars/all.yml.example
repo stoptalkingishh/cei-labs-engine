@@ -3,14 +3,29 @@
 # Copy this file to all.yml in the same directory and fill in every value.
 # Note: all.yml is explicitly gitignored — never commit real production secrets.
 
-# ── Cluster Configuration ──────────────────────────────────────────────────
+# ── Hardware Flexibility & Topology Configuration ─────────────────────────
+# Options: 
+#   - single: All components run on node1. nodeSelectors are safely bypassed/ignored.
+#   - dual: control_plane and webapps run on node1; analysts run on node2.
+#   - cluster: Standard high-availability 3-node distribution across hardware.
+deployment_mode: "cluster"
+
 k3s_version: "v1.32.5+k3s1"
 # Unique cluster token used by workers and analyst nodes to securely join control_plane
 k3s_token: "CHANGE_ME_RANDOM_64_CHARS"
 
+# ── Network Routing & Load Balancing ──────────────────────────────────────
+# Set to false on single-host laptop setups, dynamic consumer DHCP routers,
+# or contexts where a secondary unallocated IP pool is unavailable.
+use_metallb: true
+
 # Internal LAN IP range for MetalLB to allocate to Ingress routers
 # Set to an unused slice of IPs outside your local network router's DHCP pool
 metallb_ip_range: "192.168.1.200-192.168.1.220"
+
+# For air-gapped/local area network environments, use a '.local' domain with /etc/hosts injection
+# For open-internet deployments, point a wildcard domain (e.g., *.yourdomain.com) to your entry range
+base_domain: "ctf.local"
 
 # ── GitHub Container Registry (GHCR) ───────────────────────────────────────
 github_org: "your-github-org"
@@ -24,25 +39,19 @@ ctfd_db_password: "CHANGE_ME_SECURE_DATABASE_PASSWORD"
 ctfd_db_root_password: "CHANGE_ME_SECURE_ROOT_PASSWORD"
 ctfd_admin_token: "CHANGE_ME_AFTER_FIRST_LOGIN"
 
-# ── MultiJuicer / Juice Shop Configuration ───────────────────────────────
+# ── MultiJuicer / Juice Shop Elastic Configuration ───────────────────────
 # Seeds flag generation for all Juice Shop pods.
 # IMPORTANT: Change this before every event — flags alter when this changes.
 multijuicer_ctf_key: "CHANGE_ME_BEFORE_EVERY_EVENT"
 multijuicer_admin_password: "CHANGE_ME_SECURE_DASHBOARD_PASSWORD"
 
 # Maximum concurrent Juice Shop instances (typically maps to participant count)
+# Safeguard: Reduce this value (~5-10) when running inside single-host mode with <16GB RAM.
 multijuicer_max_instances: 30
-
-# ── Network Routing & Domain Ingress ──────────────────────────────────────
-# For air-gapped/local area network environments, use a '.local' domain with /etc/hosts injection
-# For open-internet deployments, point a wildcard domain (e.g., *.yourdomain.com) to metallb_ip_range
-base_domain: "ctf.local"
 
 # ── User SSH Workspaces (Node Assignment Range) ───────────────────────────
 # Standardized participant configuration parameters mapping to the K8s NodePort window
 analyst_base_port: 30001
 
-# FIXED (Item 11): Changed default tag from non-existent v1.0.4 to "latest" to prevent ImagePullBackOff errors.
-# The CI build workflow only outputs "latest" or "sha-<hash>" tags. Cadre can update this value 
-# to a frozen container build SHA (e.g., "sha-a1b2c3d") once verification cycles pass.
+# Container image reference targeting the user environment deployment
 analyst_image_tag: "latest"

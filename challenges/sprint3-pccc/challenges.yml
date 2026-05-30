@@ -14,7 +14,8 @@ spec:
       points: 300
       description: "Manipulate sequential backend REST API payload indices to harvest sensitive customer driver metrics profiles."
       flag_type: "static"
-      secret: "CTF{broken_object_level_authorization_success}"
+      # FIXED (Item M5): Standardized flag format wrapper to match canonical CTFd regex schema parameters
+      secret: "flag{broken_object_level_authorization_success}"
 
     - id: "pccc-skilling-sigint"
       title: "PCCC Skilling Lab: Signal Analysis"
@@ -22,4 +23,5 @@ spec:
       points: 500
       description: "Reconstruct raw hex payload captures extracted from a compromised network communication vector."
       flag_type: "static"
-      secret: "CTF{high_frequency_spectrum_reconstructed}"
+      # FIXED (Item M5): Standardized flag format wrapper to match canonical CTFd regex schema parameters
+      secret: "flag{high_frequency_spectrum_reconstructed}"

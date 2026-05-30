@@ -9,20 +9,29 @@
 #     --create-namespace \
 #     --wait
 
-# FIXED (Item 7): Shifted core parameters to the top-level root per v10 schema constraints.
 # Seeds all flag generation — MUST match the key used when running juice-shop-ctf-cli.
+# Overridden dynamically in platform-up.sh by --set ctfKey="$CTF_KEY" (Resolves Item F5)
 ctfKey: "CHANGE_ME_BEFORE_EVERY_EVENT"
 
 # Centralized administrator access credential for the MultiJuicer manager dashboard.
 adminPassword: "CHANGE_ME_SECURE_ADMIN_PASS"
 
 juiceShop:
-  # Maximum concurrent Juice Shop instances (Set to your participant count. Each instance uses ~400MB RAM)
+  # Maximum concurrent Juice Shop instances (Each instance uses ~400MB RAM)
+  # Overridden dynamically in platform-up.sh by --set juiceShop.maxInstances="$MAX_INSTANCES" (Resolves Item H6)
   maxInstances: 30
 
-  # Pin Juice Shop instances to the juiceshop worker node
-  nodeSelector:
-    role: juiceshop
+  # FIXED (Item H1): Soft node affinity lets pods schedule on control-plane nodes if single-host mode is active
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: role
+                operator: In
+                values:
+                  - juiceshop
   
   resources:
     requests:
@@ -38,24 +47,36 @@ juiceShop:
     enabled: true
     gracePeriod: "120m"
 
-  # Migrated from an unstable raw multi-line string block to standard YAML map variables
+  # FIXED (Item B6): Serialized from a native YAML map into a multi-line JSON string block scalar
   # Full config reference: https://pwning.owasp-juice.shop/companion-guide/latest/part4/customization.html
-  config:
-    application:
-      name: "CTF Training Platform"
-      welcomeBanner:
-        showOnFirstStart: true
-        title: "Welcome to the CTF Platform"
-        message: "Complete challenges to earn points. Submit flags in CTFd at http://ctfd.ctf.local"
-    ctf:
-      showFlagsInNotifications: false
+  config: |
+    {
+      "application": {
+        "name": "CTF Training Platform",
+        "welcomeBanner": {
+          "showOnFirstStart": true,
+          "title": "Welcome to the CTF Platform",
+          "message": "Complete challenges to earn points. Submit flags in CTFd at http://ctfd.ctf.local"
+        }
+      },
+      "ctf": {
+        "showFlagsInNotifications": false
+      }
+    }
 
 # MultiJuicer balancer configuration
 balancer:
   repository: ghcr.io/juice-shop/multi-juicer/balancer
-  # Target the modern K3s v1.32 canonical control-plane node label boundary
-  nodeSelector:
-    node-role.kubernetes.io/control-plane: "true"
+
+  # FIXED (Item H1): Shifted from rigid nodeSelector to structural Exists check for the control plane boundary
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+
   resources:
     requests:
       memory: "256Mi"
