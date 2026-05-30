@@ -19,7 +19,8 @@ jobs:
 
       - name: Validate Kubernetes manifests
         run: |
-          find k8s/ -type f \( -name "*.yml" -o -name "*.yaml" \) | \
+          # FIXED: Filtered out non-manifest Helm configuration values files (*values.yml) from validation pathing
+          find k8s/ -type f \( -name "*.yml" -o -name "*.yaml" \) ! -name "*values.yml" | \
           xargs kubeconform \
             -strict \
             -ignore-missing-schemas \

@@ -23,10 +23,11 @@ ports:
       default: true
     exposedPort: 80
     protocol: TCP
-    # Enforces universal HTTP-to-HTTPS upgrade across all routing definitions
-    redirectTo:
-      port: websecure
-      priority: 10
+    # FIXED (Item B3): Disabled the global redirect to break infinite loops during air-gapped/LAN setups.
+    # Individual routes can now cleanly negotiate Port 80 traffic.
+    # redirectTo:
+    #   port: websecure
+    #   priority: 10
   websecure:
     port: 8443
     expose:

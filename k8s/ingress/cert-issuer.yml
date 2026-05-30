@@ -5,12 +5,50 @@ metadata:
   name: selfsigned-issuer
 spec:
   selfSigned: {}
+
 ---
+# Wildcard TLS for Traefik Ingress Core Gateway
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: ctf-wildcard-tls
   namespace: traefik
+spec:
+  secretName: ctf-wildcard-tls-secret
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+  commonName: "*.ctf.local"
+  dnsNames:
+    - "ctf.local"
+    - "*.ctf.local"
+
+---
+# FIXED: Replicated Wildcard TLS secret footprint inside ctfd namespace 
+# This prevents cross-namespace secret isolation access violations
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ctfd-wildcard-tls
+  namespace: ctfd
+spec:
+  secretName: ctf-wildcard-tls-secret
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+  commonName: "*.ctf.local"
+  dnsNames:
+    - "ctf.local"
+    - "*.ctf.local"
+
+---
+# FIXED: Replicated Wildcard TLS secret footprint inside multijuicer namespace
+# This allows cookie.secure optimization flags to access local keys cleanly
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: multijuicer-wildcard-tls
+  namespace: multijuicer
 spec:
   secretName: ctf-wildcard-tls-secret
   issuerRef:

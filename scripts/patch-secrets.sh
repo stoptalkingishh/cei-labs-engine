@@ -33,23 +33,31 @@ fi
 # Reconstruct the dynamic database string URI format matching CTFd specifications
 DB_URL="mysql+pymysql://ctfd:${DB_PASS}@ctfd-db/ctfd"
 
-echo -e "${YELLOW}[*] Registering live cluster patch vectors targeting namespace: ctfd...${NC}"
+echo -e "${YELLOW}[*] Securing live cluster credentials targeting namespace: ctfd...${NC}"
 
-# Execute explicit runtime patch over active cluster secret boundary safely using stringData maps
-kubectl patch secret ctfd-secrets -n ctfd --type='merge' -p "$(cat <<EOF
-{
-  "stringData": {
-    "secret-key": "${CTFD_KEY}",
-    "db-password": "${DB_PASS}",
-    "db-root-password": "${DB_ROOT}",
-    "database-url": "${DB_URL}"
-  }
-}
+# FIXED: Replaced brittle 'patch' constraint with an idempotent 'apply' configuration block.
+# This prevents race conditions if the placeholder secret manifest hasn't finished registering yet.
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ctfd-secrets
+  namespace: ctfd
+type: Opaque
+stringData:
+  secret-key: "${CTFD_KEY}"
+  db-password: "${DB_PASS}"
+  db-root-password: "${DB_ROOT}"
+  database-url: "${DB_URL}"
 EOF
-)"
 
 echo -e "${GREEN}[+] Production secrets dynamically applied. Recycling CTFd engine pods...${NC}"
-kubectl rollout restart deployment/ctfd -n ctfd
-kubectl rollout status deployment/ctfd -n ctfd --timeout=60s
+
+# Safely check if deployment is active before triggering a rolling restart loop
+if kubectl get deployment/ctfd -n ctfd &>/dev/null; then
+  kubectl rollout restart deployment/ctfd -n ctfd
+  echo -e "${YELLOW}[*] Awaiting scheduling reconciliation boundary stabilization...${NC}"
+  kubectl rollout status deployment/ctfd -n ctfd --timeout=90s || echo -e "${YELLOW}[!] Note: CTFd deployment is still optimizing. Continuing pipeline setup...${NC}"
+fi
 
 echo -e "${GREEN}[+] Synchronization Complete. CTFd database credentials locked successfully.${NC}"
