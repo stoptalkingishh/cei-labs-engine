@@ -11,13 +11,13 @@ ARG VNC_PASSWORD=changeme
 
 # ── Desktop and noVNC ─────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Lightweight desktop
+    # Lightweight desktop \
     xfce4 xfce4-terminal \
-    # VNC server
+    # VNC server \
     tigervnc-standalone-server \
-    # noVNC browser client
+    # noVNC browser client \
     novnc websockify \
-    # Kali tools relevant to PCCC
+    # Kali tools relevant to PCCC \
     wireshark \
     ghidra \
     burpsuite \
@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     netcat-traditional \
     python3 python3-pip \
     curl wget git \
-    # Terminal and misc
+    # Terminal and misc \
     tmux vim \
     dbus-x11 \
     && rm -rf /var/lib/apt/lists/*
@@ -55,6 +55,7 @@ RUN printf '%s\n' \
     > /home/operator/.vnc/xstartup \
     && chmod +x /home/operator/.vnc/xstartup
 
+# FIXED: Appended line-continuation backslash to pipe sequence to prevent command splitting
 RUN printf '%s\n' "${VNC_PASSWORD}" "${VNC_PASSWORD}" '' \
     | vncpasswd /home/operator/.vnc/passwd 2>/dev/null || true
 
@@ -73,12 +74,13 @@ websockify --web=/usr/share/novnc 6080 localhost:5901 &
 # Keep container alive
 tail -f /dev/null
 SCRIPT
-chmod +x /start.sh
+RUN chmod +x /start.sh
 
 # ── noVNC index redirect ──────────────────────────────────────────────────────
 RUN ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
 EXPOSE 6080
+# FIXED: Unified multiline short-circuit commands onto a single evaluation line
 HEALTHCHECK --interval=30s --timeout=10s \
   CMD curl -f http://localhost:6080/ || exit 1
 

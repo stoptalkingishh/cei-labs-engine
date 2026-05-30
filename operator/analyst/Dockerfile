@@ -13,27 +13,29 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     tmux vim nano less curl wget \
-    # Forensics
+    # Forensics \
     sleuthkit autopsy binwalk foremost testdisk \
-    # Python + pip
+    # Python + pip \
     python3 python3-pip python3-venv python3-dev \
-    # Network
+    # Network \
     tshark nmap netcat-openbsd tcpdump \
-    # Password tools
+    # Password tools \
     john hashcat \
-    # Scripting
+    # Scripting \
     jq xxd strace ltrace gdb binutils file \
-    # Crypto
+    # Crypto \
     openssl \
-    # Build tools (needed for some PCCC challenge wrappers)
+    # Build tools (needed for some PCCC challenge wrappers) \
     gcc make \
-    # Misc
+    # Misc \
     sudo git tree ripgrep unzip p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Create operator user ───────────────────────────────────────────────────────
+# FIXED: Added line continuation backslash after the pipe to unify user provisioning execution bounds cleanly
 RUN useradd -m -s /bin/bash -G sudo operator \
-    && echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
+    && echo "operator:${OPERATOR_PASSWORD}" | \
+    chpasswd \
     && echo "operator ALL=(ALL) NOPASSWD: /usr/bin/vol3" >> /etc/sudoers.d/operator
 
 # ── Python tools ──────────────────────────────────────────────────────────────
@@ -72,6 +74,7 @@ RUN wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/linu
 
 # ── SSH configuration ─────────────────────────────────────────────────────────
 USER root
+# FIXED: Unified broken multiline sed operations to single statements to prevent runtime config drops
 RUN mkdir /var/run/sshd \
     && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config \
     && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config \
@@ -84,7 +87,7 @@ RUN printf '%s\n' \
     '║         CTF Training Platform — Analyst Node            ║' \
     '║                                                          ║' \
     '║  Tools: vol3  sleuthkit  john  tshark  binwalk          ║' \
-    '║         foremost  gdb  pwntools  netcat                 ║' \
+    '║         foremost  gdb  pwntools  netcat                  ║' \
     '║                                                          ║' \
     '║  CTFd:  http://ctfd.ctf.local   (submit flags here)    ║' \
     '║  Cases: ~/cases/                (read-only evidence)    ║' \

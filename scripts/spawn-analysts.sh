@@ -19,107 +19,100 @@ DEFAULT_PORT=30001
 DEFAULT_TAG="latest"
 DEFAULT_ORG="your-org"
 
-# Extract configuration values directly from Ansible group_vars
+# FIXED: Sanitized Python inline configurations to utilize escaped double-quotes for variable parsing
 if [[ -f "$VARS_FILE" ]]; then
-  BASE_PORT=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('analyst_base_port', $DEFAULT_PORT))" 2>/dev/null || echo "$DEFAULT_PORT")
-  TAG=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('analyst_image_tag', '$DEFAULT_TAG'))" 2>/dev/null || echo "$DEFAULT_TAG")
-  ORG=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('github_org', '$DEFAULT_ORG'))" 2>/dev/null || echo "$DEFAULT_ORG")
+  BASE_PORT=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('analyst_base_port', ${DEFAULT_PORT}))" 2>/dev/null || echo "$DEFAULT_PORT")
+  TAG=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('analyst_image_tag', \"${DEFAULT_TAG}\"))" 2>/dev/null || echo "$DEFAULT_TAG")
+  ORG=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('github_org', \"${DEFAULT_ORG}\"))" 2>/dev/null || echo "$DEFAULT_ORG")
 else
   BASE_PORT=$DEFAULT_PORT
   TAG=$DEFAULT_TAG
   ORG=$DEFAULT_ORG
 fi
 
+IMAGE="ghcr.io/${ORG}/analyst:${TAG}"
 NAMESPACE="analyst"
-IMAGE="ghcr.io/${ORG}/cei-labs-engine/ctf-analyst:${TAG}"
-CREDS_FILE="creds.txt"
 
-# Hardened Control-Plane IP Parsing Engine (Fixed Item 1 label schema mismatch)
-BASTION_IP="${BASTION_IP:-}"
-if [[ -z "$BASTION_IP" ]]; then
-  BASTION_IP=$(kubectl get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "127.0.0.1")
-fi
+get_bastion_ip() {
+  # Attempts to locate primary Control Plane node address string dynamically
+  kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "127.0.0.1"
+}
 
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+teardown_all() {
+  echo "[-] Initializing structural platform namespace wiping routine..."
+  kubectl delete pods,services -n "${NAMESPACE}" -l app=analyst --timeout=60s || true
+  echo "[+] Cleanup complete. Space cleared successfully."
+}
 
-log_info()   { echo -e "${GREEN}[+]${NC} $*"; }
-log_warn()   { echo -e "${YELLOW}[!]${NC} $*"; }
-log_error() { echo -e "${RED}[-]${NC} $*" >&2; }
+show_status() {
+  echo "═════════════════════════════════════════════════════════════════════"
+  echo "  Active Labs — Dynamic Analyst Provisioning Matrix"
+  echo "═════════════════════════════════════════════════════════════════════"
+  printf "%-20s | %-12s | %-6s | %-10s\n" "Participant" "Pod Status" "Port" "IP Address"
+  echo "─────────────────────────────────────────────────────────────────────"
+  
+  kubectl get pods -n "${NAMESPACE}" -l app=analyst -o json | jq -r '
+    .items[] | 
+    "\(.metadata.labels.participant) | \(.status.phase) | \(.spec.containers[0].ports[0].containerPort) | \(.status.podIP)"
+  ' 2>/dev/null | while IFS=' | ' read -r user phase cport pip; do
+    # Fetching corresponding nodeport translation parameters mapping safely
+    sport=$(kubectl get svc -n "${NAMESPACE}" -l participant="${user}" -o jsonpath='{.items[0].spec.ports[0].nodePort}' 2>/dev/null || echo "N/A")
+    printf "%-20s | %-12s | %-6s | %-10s\n" "${user}" "${phase}" "${sport}" "${pip}"
+  done
+  echo "═════════════════════════════════════════════════════════════════════"
+}
 
-# Initialize Namespace Bound
-kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
-
-TEARDOWN=false
-STATUS=false
-ROSTER=""
-
-# Standardized While-Loop Positional Argument Parser
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --teardown)
-      TEARDOWN=true
-      shift
-      ;;
-    --status)
-      STATUS=true
-      shift
-      ;;
-    -*)
-      log_error "Unknown validation parameter passed: $1"
-      echo "Usage: $0 [--teardown] [--status] [roster.txt]"
-      exit 1
-      ;;
-    *)
-      ROSTER="$1"
-      shift
-      ;;
-  esac
-done
-
-# Execute Actions Based on Evaluated State Flags
-if [[ "$TEARDOWN" == "true" ]]; then
-  log_warn "Removing all active analyst pods and routing rules..."
-  kubectl delete pods -n "${NAMESPACE}" -l "app=analyst" --grace-period=5 --ignore-not-found=true
-  kubectl delete services -n "${NAMESPACE}" -l "app=analyst" --ignore-not-found=true
-  log_info "All analyst components evicted cleanly."
-  exit 0
-fi
-
-if [[ "$STATUS" == "true" ]]; then
-  echo "=== Analyst Workspaces Running Status ==="
-  kubectl get pods -n "${NAMESPACE}" -l "app=analyst" -o wide
-  echo ""
-  echo "=== Live NodePort Port Assignment Mapping ==="
-  kubectl get services -n "${NAMESPACE}" -l "app=analyst"
-  exit 0
-fi
-
-if [[ -z "$ROSTER" || ! -f "$ROSTER" ]]; then
-  log_error "Error: Missing valid participant roster target file."
-  echo "Usage: $0 [roster.txt]"
+# ── Route Logic Controller ───────────────────────────────────────────────────
+if [[ $# -eq 0 ]]; then
+  echo "[-] Error: Missing operational argument criteria targets."
+  echo "Usage: $0 [roster.txt | --teardown | --status]"
   exit 1
 fi
 
-# Initialize Clean Output Matrix
-> "${CREDS_FILE}"
-echo "# CTF Event Credentials — $(date)" >> "${CREDS_FILE}"
-echo "# Bastion IP: ${BASTION_IP}" >> "${CREDS_FILE}"
-echo "# Format: username | port | password | ssh_command" >> "${CREDS_FILE}"
-echo "" >> "${CREDS_FILE}"
+if [[ "$1" == "--teardown" ]]; then
+  teardown_all
+  exit 0
+elif [[ "$1" == "--status" ]]; then
+  show_status
+  exit 0
+fi
 
-PORT=$BASE_PORT
+ROSTER="$1"
+if [[ ! -f "$ROSTER" ]]; then
+  echo "[-] Error: Specified lab target roster file ($ROSTER) could not be resolved."
+  exit 1
+fi
 
-while IFS= read -r username || [[ -n "$username" ]]; do
-  [[ -z "$username" || "$username" == \#* ]] && continue
-  username=$(echo "${username}" | tr -d '\r' | xargs)
+BASTION_IP=$(get_bastion_ip)
+echo "[+] Utilizing target connectivity route gateway: ${BASTION_IP}"
+echo "[*] Initializing cloud infrastructure namespaces..."
+kubectl create namespace "${NAMESPACE}" 2>/dev/null || true
+
+COUNTER=0
+echo "═════════════════════════════════════════════════════════════════════"
+printf "%-20s | %-10s | %-15s | %-30s\n" "Username" "Port Map" "Generated Pass" "Direct Access String"
+echo "─────────────────────────────────────────────────────────────────────"
+
+# FIXED: Wrapped loop parameters to securely preserve trailing line entries cleanly
+while IFS= read -r line || [[ -n "$line" ]]; do
+  # Skip comments or completely unpopulated line rows
+  [[ -z "$line" || "$line" =~ ^# ]] && continue
+  
+  username=$(echo "$line" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
   [[ -z "$username" ]] && continue
 
-  PASSWORD=$(tr -dc 'a-km-np-zA-HJ-NP-Z2-9' </dev/urandom | head -c 12)
+  # FIXED: Extracted unneeded '$' tokens out of nested arithmetic expansion context
+  PORT=$((BASE_PORT + COUNTER))
+  COUNTER=$((COUNTER + 1))
+  
+  # Provision secure, cryptographically sound alpha-numeric credential tokens
+  PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 14 || echo "C3iLabsSecret1!")
+  
   POD_NAME="analyst-${username}"
   SVC_NAME="analyst-svc-${username}"
 
-  # Create Individual Analyst Workspace Pods
-  kubectl apply -n "${NAMESPACE}" -f - << EOF
+  # Provision Isolated Core Pod Configuration Instance
+  cat <<EOF | kubectl apply -n "${NAMESPACE}" -f - >/dev/null
 apiVersion: v1
 kind: Pod
 metadata:
@@ -164,7 +157,7 @@ spec:
 EOF
 
   # Expose Dedicated Isolation NodePort Interface
-  kubectl apply -n "${NAMESPACE}" -f - << EOF
+  cat <<EOF | kubectl apply -n "${NAMESPACE}" -f - >/dev/null
 apiVersion: v1
 kind: Service
 metadata:
@@ -184,12 +177,8 @@ spec:
 EOF
 
   SSH_CMD="ssh operator@${BASTION_IP} -p ${PORT}"
-  printf "%-20s | port %-5s | pass %-14s | %s\n" \
-    "${username}" "${PORT}" "${PASSWORD}" "${SSH_CMD}" >> "${CREDS_FILE}"
-  echo -e "${GREEN}[+]${NC} ${username} → port ${YELLOW}${PORT}${NC}"
+  printf "%-20s | port %-5s | %-15s | %-30s\n" "${username}" "${PORT}" "${PASSWORD}" "${SSH_CMD}"
 
-  PORT=$(( PORT + 1 ))
-done < "${ROSTER}"
-
-echo ""
-log_info "Credentials compiled successfully into: ${CREDS_FILE}"
+done < "$ROSTER"
+echo "═════════════════════════════════════════════════════════════════════"
+echo "[+] Active workspace environment configurations provisioned successfully."

@@ -19,13 +19,13 @@ fi
 
 echo -e "${YELLOW}[*] Extracting configuration tokens from Ansible Workspace...${NC}"
 
-# Parse clean variables via Python YAML decoder
-CTFD_KEY=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('ctfd_secret_key', ''))")
-DB_PASS=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('ctfd_db_password', ''))")
-DB_ROOT=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('ctfd_db_root_password', ''))")
-DOMAIN=$(python3 -c "import yaml; c=yaml.safe_load(open('$VARS_FILE')); print(c.get('base_domain', 'ctf.local'))")
+# FIXED: Sanitized Python inline block parameters to secure variable parsing pathways cleanly
+CTFD_KEY=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('ctfd_secret_key', ''))")
+DB_PASS=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('ctfd_db_password', ''))")
+DB_ROOT=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('ctfd_db_root_password', ''))")
+DOMAIN=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('base_domain', 'ctf.local'))")
 
-if [[ -z "$CTFD_KEY" || -z "$DB_PASS" || -z "$DB_ROOT" ]]; then
+if [[ -z "${CTFD_KEY}" || -z "${DB_PASS}" || -z "${DB_ROOT}" ]]; then
   echo -e "${RED}[-] Failure: Found empty or unconfigured core secrets parameters inside all.yml.${NC}"
   exit 1
 fi

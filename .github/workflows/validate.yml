@@ -6,6 +6,10 @@ on:
   push:
     branches: [main] # Also run on merges to main to catch integrations
 
+env:
+  # FIXED: Opts into the updated runtime engine to completely clear runner lifecycle deprecation warnings globally
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   validate-k8s:
     runs-on: ubuntu-latest
@@ -37,10 +41,15 @@ jobs:
         with:
           python-version: '3.11'
 
+      # FIXED: Pre-install the specific community/general galaxy collections so the linter can resolve custom modules locally
+      - name: Pre-Cache External Ansible Collection Dependencies
+        run: |
+          ansible-galaxy collection install -r ansible/requirements.yml
+
       - name: Install ansible-lint
         run: pip install ansible-lint ansible-core
 
-      # FIXED (Item 5): Expanded scope to target the complete ansible directory asset tree
+      # FIXED: Expanded scope to target the complete ansible directory asset tree
       - name: Lint Ansible Ecosystem Roles and Tasks
         run: ansible-lint ansible/
 
@@ -55,7 +64,6 @@ jobs:
           recursive: true
           ignore: DL3008,DL3009   # apt pin versions — acceptable for this use case
 
-  # FIXED (Item 6): Added standard script testing regression baseline
   validate-scripts:
     runs-on: ubuntu-latest
     steps:
@@ -63,5 +71,4 @@ jobs:
 
       - name: Execute ShellCheck Analysis
         run: |
-          sudo apt-get update && sudo apt-get install -y shellcheck
-          find scripts/ -type f -name "*.sh" | xargs shellcheck --severity=warning
+          find scripts/ -type f -name "*.sh" | xargs shellcheck -e SC2002,SC2129

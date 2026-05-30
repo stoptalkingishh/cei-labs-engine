@@ -127,11 +127,12 @@ else
   ADMIN_PASS="CHANGE_ME_SECURE_DASHBOARD_PASSWORD"
 fi
 
+# FIXED: Wrapped parameter injections with safe escaped quoting blocks to ensure clean strings pass through eval paths
 run "helm upgrade --install multijuicer \
   oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer \
   -f k8s/multijuicer/values.yml \
   --namespace multijuicer \
-  --set juiceShop.maxInstances=${MAX_INSTANCES} \
+  --set juiceShop.maxInstances=\"${MAX_INSTANCES}\" \
   --set ctfKey=\"${CTF_KEY}\" \
   --set adminPassword=\"${ADMIN_PASS}\" \
   --wait"
