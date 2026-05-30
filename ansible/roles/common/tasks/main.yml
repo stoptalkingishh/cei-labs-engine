@@ -74,7 +74,6 @@
   loop: ["80", "443"]
   when: inventory_hostname in groups['control_plane']
 
-# FIXED: Realigned port window to K8s NodePort bounds and verified group variable names
 - name: UFW — allow participant SSH ports (analyst containers)
   community.general.ufw:
     rule: allow
@@ -93,6 +92,5 @@
     state: started
     enabled: true
 
-# Forces immediate execution of the SSH service restart handler if modified before moving to following playbooks
 - name: Flush handlers now
   ansible.builtin.meta: flush_handlers
