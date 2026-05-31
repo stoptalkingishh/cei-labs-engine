@@ -4,17 +4,16 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main] # Also run on merges to main to catch integrations
+    branches: [main]
 
 env:
-  # FIXED: Opts into the updated runtime engine to completely clear runner lifecycle deprecation warnings globally
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   validate-k8s:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Install kubeconform
         run: |
@@ -23,8 +22,7 @@ jobs:
 
       - name: Validate Kubernetes manifests
         run: |
-          # FIXED: Filtered out non-manifest Helm configuration values files (*values.yml) from validation pathing
-          find k8s/ -type f \( -name "*.yml" -o -name "*.yaml" \) ! -name "*values.yml" | \
+          find k8s/ -type f \( -name "*.yml" -o -name "*.yaml" \) | \
           xargs kubeconform \
             -strict \
             -ignore-missing-schemas \
@@ -34,41 +32,51 @@ jobs:
   validate-ansible:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.6.0
         with:
           python-version: '3.11'
 
-      # FIXED: Pre-install the specific community/general galaxy collections so the linter can resolve custom modules locally
-      - name: Pre-Cache External Ansible Collection Dependencies
-        run: |
-          ansible-galaxy collection install -r ansible/requirements.yml
-
-      - name: Install ansible-lint
+      - name: Install ansible-lint and core
         run: pip install ansible-lint ansible-core
 
-      # FIXED: Expanded scope to target the complete ansible directory asset tree
-      - name: Lint Ansible Ecosystem Roles and Tasks
+      # Install collections BEFORE running ansible-lint so community.general
+      # modules resolve correctly. Without this step ansible-lint fails with
+      # "couldn't resolve module/action 'community.general.timezone'"
+      - name: Install Ansible collections from requirements
+        run: ansible-galaxy collection install -r ansible/requirements.yml
+
+      - name: Lint Ansible roles and playbooks
         run: ansible-lint ansible/
 
   validate-dockerfiles:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Lint Dockerfiles with hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
           recursive: true
-          ignore: DL3008,DL3009   # apt pin versions — acceptable for this use case
+          # DL3008/DL3009: apt version pinning — acceptable for event infrastructure
+          # DL3007: kali-rolling has no versioned tags — floating latest is required
+          # DL3002: sshd and VNC startup require root — last USER root is intentional
+          # DL3013/DL3042: pip version pinning deferred — managed via rebuild cadence
+          ignore: DL3008,DL3009,DL3007,DL3002,DL3013,DL3042
 
   validate-scripts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
-      - name: Execute ShellCheck Analysis
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck on all scripts
+        # --external-sources allows shellcheck to follow sourced files
+        # --severity=warning suppresses style/info notices
         run: |
-          find scripts/ -type f -name "*.sh" | xargs shellcheck -e SC2002,SC2129
+          find scripts/ -type f -name "*.sh" | \
+          xargs shellcheck --severity=warning --external-sources

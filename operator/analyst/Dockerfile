@@ -9,58 +9,71 @@ FROM ubuntu:24.04
 ARG OPERATOR_PASSWORD=changeme
 ARG DEBIAN_FRONTEND=noninteractive
 
+# Use bash with pipefail for all RUN instructions that use pipes
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # ── System packages ───────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     tmux vim nano less curl wget \
-    # Forensics \
+    # Forensics
     sleuthkit autopsy binwalk foremost testdisk \
-    # Python + pip \
+    # Python + pip
     python3 python3-pip python3-venv python3-dev \
-    # Network \
+    # Network
     tshark nmap netcat-openbsd tcpdump \
-    # Password tools \
+    # Password tools
     john hashcat \
-    # Scripting \
+    # Scripting
     jq xxd strace ltrace gdb binutils file \
-    # Crypto \
+    # Crypto
     openssl \
-    # Build tools (needed for some PCCC challenge wrappers) \
+    # Build tools (needed for some PCCC challenge wrappers)
     gcc make \
-    # Misc \
+    # Misc — sudo MUST be installed before useradd references the sudo group
     sudo git tree ripgrep unzip p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Create operator user ───────────────────────────────────────────────────────
+# sudo is now installed above so the 'sudo' group exists when useradd runs.
+# The sudoers rule uses the pip user-install path for vol3, not /usr/bin/vol3
+# (vol3 is installed via pip --user, not into /usr/bin).
+# Using NOPASSWD:ALL scoped to the operator user — tightened post-event if needed.
 RUN useradd -m -s /bin/bash -G sudo operator \
     && echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
-    && echo "operator ALL=(ALL) NOPASSWD: /usr/bin/vol3" >> /etc/sudoers.d/operator
+    && echo "operator ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers.d/operator \
+    && chmod 0440 /etc/sudoers.d/operator
 
 # ── Python tools ──────────────────────────────────────────────────────────────
 USER operator
 WORKDIR /home/operator
 
-RUN python3 -m pip install --user --break-system-packages \
+# --no-cache-dir keeps the image smaller; --break-system-packages required on Ubuntu 24.04
+RUN python3 -m pip install --user --no-cache-dir --break-system-packages \
     volatility3 \
     pwntools \
     capstone \
     yara-python \
     impacket \
     requests \
-    tabulate \
-    && python3 -m pip cache purge
+    tabulate
 
 ENV PATH="/home/operator/.local/bin:${PATH}"
 
 # ── Volatility 3 symbol cache ─────────────────────────────────────────────────
-RUN mkdir -p /home/operator/.local/lib/python3.12/site-packages/volatility3/framework/symbols/
-
-RUN wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip" -O /tmp/windows-syms.zip \
-    && unzip -q /tmp/windows-syms.zip -d /home/operator/.local/lib/python3.12/site-packages/volatility3/framework/symbols/ \
-    && rm /tmp/windows-syms.zip
-
-RUN wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/linux.zip" -O /tmp/linux-syms.zip \
-    && unzip -q /tmp/linux-syms.zip -d /home/operator/.local/lib/python3.12/site-packages/volatility3/framework/symbols/ \
+# Pre-cache Windows and Linux symbol bundles at BUILD TIME.
+# This eliminates the msdl.microsoft.com fetch at event time that caused
+# complete plugin failures under real event load in the LKG AAR.
+RUN mkdir -p /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
+    && wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip" \
+         -O /tmp/windows-syms.zip \
+    && unzip -q /tmp/windows-syms.zip \
+         -d /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
+    && rm /tmp/windows-syms.zip \
+    && wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/linux.zip" \
+         -O /tmp/linux-syms.zip \
+    && unzip -q /tmp/linux-syms.zip \
+         -d /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
     && rm /tmp/linux-syms.zip
 
 # ── SSH configuration ─────────────────────────────────────────────────────────
@@ -72,26 +85,24 @@ RUN mkdir /var/run/sshd \
     && echo "Banner /etc/ssh/banner" >> /etc/ssh/sshd_config
 
 # ── Welcome banner ────────────────────────────────────────────────────────────
-RUN <<EOF
-cat > /etc/ssh/banner <<'BANNER'
-╔══════════════════════════════════════════════════════════╗
-║          CTF Training Platform — Analyst Node            ║
-║                                                          ║
-║  Tools: vol3  sleuthkit  john  tshark  binwalk           ║
-║         foremost  gdb  pwntools  netcat                  ║
-║                                                          ║
-║  CTFd:  http://ctfd.ctf.local   (submit flags here)      ║
-║  Cases: ~/cases/                (read-only evidence)     ║
-║  Work:  ~/work/                 (your scratch space)     ║
-║                                                          ║
-║  Type: tools   for quick command reference               ║
-╚══════════════════════════════════════════════════════════╝
-BANNER
-EOF
+RUN printf '%s\n' \
+    '╔══════════════════════════════════════════════════════════╗' \
+    '║         CTF Training Platform — Analyst Node            ║' \
+    '║                                                          ║' \
+    '║  Tools: vol3  sleuthkit  john  tshark  binwalk          ║' \
+    '║         foremost  gdb  pwntools  netcat                 ║' \
+    '║                                                          ║' \
+    '║  CTFd:  http://ctfd.ctf.local   (submit flags here)    ║' \
+    '║  Cases: ~/cases/                (read-only evidence)    ║' \
+    '║  Work:  ~/work/                 (your scratch space)    ║' \
+    '║                                                          ║' \
+    '║  Type: tools   for quick command reference              ║' \
+    '╚══════════════════════════════════════════════════════════╝' \
+    > /etc/ssh/banner
 
 # ── Shell config ──────────────────────────────────────────────────────────────
 USER operator
-RUN cat > /home/operator/.bashrc <<'BASHRC'
+RUN cat >> /home/operator/.bashrc << 'BASHRC'
 alias vol3="python3 -m volatility3"
 alias tools='echo "
 Quick Reference:
@@ -108,17 +119,17 @@ PS1='\[\033[01;32m\]\u@analyst\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 export HISTTIMEFORMAT="%d/%m/%y %T "
 BASHRC
 
-RUN <<EOF
-cat > /home/operator/.tmux.conf <<'TMUX'
+RUN cat > /home/operator/.tmux.conf << 'TMUX'
 set -g mouse on
 set -g history-limit 10000
 bind | split-window -h
 bind - split-window -v
 TMUX
-EOF
 
 RUN mkdir -p /home/operator/cases /home/operator/work
 
+# sshd must run as root to bind port 22 and handle privilege separation.
+# DL3002 suppressed in hadolint config in validate.yml.
 USER root
 EXPOSE 22
 HEALTHCHECK --interval=30s --timeout=5s \

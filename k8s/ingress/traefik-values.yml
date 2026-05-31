@@ -1,16 +1,22 @@
 ---
 # k8s/ingress/traefik-values.yml
-# Traefik Ingress Controller Value Definitions
-# Configured for MetalLB external IP assignment and automated HTTPS redirection.
+# Traefik v3 Ingress Controller Helm values.
+# Configured for MetalLB external IP assignment on bare-metal LAN events.
+#
+# TLS NOTE: This config serves HTTP and HTTPS both without forced redirect.
+# For LAN/air-gap events, HTTP is acceptable and avoids cert trust issues
+# on participant laptops. The self-signed cert from cert-issuer.yml is used
+# for HTTPS but will show a browser warning until trusted manually.
+# To enforce HTTPS-only after distributing the CA cert, re-enable redirectTo.
 
 deployment:
   replicas: 1
 
-# Pin the Ingress Controller daemon specifically to your control-plane node
+# Pin Traefik to the control-plane node
 nodeSelector:
   node-role.kubernetes.io/control-plane: "true"
 
-# FIXED (Item 1): Switched type to LoadBalancer so MetalLB binds a distinct LAN IP address
+# MetalLB assigns a LAN IP to this LoadBalancer service
 service:
   enabled: true
   type: LoadBalancer
@@ -23,11 +29,14 @@ ports:
       default: true
     exposedPort: 80
     protocol: TCP
-    # FIXED (Item B3): Disabled the global redirect to break infinite loops during air-gapped/LAN setups.
-    # Individual routes can now cleanly negotiate Port 80 traffic.
-    # redirectTo:
-    #   port: websecure
-    #   priority: 10
+    # HTTP-to-HTTPS redirect intentionally disabled.
+    # Enabling redirectTo while IngressRoutes lack a tls: block causes
+    # a redirect loop — HTTP redirects to HTTPS, but HTTPS has no cert
+    # configured on the route, producing a TLS handshake failure.
+    # To re-enable after cert trust is established on all clients:
+    #   redirectTo:
+    #     port: websecure
+    #     priority: 10
   websecure:
     port: 8443
     expose:
@@ -50,7 +59,6 @@ providers:
     publishedService:
       enabled: true
 
-# Resources tailored to prevent high traffic volume event starvation
 resources:
   requests:
     cpu: "100m"

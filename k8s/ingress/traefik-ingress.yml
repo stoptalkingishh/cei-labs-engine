@@ -1,4 +1,13 @@
 ---
+# k8s/ingress/traefik-ingress.yml
+# Traefik IngressRoute definitions for all platform services.
+# Each route listens on both web (HTTP/80) and websecure (HTTPS/443).
+# TLS uses the wildcard self-signed certificate from cert-issuer.yml
+# (secretName: ctf-wildcard-tls-secret in namespace traefik).
+#
+# For LAN events, participants may see a browser cert warning on HTTPS.
+# HTTP (port 80) works without any cert trust requirement.
+
 # CTFd IngressRoute
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -15,6 +24,8 @@ spec:
       services:
         - name: ctfd
           port: 80
+  tls:
+    secretName: ctf-wildcard-tls-secret
 
 ---
 # MultiJuicer IngressRoute
@@ -33,6 +44,8 @@ spec:
       services:
         - name: multijuicer
           port: 3000
+  tls:
+    secretName: ctf-wildcard-tls-secret
 
 ---
 # Registry IngressRoute
@@ -51,3 +64,5 @@ spec:
       services:
         - name: registry
           port: 5000
+  tls:
+    secretName: ctf-wildcard-tls-secret

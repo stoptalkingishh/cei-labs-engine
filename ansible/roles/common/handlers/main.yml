@@ -1,6 +1,7 @@
 ---
 # ansible/roles/common/handlers/main.yml
-# FIXED (Item 2 & 10): Handlers migrated to dedicated, valid structural location
+# Handlers for the common role — must live in this dedicated file,
+# not in tasks/main.yml, for Ansible to recognize them correctly.
 
 - name: Restart sshd
   ansible.builtin.service:
