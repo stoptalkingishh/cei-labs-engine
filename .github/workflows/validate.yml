@@ -42,10 +42,9 @@ jobs:
       - name: Install ansible-lint and core
         run: pip install ansible-lint ansible-core
 
-      # Install collections BEFORE running ansible-lint so community.general
-      # modules resolve correctly. Without this step ansible-lint fails with
-      # "couldn't resolve module/action 'community.general.timezone'"
-      - name: Install Ansible collections from requirements
+      # Must install collections BEFORE ansible-lint runs or community.general
+      # modules fail to resolve with "couldn't resolve module/action" errors
+      - name: Install Ansible collections
         run: ansible-galaxy collection install -r ansible/requirements.yml
 
       - name: Lint Ansible roles and playbooks
@@ -61,7 +60,7 @@ jobs:
         with:
           recursive: true
           # DL3008/DL3009: apt version pinning — acceptable for event infrastructure
-          # DL3007: kali-rolling has no versioned tags — floating latest is required
+          # DL3007: kali-rolling has no versioned tags — floating latest is unavoidable
           # DL3002: sshd and VNC startup require root — last USER root is intentional
           # DL3013/DL3042: pip version pinning deferred — managed via rebuild cadence
           ignore: DL3008,DL3009,DL3007,DL3002,DL3013,DL3042
@@ -75,8 +74,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Run ShellCheck on all scripts
-        # --external-sources allows shellcheck to follow sourced files
-        # --severity=warning suppresses style/info notices
         run: |
           find scripts/ -type f -name "*.sh" | \
           xargs shellcheck --severity=warning --external-sources

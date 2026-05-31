@@ -48,7 +48,6 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push
-        # Kali only publishes amd64 — arm64 build intentionally excluded
         uses: docker/build-push-action@v6.16.0
         with:
           context: operator/kali-novnc

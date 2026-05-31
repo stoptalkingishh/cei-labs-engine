@@ -19,8 +19,8 @@
       - tmux
       - unzip
       - jq
-      - open-iscsi    # required by K3s for persistent volume support
-      - nfs-common    # required for NFS volume mounts
+      - open-iscsi
+      - nfs-common
     state: present
 
 - name: Set timezone to UTC

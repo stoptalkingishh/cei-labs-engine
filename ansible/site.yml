@@ -3,7 +3,7 @@
 # Top-level playbook orchestrating elastic cyber range infrastructure layers.
 # Usage: ansible-playbook -i ansible/inventory.ini ansible/site.yml
 
-- name: Phase 0 - Dependency & Collection Acquisition Baseline
+- name: Phase 0 - Dependency and Collection Acquisition Baseline
   hosts: localhost
   gather_facts: false
   tasks:
@@ -11,7 +11,7 @@
       ansible.builtin.command: ansible-galaxy collection install -r requirements.yml
       changed_when: false
 
-- name: Phase 1 - Global Prerequisite & Security Hardening Baseline
+- name: Phase 1 - Global Prerequisite and Security Hardening Baseline
   hosts: all
   become: true
   serial: "100%"
@@ -22,12 +22,12 @@
 - name: Phase 2 - Initialize Control Plane Infrastructure
   hosts: control_plane
   become: true
-  serial: 1 # Provision primary cluster masters sequentially to avoid split-brain join states
+  serial: 1
   tags: ["infra", "k3s-server"]
   roles:
     - role: k3s-server
 
-- name: Phase 3 - Join Worker & Analyst Nodes to Cluster Runtime
+- name: Phase 3 - Join Worker and Analyst Nodes to Cluster Runtime
   hosts: workers:analyst_workers:juiceshop_workers
   become: true
   serial: "50%"
@@ -35,7 +35,7 @@
   roles:
     - role: k3s-agent
 
-- name: Phase 4 - Provision Core Networking & Bare-Metal Load Balancer
+- name: Phase 4 - Provision Core Networking and Bare-Metal Load Balancer
   hosts: control_plane[0]
   tags: ["networking", "metallb"]
   tasks:
@@ -44,20 +44,19 @@
         name: metallb
       when: hostvars[groups['control_plane'][0]]['use_metallb'] | default(true) | bool
 
-- name: Phase 5 - Verify Cluster Structural Readiness & Target Tagging
+- name: Phase 5 - Verify Cluster Readiness and Apply Node Labels
   hosts: control_plane[0]
   tags: ["apps", "bootstrap"]
   tasks:
     - name: Validate unique physical cluster nodes are reporting Ready state
       ansible.builtin.shell: |
         set -o pipefail
-        kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' | tr ' ' '\n' | grep -c '^True$'
+        kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' \
+          | tr ' ' '\n' | grep -c '^True$'
       register: ready_nodes_count
       changed_when: false
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
-      # Uses | default([]) Jinja2 filter (not Python .get()) and | unique to deduplicate
-      # overlapping group assignments in single-host or dual-node deployment modes
       until: >
         ready_nodes_count.stdout | int == (
         (groups['control_plane'] | default([]) +
@@ -68,32 +67,36 @@
       retries: 30
       delay: 10
 
-    - name: Explicitly tag designated analyst compute nodes with topology labels
+    - name: Tag analyst compute nodes with topology label
       ansible.builtin.shell: |
         kubectl label node {{ item }} role=analyst --overwrite
       loop: "{{ groups['analyst_workers'] | default([]) }}"
       when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') != 'single'
+      changed_when: true
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
 
-    - name: Explicitly tag designated Juice Shop compute nodes with topology labels
+    - name: Tag Juice Shop compute nodes with topology label
       ansible.builtin.shell: |
         kubectl label node {{ item }} role=juiceshop --overwrite
       loop: "{{ groups['juiceshop_workers'] | default([]) }}"
       when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') != 'single'
+      changed_when: true
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
 
-    - name: Tag local single host with all roles when running in standalone mode
+    - name: Tag single host with all roles in standalone deployment mode
       ansible.builtin.shell: |
         kubectl label node --all role=analyst --overwrite
         kubectl label node --all role=juiceshop --overwrite
       when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') == 'single'
+      changed_when: true
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
 
     - name: Seed internal cluster namespace topologies
       ansible.builtin.shell: |
         kubectl apply -f "{{ playbook_dir }}/../k8s/namespaces/namespaces.yml"
+      changed_when: true
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"

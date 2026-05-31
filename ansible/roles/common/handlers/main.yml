@@ -1,7 +1,5 @@
 ---
 # ansible/roles/common/handlers/main.yml
-# Handlers for the common role — must live in this dedicated file,
-# not in tasks/main.yml, for Ansible to recognize them correctly.
 
 - name: Restart sshd
   ansible.builtin.service:

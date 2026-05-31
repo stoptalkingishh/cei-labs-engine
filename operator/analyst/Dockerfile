@@ -1,54 +1,67 @@
-# operator/analyst/Dockerfile
-# SSH-accessible analyst workstation container.
-# One pod per participant in the analyst namespace.
-# Volatility 3 symbol tables pre-cached — eliminates msdl.microsoft.com
-# fetches that failed under event load in the LKG AAR.
-
 FROM ubuntu:24.04
 
 ARG OPERATOR_PASSWORD=changeme
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Use bash with pipefail for all RUN instructions that use pipes
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# ── System packages ───────────────────────────────────────────────────────────
+# Install all system packages in one layer.
+# Comments MUST NOT appear inside a multi-line apt-get install block —
+# Docker passes them as package names causing useradd exit code 9
+# because the sudo group never gets created when apt itself fails.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
-    tmux vim nano less curl wget \
-    # Forensics
-    sleuthkit autopsy binwalk foremost testdisk \
-    # Python + pip
-    python3 python3-pip python3-venv python3-dev \
-    # Network
-    tshark nmap netcat-openbsd tcpdump \
-    # Password tools
-    john hashcat \
-    # Scripting
-    jq xxd strace ltrace gdb binutils file \
-    # Crypto
+    sudo \
+    git \
+    curl \
+    wget \
+    tmux \
+    vim \
+    nano \
+    less \
+    tree \
+    ripgrep \
+    unzip \
+    p7zip-full \
+    sleuthkit \
+    autopsy \
+    binwalk \
+    foremost \
+    testdisk \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    tshark \
+    nmap \
+    netcat-openbsd \
+    tcpdump \
+    john \
+    hashcat \
+    jq \
+    xxd \
+    strace \
+    ltrace \
+    gdb \
+    binutils \
+    file \
     openssl \
-    # Build tools (needed for some PCCC challenge wrappers)
-    gcc make \
-    # Misc — sudo MUST be installed before useradd references the sudo group
-    sudo git tree ripgrep unzip p7zip-full \
+    gcc \
+    make \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Create operator user ───────────────────────────────────────────────────────
-# sudo is now installed above so the 'sudo' group exists when useradd runs.
-# The sudoers rule uses the pip user-install path for vol3, not /usr/bin/vol3
-# (vol3 is installed via pip --user, not into /usr/bin).
-# Using NOPASSWD:ALL scoped to the operator user — tightened post-event if needed.
+# sudo is now installed so the 'sudo' group exists.
+# sudoers entry uses NOPASSWD:ALL — vol3 lives in ~/.local/bin not /usr/bin.
+# chmod 0440 is inside the same RUN layer to avoid a dangling instruction.
 RUN useradd -m -s /bin/bash -G sudo operator \
     && echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
     && echo "operator ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers.d/operator \
     && chmod 0440 /etc/sudoers.d/operator
 
-# ── Python tools ──────────────────────────────────────────────────────────────
 USER operator
 WORKDIR /home/operator
 
-# --no-cache-dir keeps the image smaller; --break-system-packages required on Ubuntu 24.04
+# --no-cache-dir reduces image size; --break-system-packages required on Ubuntu 24.04
 RUN python3 -m pip install --user --no-cache-dir --break-system-packages \
     volatility3 \
     pwntools \
@@ -60,10 +73,8 @@ RUN python3 -m pip install --user --no-cache-dir --break-system-packages \
 
 ENV PATH="/home/operator/.local/bin:${PATH}"
 
-# ── Volatility 3 symbol cache ─────────────────────────────────────────────────
-# Pre-cache Windows and Linux symbol bundles at BUILD TIME.
-# This eliminates the msdl.microsoft.com fetch at event time that caused
-# complete plugin failures under real event load in the LKG AAR.
+# Pre-cache Volatility 3 symbol tables at build time.
+# Eliminates msdl.microsoft.com fetches that failed under real event load.
 RUN mkdir -p /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
     && wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip" \
          -O /tmp/windows-syms.zip \
@@ -76,15 +87,14 @@ RUN mkdir -p /home/operator/.local/lib/python3.12/site-packages/volatility3/symb
          -d /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
     && rm /tmp/linux-syms.zip
 
-# ── SSH configuration ─────────────────────────────────────────────────────────
 USER root
+
 RUN mkdir /var/run/sshd \
     && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config \
     && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config \
     && echo "AllowUsers operator" >> /etc/ssh/sshd_config \
     && echo "Banner /etc/ssh/banner" >> /etc/ssh/sshd_config
 
-# ── Welcome banner ────────────────────────────────────────────────────────────
 RUN printf '%s\n' \
     '╔══════════════════════════════════════════════════════════╗' \
     '║         CTF Training Platform — Analyst Node            ║' \
@@ -100,21 +110,11 @@ RUN printf '%s\n' \
     '╚══════════════════════════════════════════════════════════╝' \
     > /etc/ssh/banner
 
-# ── Shell config ──────────────────────────────────────────────────────────────
 USER operator
+
 RUN cat >> /home/operator/.bashrc << 'BASHRC'
 alias vol3="python3 -m volatility3"
-alias tools='echo "
-Quick Reference:
-  vol3 -f ~/cases/<dump> windows.info
-  vol3 -f ~/cases/<dump> windows.pslist
-  vol3 -f ~/cases/<dump> linux.bash
-  fls -r ~/cases/<image> | grep <filename>
-  icat ~/cases/<image> <inode>
-  john --wordlist=/usr/share/wordlists/rockyou.txt <hashfile>
-  tshark -r ~/cases/<pcap> -Y http
-  binwalk -e ~/cases/<file>
-"'
+alias tools='cat /etc/ssh/banner'
 PS1='\[\033[01;32m\]\u@analyst\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 export HISTTIMEFORMAT="%d/%m/%y %T "
 BASHRC
@@ -128,8 +128,7 @@ TMUX
 
 RUN mkdir -p /home/operator/cases /home/operator/work
 
-# sshd must run as root to bind port 22 and handle privilege separation.
-# DL3002 suppressed in hadolint config in validate.yml.
+# sshd must run as root to bind port 22 — DL3002 suppressed in validate.yml
 USER root
 EXPOSE 22
 HEALTHCHECK --interval=30s --timeout=5s \
