@@ -7,9 +7,6 @@ ARG GHIDRA_DATE=20240926
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Install packages available in kali-rolling apt repos.
-# ghidra, burpsuite, autopsy, and volatility3 are NOT in apt — handled below.
-# Comments inside multi-line apt blocks cause parse errors — none here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xfce4 \
     xfce4-terminal \
@@ -40,10 +37,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# volatility3 via pip (not in kali apt)
-RUN pip install --no-cache-dir volatility3
+RUN pip install --no-cache-dir --break-system-packages volatility3
 
-# Ghidra via official NSA GitHub release (not in kali apt)
 RUN wget -q "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_DATE}.zip" \
          -O /tmp/ghidra.zip \
     && unzip -q /tmp/ghidra.zip -d /opt/ \
@@ -51,7 +46,6 @@ RUN wget -q "https://github.com/NationalSecurityAgency/ghidra/releases/download/
     && ln -s /opt/ghidra/ghidraRun /usr/local/bin/ghidra \
     && rm /tmp/ghidra.zip
 
-# Burp Suite Community via standalone JAR (not in kali apt)
 RUN wget -q "https://portswigger.net/burp/releases/download?product=community&type=Jar" \
          -O /opt/burpsuite.jar \
     && printf '#!/bin/bash\njava -jar /opt/burpsuite.jar "$@"\n' > /usr/local/bin/burpsuite \
@@ -69,10 +63,8 @@ RUN mkdir -p /home/operator/.vnc \
 RUN printf '%s\n%s\n\n' "${VNC_PASSWORD}" "${VNC_PASSWORD}" \
     | vncpasswd /home/operator/.vnc/passwd 2>/dev/null || true
 
-# Startup script runs as root to bind ports then drops to operator for VNC.
-# chmod must be inside the RUN block — bare chmod is not a valid Dockerfile
-# instruction and causes "unknown instruction: chmod" parse error on line 110.
 USER root
+
 RUN cat > /start.sh << 'SCRIPT'
 #!/bin/bash
 set -e

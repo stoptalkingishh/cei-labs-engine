@@ -5,20 +5,15 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Install all system packages in one layer.
-# Comments MUST NOT appear inside a multi-line apt-get install block —
-# Docker passes them as package names causing useradd exit code 9
-# because the sudo group never gets created when apt itself fails.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
-    sudo \
-    git \
-    curl \
-    wget \
     tmux \
     vim \
     nano \
     less \
+    curl \
+    wget \
+    git \
     tree \
     ripgrep \
     unzip \
@@ -50,10 +45,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# sudo is now installed so the 'sudo' group exists.
-# sudoers entry uses NOPASSWD:ALL — vol3 lives in ~/.local/bin not /usr/bin.
-# chmod 0440 is inside the same RUN layer to avoid a dangling instruction.
-RUN useradd -m -s /bin/bash -G sudo operator \
+RUN apt-get update && apt-get install -y --no-install-recommends sudo \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -s /bin/bash -G sudo operator \
     && echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
     && echo "operator ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers.d/operator \
     && chmod 0440 /etc/sudoers.d/operator
@@ -61,7 +55,6 @@ RUN useradd -m -s /bin/bash -G sudo operator \
 USER operator
 WORKDIR /home/operator
 
-# --no-cache-dir reduces image size; --break-system-packages required on Ubuntu 24.04
 RUN python3 -m pip install --user --no-cache-dir --break-system-packages \
     volatility3 \
     pwntools \
@@ -73,8 +66,6 @@ RUN python3 -m pip install --user --no-cache-dir --break-system-packages \
 
 ENV PATH="/home/operator/.local/bin:${PATH}"
 
-# Pre-cache Volatility 3 symbol tables at build time.
-# Eliminates msdl.microsoft.com fetches that failed under real event load.
 RUN mkdir -p /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
     && wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip" \
          -O /tmp/windows-syms.zip \
@@ -97,7 +88,7 @@ RUN mkdir /var/run/sshd \
 
 RUN printf '%s\n' \
     '╔══════════════════════════════════════════════════════════╗' \
-    '║         CTF Training Platform — Analyst Node            ║' \
+    '║         CTF Training Platform  Analyst Node             ║' \
     '║                                                          ║' \
     '║  Tools: vol3  sleuthkit  john  tshark  binwalk          ║' \
     '║         foremost  gdb  pwntools  netcat                 ║' \
@@ -105,8 +96,6 @@ RUN printf '%s\n' \
     '║  CTFd:  http://ctfd.ctf.local   (submit flags here)    ║' \
     '║  Cases: ~/cases/                (read-only evidence)    ║' \
     '║  Work:  ~/work/                 (your scratch space)    ║' \
-    '║                                                          ║' \
-    '║  Type: tools   for quick command reference              ║' \
     '╚══════════════════════════════════════════════════════════╝' \
     > /etc/ssh/banner
 
@@ -114,7 +103,6 @@ USER operator
 
 RUN cat >> /home/operator/.bashrc << 'BASHRC'
 alias vol3="python3 -m volatility3"
-alias tools='cat /etc/ssh/banner'
 PS1='\[\033[01;32m\]\u@analyst\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 export HISTTIMEFORMAT="%d/%m/%y %T "
 BASHRC
@@ -128,7 +116,6 @@ TMUX
 
 RUN mkdir -p /home/operator/cases /home/operator/work
 
-# sshd must run as root to bind port 22 — DL3002 suppressed in validate.yml
 USER root
 EXPOSE 22
 HEALTHCHECK --interval=30s --timeout=5s \
