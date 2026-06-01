@@ -46,7 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -s /bin/bash operator
+RUN id operator 2>/dev/null || useradd -m -s /bin/bash operator
 
 RUN echo "operator:${OPERATOR_PASSWORD}" | chpasswd
 
@@ -82,7 +82,7 @@ RUN mkdir -p /home/operator/.local/lib/python3.12/site-packages/volatility3/symb
 
 USER root
 
-RUN mkdir /var/run/sshd \
+RUN mkdir -p /var/run/sshd \
     && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config \
     && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config \
     && echo "AllowUsers operator" >> /etc/ssh/sshd_config \

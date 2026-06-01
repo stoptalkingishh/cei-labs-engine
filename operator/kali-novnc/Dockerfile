@@ -33,24 +33,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
     dbus-x11 \
     unzip \
+    ghidra \
+    burpsuite \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --break-system-packages volatility3
 
-RUN wget -q \
-    "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.1.2_build/ghidra_11.1.2_PUBLIC_20240926.zip" \
-    -O /tmp/ghidra.zip \
-    && unzip -q /tmp/ghidra.zip -d /opt/ \
-    && mv /opt/ghidra_11.1.2_PUBLIC /opt/ghidra \
-    && ln -s /opt/ghidra/ghidraRun /usr/local/bin/ghidra \
-    && rm /tmp/ghidra.zip
-
-RUN wget -q "https://portswigger.net/burp/releases/download?product=community&type=Jar" \
-         -O /opt/burpsuite.jar \
-    && printf '#!/bin/bash\njava -jar /opt/burpsuite.jar "$@"\n' > /usr/local/bin/burpsuite \
-    && chmod +x /usr/local/bin/burpsuite
-
-RUN useradd -m -s /bin/bash operator
+RUN id operator 2>/dev/null || useradd -m -s /bin/bash operator
 
 RUN echo "operator:${VNC_PASSWORD}" | chpasswd
 
