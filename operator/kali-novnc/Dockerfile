@@ -3,6 +3,8 @@ FROM kalilinux/kali-rolling:latest
 ARG DEBIAN_FRONTEND=noninteractive
 ARG VNC_PASSWORD=TrainingPlatform2025
 
+ENV VNC_PASSWORD=${VNC_PASSWORD}
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -34,14 +36,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dbus-x11 \
     unzip \
     ghidra \
-    burpsuite \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --break-system-packages volatility3
 
-RUN id operator 2>/dev/null || useradd -m -s /bin/bash operator
-
-RUN echo "operator:${VNC_PASSWORD}" | chpasswd
+# FIXED: Combined user creation + password into ONE RUN to prevent build failures
+RUN useradd -m -s /bin/bash operator \
+    && echo "operator:${VNC_PASSWORD}" | chpasswd
 
 USER operator
 
@@ -54,18 +55,17 @@ RUN printf '%s\n%s\n\n' "${VNC_PASSWORD}" "${VNC_PASSWORD}" \
 
 USER root
 
-RUN cat > /start.sh << 'SCRIPT'
-#!/bin/bash
-set -e
-su -c "vncserver :1 -geometry 1280x800 -depth 24 -localhost" operator
-websockify --web=/usr/share/novnc 6080 localhost:5901 &
-tail -f /dev/null
-SCRIPT
+RUN printf '#!/bin/bash\n\
+set -e\n\
+su operator -c "vncserver :1 -geometry 1280x800 -depth 24 -localhost no"\n\
+websockify --web=/usr/share/novnc 6080 localhost:5901 &\n\
+tail -f /dev/null\n' > /start.sh
 
 RUN chmod +x /start.sh \
     && ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
 EXPOSE 6080
+
 HEALTHCHECK --interval=30s --timeout=10s \
   CMD curl -f http://localhost:6080/ || exit 1
 

@@ -46,11 +46,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-RUN id operator 2>/dev/null || useradd -m -s /bin/bash operator
-
-RUN echo "operator:${OPERATOR_PASSWORD}" | chpasswd
-
-RUN mkdir -p /etc/sudoers.d \
+# FIXED: Combined user creation + sudo setup in ONE RUN to prevent exit code 9
+RUN useradd -m -s /bin/bash operator \
+    && echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
+    && mkdir -p /etc/sudoers.d \
     && echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator \
     && chmod 0440 /etc/sudoers.d/operator
 
@@ -91,10 +90,10 @@ RUN mkdir -p /var/run/sshd \
 RUN printf '%s\n' \
     '╔══════════════════════════════════════════════════════════╗' \
     '║         CTF Training Platform  Analyst Node             ║' \
-    '║                                                          ║' \
+    '║                                                         ║' \
     '║  Tools: vol3  sleuthkit  john  tshark  binwalk          ║' \
     '║         foremost  gdb  pwntools  netcat                 ║' \
-    '║                                                          ║' \
+    '║                                                         ║' \
     '║  CTFd:  http://ctfd.ctf.local   (submit flags here)    ║' \
     '║  Cases: ~/cases/                (read-only evidence)    ║' \
     '║  Work:  ~/work/                 (your scratch space)    ║' \
@@ -103,23 +102,26 @@ RUN printf '%s\n' \
 
 USER operator
 
-RUN cat >> /home/operator/.bashrc << 'BASHRC'
-alias vol3="python3 -m volatility3"
-PS1='\[\033[01;32m\]\u@analyst\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
-export HISTTIMEFORMAT="%d/%m/%y %T "
-BASHRC
+ENV PATH="/home/operator/.local/bin:${PATH}"
+ENV HISTTIMEFORMAT="%d/%m/%y %T "
 
-RUN cat > /home/operator/.tmux.conf << 'TMUX'
-set -g mouse on
-set -g history-limit 10000
-bind | split-window -h
-bind - split-window -v
-TMUX
+RUN echo 'alias vol3='"'"'python3 $(which vol.py || echo -m volatility3.cli)'"'"'' >> /home/operator/.bashrc \
+    && echo "export PS1='\\[\\033[01;32m\\]\\u@analyst\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '" >> /home/operator/.bashrc
+
+RUN printf '%s\n' \
+    'set -g mouse on' \
+    'set -g history-limit 10000' \
+    'bind | split-window -h' \
+    'bind - split-window -v' \
+    > /home/operator/.tmux.conf
 
 RUN mkdir -p /home/operator/cases /home/operator/work
 
 USER root
+
 EXPOSE 22
+
 HEALTHCHECK --interval=30s --timeout=5s \
   CMD nc -z localhost 22 || exit 1
+
 CMD ["/usr/sbin/sshd", "-D"]
