@@ -1,6 +1,6 @@
 FROM ubuntu:24.04
 
-ARG OPERATOR_PASSWORD=changeme
+ARG OPERATOR_PASSWORD=TrainingPlatform2025
 ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -46,9 +46,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -s /bin/bash operator \
-    && echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
-    && mkdir -p /etc/sudoers.d \
+RUN useradd -m -s /bin/bash operator
+
+RUN echo "operator:${OPERATOR_PASSWORD}" | chpasswd
+
+RUN mkdir -p /etc/sudoers.d \
     && echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator \
     && chmod 0440 /etc/sudoers.d/operator
 
