@@ -73,9 +73,8 @@ websockify --web=/usr/share/novnc 6080 localhost:5901 &
 tail -f /dev/null
 SCRIPT
 
-RUN chmod +x /start.sh
-
-RUN ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
+RUN chmod +x /start.sh \
+    && ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
 EXPOSE 6080
 HEALTHCHECK --interval=30s --timeout=10s \

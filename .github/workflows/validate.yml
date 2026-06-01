@@ -42,8 +42,6 @@ jobs:
       - name: Install ansible-lint and core
         run: pip install ansible-lint ansible-core
 
-      # Must install collections BEFORE ansible-lint runs or community.general
-      # modules fail to resolve with "couldn't resolve module/action" errors
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r ansible/requirements.yml
 
@@ -59,10 +57,6 @@ jobs:
         uses: hadolint/hadolint-action@v3.1.0
         with:
           recursive: true
-          # DL3008/DL3009: apt version pinning — acceptable for event infrastructure
-          # DL3007: kali-rolling has no versioned tags — floating latest is unavoidable
-          # DL3002: sshd and VNC startup require root — last USER root is intentional
-          # DL3013/DL3042: pip version pinning deferred — managed via rebuild cadence
           ignore: DL3008,DL3009,DL3007,DL3002,DL3013,DL3042
 
   validate-scripts:

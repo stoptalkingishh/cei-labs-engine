@@ -7,6 +7,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
+    sudo \
     tmux \
     vim \
     nano \
@@ -45,11 +46,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y --no-install-recommends sudo \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd -m -s /bin/bash -G sudo operator \
+RUN useradd -m -s /bin/bash operator \
     && echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
-    && echo "operator ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers.d/operator \
+    && mkdir -p /etc/sudoers.d \
+    && echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator \
     && chmod 0440 /etc/sudoers.d/operator
 
 USER operator
