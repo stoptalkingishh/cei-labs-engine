@@ -6,14 +6,11 @@ on:
   push:
     branches: [main]
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   validate-k8s:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v4
 
       - name: Install kubeconform
         run: |
@@ -36,10 +33,10 @@ jobs:
   validate-ansible:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5.6.0
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -65,7 +62,7 @@ jobs:
   validate-dockerfiles:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v4
 
       - name: Lint Dockerfiles with hadolint
         uses: hadolint/hadolint-action@v3.1.0
@@ -76,7 +73,7 @@ jobs:
   validate-scripts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v4
 
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck

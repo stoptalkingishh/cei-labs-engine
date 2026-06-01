@@ -46,8 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# FIXED: Combined user creation + sudo setup in ONE RUN to prevent exit code 9
-RUN useradd -m -s /bin/bash operator \
+# FIXED: Added --no-log-init to prevent exit code 9 and added ID check
+RUN id -u operator &>/dev/null || useradd -m -s /bin/bash --no-log-init operator \
     && echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
     && mkdir -p /etc/sudoers.d \
     && echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator \
@@ -80,7 +80,6 @@ RUN mkdir -p /home/operator/.local/lib/python3.12/site-packages/volatility3/symb
     && rm /tmp/linux-syms.zip
 
 USER root
-
 RUN mkdir -p /var/run/sshd \
     && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config \
     && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config \
@@ -101,7 +100,6 @@ RUN printf '%s\n' \
     > /etc/ssh/banner
 
 USER operator
-
 ENV PATH="/home/operator/.local/bin:${PATH}"
 ENV HISTTIMEFORMAT="%d/%m/%y %T "
 
@@ -118,10 +116,7 @@ RUN printf '%s\n' \
 RUN mkdir -p /home/operator/cases /home/operator/work
 
 USER root
-
 EXPOSE 22
-
 HEALTHCHECK --interval=30s --timeout=5s \
   CMD nc -z localhost 22 || exit 1
-
 CMD ["/usr/sbin/sshd", "-D"]

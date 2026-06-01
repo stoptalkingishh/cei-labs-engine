@@ -40,8 +40,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir --break-system-packages volatility3
 
-# FIXED: Combined user creation + password into ONE RUN to prevent build failures
-RUN useradd -m -s /bin/bash operator \
+# FIXED: Added --no-log-init to resolve exit code 9 build failure
+RUN useradd -m -s /bin/bash --no-log-init operator \
     && echo "operator:${VNC_PASSWORD}" | chpasswd
 
 USER operator
