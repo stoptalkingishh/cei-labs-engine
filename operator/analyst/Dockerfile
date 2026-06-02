@@ -5,8 +5,6 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Install required packages
-# Fixed: Removed inline comments to prevent shell interpretation issues
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     sudo \
@@ -48,9 +46,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# Fixed: Simplified user creation and added proper sudoers configuration
-RUN useradd -m -s /bin/bash operator \
-    && echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
+RUN useradd -m -s /bin/bash operator
+
+RUN echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
     && mkdir -p /etc/sudoers.d \
     && echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator \
     && chmod 0440 /etc/sudoers.d/operator
@@ -58,7 +56,6 @@ RUN useradd -m -s /bin/bash operator \
 USER operator
 WORKDIR /home/operator
 
-# Install Python tools
 RUN python3 -m pip install --user --no-cache-dir --break-system-packages \
     volatility3 \
     pwntools \
@@ -69,55 +66,51 @@ RUN python3 -m pip install --user --no-cache-dir --break-system-packages \
     tabulate
 
 ENV PATH="/home/operator/.local/bin:${PATH}"
+ENV HISTTIMEFORMAT="%d/%m/%y %T "
 
-# Setup Volatility symbols
 RUN mkdir -p /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
-    && wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip" -O /tmp/windows-syms.zip \
-    && unzip -q /tmp/windows-syms.zip -d /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
+    && wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip" \
+         -O /tmp/windows-syms.zip \
+    && unzip -q /tmp/windows-syms.zip \
+         -d /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
     && rm /tmp/windows-syms.zip \
-    && wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/linux.zip" -O /tmp/linux-syms.zip \
-    && unzip -q /tmp/linux-syms.zip -d /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
-    && rm /tmp/linux-syms.zip
+    && wget -q "https://downloads.volatilityfoundation.org/volatility3/symbols/linux.zip" \
+         -O /tmp/linux-syms.zip \
+    && unzip -q /tmp/linux-syms.zip \
+         -d /home/operator/.local/lib/python3.12/site-packages/volatility3/symbols/ \
+    && rm /tmp/linux-syms.zip \
+    && mkdir -p /home/operator/cases /home/operator/work \
+    && printf '%s\n' \
+        "alias vol3='python3 -m volatility3'" \
+        'PS1='"'"'\[\033[01;32m\]\u@analyst\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '"'" \
+        >> /home/operator/.bashrc \
+    && printf '%s\n' \
+        'set -g mouse on' \
+        'set -g history-limit 10000' \
+        'bind | split-window -h' \
+        'bind - split-window -v' \
+        > /home/operator/.tmux.conf
 
 USER root
-# SSH configuration
+
 RUN mkdir -p /var/run/sshd \
     && sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config \
     && sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config \
     && echo "AllowUsers operator" >> /etc/ssh/sshd_config \
-    && echo "Banner /etc/ssh/banner" >> /etc/ssh/sshd_config
+    && echo "Banner /etc/ssh/banner" >> /etc/ssh/sshd_config \
+    && printf '%s\n' \
+        '╔══════════════════════════════════════════════════════════╗' \
+        '║          CTF Training Platform  Analyst Node             ║' \
+        '║                                                          ║' \
+        '║  Tools: vol3  sleuthkit  john  tshark  binwalk           ║' \
+        '║         foremost  gdb  pwntools  netcat                  ║' \
+        '║                                                          ║' \
+        '║  CTFd:  http://ctfd.ctf.local   (submit flags here)     ║' \
+        '║  Cases: ~/cases/                (read-only evidence)     ║' \
+        '║  Work:  ~/work/                 (your scratch space)     ║' \
+        '╚══════════════════════════════════════════════════════════╝' \
+        > /etc/ssh/banner
 
-RUN printf '%s\n' \
-    '╔══════════════════════════════════════════════════════════╗' \
-    '║          CTF Training Platform  Analyst Node             ║' \
-    '║                                                          ║' \
-    '║  Tools: vol3  sleuthkit  john  tshark  binwalk           ║' \
-    '║         foremost  gdb  pwntools  netcat                  ║' \
-    '║                                                          ║' \
-    '║  CTFd:  http://ctfd.ctf.local   (submit flags here)      ║' \
-    '║  Cases: ~/cases/                (read-only evidence)     ║' \
-    '║  Work:  ~/work/                 (your scratch space)     ║' \
-    '╚══════════════════════════════════════════════════════════╝' \
-    > /etc/ssh/banner
-
-USER operator
-ENV PATH="/home/operator/.local/bin:${PATH}"
-ENV HISTTIMEFORMAT="%d/%m/%y %T "
-
-# Shell and tmux configurations
-RUN echo 'alias vol3='"'"'python3 $(which vol.py || echo -m volatility3.cli)'"'"'' >> /home/operator/.bashrc \
-    && echo "export PS1='\\[\\033[01;32m\\]\\u@analyst\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '" >> /home/operator/.bashrc
-
-RUN printf '%s\n' \
-    'set -g mouse on' \
-    'set -g history-limit 10000' \
-    'bind | split-window -h' \
-    'bind - split-window -v' \
-    > /home/operator/.tmux.conf
-
-RUN mkdir -p /home/operator/cases /home/operator/work
-
-USER root
 EXPOSE 22
 HEALTHCHECK --interval=30s --timeout=5s \
   CMD nc -z localhost 22 || exit 1
