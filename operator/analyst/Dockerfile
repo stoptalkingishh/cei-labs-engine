@@ -46,7 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -s /bin/bash operator
+# FIX: Added -g operator to use the existing group instead of attempting to create it
+RUN useradd -m -s /bin/bash -g operator operator
 
 RUN echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
     && mkdir -p /etc/sudoers.d \
@@ -105,7 +106,7 @@ RUN mkdir -p /var/run/sshd \
         '║  Tools: vol3  sleuthkit  john  tshark  binwalk           ║' \
         '║         foremost  gdb  pwntools  netcat                  ║' \
         '║                                                          ║' \
-        '║  CTFd:  http://ctfd.ctf.local   (submit flags here)     ║' \
+        '║  CTFd:  http://ctfd.ctf.local   (submit flags here)      ║' \
         '║  Cases: ~/cases/                (read-only evidence)     ║' \
         '║  Work:  ~/work/                 (your scratch space)     ║' \
         '╚══════════════════════════════════════════════════════════╝' \
