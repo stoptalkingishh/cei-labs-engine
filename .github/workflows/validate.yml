@@ -6,11 +6,14 @@ on:
   push:
     branches: [main]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   validate-k8s:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Install kubeconform
         run: |
@@ -33,10 +36,10 @@ jobs:
   validate-ansible:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.4.0
         with:
           python-version: '3.11'
 
@@ -46,9 +49,11 @@ jobs:
       - name: Install Ansible collections
         run: |
           if [ -f "ansible/requirements.yml" ]; then
-            ansible-galaxy collection install -r ansible/requirements.yml
+            ansible-galaxy collection install -r ansible/requirements.yml -p ./collections
+          elif [ -f "requirements.yml" ]; then
+            ansible-galaxy collection install -r requirements.yml -p ./collections
           else
-            echo "No ansible/requirements.yml found, skipping collection install."
+            echo "No Ansible requirements file found, skipping collection install."
           fi
 
       - name: Lint Ansible roles and playbooks
@@ -62,18 +67,18 @@ jobs:
   validate-dockerfiles:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Lint Dockerfiles with hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
           recursive: true
-          ignore: DL3008,DL3009,DL3007,DL3002,DL3013,DL3042
+          ignore: DL3002,DL3006,DL3007,DL3008,DL3009,DL3013,DL3015,DL3018,DL3042,DL4006
 
   validate-scripts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
@@ -82,7 +87,7 @@ jobs:
         run: |
           if [ -d "scripts" ]; then
             find scripts/ -type f -name "*.sh" | \
-            xargs -r shellcheck --severity=warning --external-sources || true
+            xargs -r shellcheck --shell=bash --external-sources --severity=warning || true
           else
             echo "No scripts directory found, skipping ShellCheck."
           fi

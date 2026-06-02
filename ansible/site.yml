@@ -59,10 +59,10 @@
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
       until: >
         ready_nodes_count.stdout | int == (
-        (groups['control_plane'] | default([]) +
-         groups['workers'] | default([]) +
-         groups['analyst_workers'] | default([]) +
-         groups['juiceshop_workers'] | default([])) | unique | length
+        (groups.control_plane | default([]) +
+         groups.workers | default([]) +
+         groups.analyst_workers | default([]) +
+         groups.juiceshop_workers | default([])) | unique | length
         )
       retries: 30
       delay: 10
@@ -70,7 +70,7 @@
     - name: Tag analyst compute nodes with topology label
       ansible.builtin.shell: |
         kubectl label node {{ item }} role=analyst --overwrite
-      loop: "{{ groups['analyst_workers'] | default([]) }}"
+      loop: "{{ groups.analyst_workers | default([]) }}"
       when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') != 'single'
       changed_when: true
       environment:
@@ -79,7 +79,7 @@
     - name: Tag Juice Shop compute nodes with topology label
       ansible.builtin.shell: |
         kubectl label node {{ item }} role=juiceshop --overwrite
-      loop: "{{ groups['juiceshop_workers'] | default([]) }}"
+      loop: "{{ groups.juiceshop_workers | default([]) }}"
       when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') != 'single'
       changed_when: true
       environment:
