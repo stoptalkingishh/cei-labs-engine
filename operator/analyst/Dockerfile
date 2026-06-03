@@ -46,8 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# FIX: Added -g operator to use the existing group instead of attempting to create it
-RUN useradd -m -s /bin/bash -g operator operator
+# FIXED: Replaced -g operator with explicitly requested --no-user-group flag
+RUN useradd -m -s /bin/bash --no-user-group operator
 
 RUN echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
     && mkdir -p /etc/sudoers.d \

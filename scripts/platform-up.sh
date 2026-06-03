@@ -4,8 +4,8 @@
 # Run this after ansible/site.yml has provisioned all nodes.
 #
 # Usage:
-#   ./scripts/platform-up.sh
-#   ./scripts/platform-up.sh --dry-run        # show commands without running
+#    ./scripts/platform-up.sh
+#    ./scripts/platform-up.sh --dry-run        # show commands without running
 
 set -euo pipefail
 
@@ -14,6 +14,13 @@ export KUBECONFIG
 
 DRY_RUN=false
 VARS_FILE="ansible/group_vars/all.yml"
+
+if [[ ! -f "$VARS_FILE" ]]; then
+  echo "[-] FATAL: ansible/group_vars/all.yml not found."
+  echo "[-] Copy all.yml.example to all.yml and fill in all required values."
+  echo "[-] Run: cp ansible/group_vars/all.yml.example ansible/group_vars/all.yml"
+  exit 1
+fi
 
 # Standard While-Loop Argument Parser
 while [[ $# -gt 0 ]]; do

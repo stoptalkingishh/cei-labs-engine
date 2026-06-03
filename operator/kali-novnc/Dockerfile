@@ -41,8 +41,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir --break-system-packages volatility3
 
-# FIX: Added -g operator to safely bypass the pre-existing group validation check
-RUN useradd -m -s /bin/bash -g operator --no-log-init operator
+# FIXED: Replaced -g operator with explicitly requested --no-user-group flag
+RUN useradd -m -s /bin/bash --no-log-init --no-user-group operator
 
 RUN echo "operator:${VNC_PASSWORD}" | chpasswd
 

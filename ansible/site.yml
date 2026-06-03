@@ -8,7 +8,7 @@
   gather_facts: false
   tasks:
     - name: Ensure prerequisite external collections are locally cached
-      ansible.builtin.command: ansible-galaxy collection install -r requirements.yml
+      ansible.builtin.command: ansible-galaxy collection install -r {{ playbook_dir }}/requirements.yml
       changed_when: false
 
 - name: Phase 1 - Global Prerequisite and Security Hardening Baseline

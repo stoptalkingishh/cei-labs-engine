@@ -30,7 +30,7 @@ else
   ORG=$DEFAULT_ORG
 fi
 
-IMAGE="ghcr.io/${ORG}/analyst:${TAG}"
+IMAGE="ghcr.io/${ORG}/cei-labs-engine/ctf-analyst:${TAG}"
 NAMESPACE="analyst"
 
 get_bastion_ip() {
