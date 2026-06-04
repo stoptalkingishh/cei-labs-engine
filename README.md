@@ -107,3 +107,13 @@ ansible-playbook -i ansible/inventory.ini ansible/site.yml
 # 7. Audit local operational range state
 kubectl get nodes -o wide
 kubectl get pods -A
+
+## Management Scripts (New)
+
+### Interactive Tools
+
+- **`./scripts/install.sh`** → Guided/General/Advanced installer with progress bars
+- **`./scripts/uninstall.sh`** → Safe/Full/Nuclear uninstall options
+- **`./scripts/repair.sh`** → Diagnostics + auto-repair with backups
+
+All scripts feature colored output, logging, and interactive prompts tailored to user experience level.
