@@ -2,7 +2,7 @@
 # scripts/uninstall.sh - Interactive Uninstaller
 set -euo pipefail
 
-REPO_ROOT="`\((cd "\)`(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_FILE="$REPO_ROOT/uninstall.log"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -14,9 +14,11 @@ print_header() {
     echo -e "╚══════════════════════════════════════════════════════════╝${NC}"
 }
 
+log() { echo -e "[$(date '+%H:%M:%S')] $1" | tee -a "$LOG_FILE"; }
+
 select_depth() {
     print_header
-    echo -e "`\({YELLOW}Uninstall Depth:\)`{NC}"
+    echo -e "${YELLOW}Uninstall Depth:${NC}"
     echo "1) Safe     - Keep PVCs, databases, cases (Recommended)"
     echo "2) Full     - Remove all platform components"
     echo "3) Nuclear  - Remove K3s + all data (Destructive)"
@@ -26,13 +28,20 @@ select_depth() {
 
 main() {
     print_header
-    read -p "${RED}Type 'DESTROY' to confirm uninstall: ${NC}" CONFIRM
+    echo -e "${RED}⚠️  WARNING: You are about to initiate the uninstallation process for CEI Labs Engine.${NC}"
+    echo -e "${RED}Depending on the chosen depth, this action can permanently remove infrastructure, data, and configurations.${NC}"
+    read -p "Type 'DESTROY' to confirm uninstall: " CONFIRM
     [[ "$CONFIRM" != "DESTROY" ]] && exit 0
 
     select_depth
     log "Uninstall started at depth: $DEPTH_LEVEL"
 
-    if [[ $DEPTH_LEVEL == "safe" || $DEPTH_LEVEL == "full" ]]; then
+    if [[ $DEPTH_LEVEL == "safe" ]]; then
+        # Safe mode preserves stateful resources (PVCs/PVs) by selectively deleting deployments/statefulsets while keeping data intact
+        kubectl delete deployment,ingress,service,daemonset,horizontalpodautoscaler,cronjob --all -A || true
+    fi
+
+    if [[ $DEPTH_LEVEL == "full" ]]; then
         ./scripts/platform-down.sh
     fi
 
@@ -42,7 +51,7 @@ main() {
         sudo rm -rf /etc/rancher /var/lib/rancher
     fi
 
-    echo -e "`\({GREEN}Uninstall completed.\)`{NC}"
+    echo -e "${GREEN}Uninstall completed.${NC}"
 }
 
 main "$@"
