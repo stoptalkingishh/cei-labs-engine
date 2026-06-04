@@ -60,10 +60,15 @@ main() {
     detect_existing
 
     echo -e "${BLUE}[1/8] Checking prerequisites...${NC}"; progress_bar 20
-    sudo apt-get update -qq && sudo apt-get install -y git curl python3-pip unzip jq ifstat sysstat
+    sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends git curl python3-pip unzip jq ifstat sysstat
 
     echo -e "${BLUE}[2/8] Configuration...${NC}"; progress_bar 40
-    if [[ ! -f "$REPO_ROOT/ansible/group_vars/all.yml" ]]; then
+    # Create file if missing, or recreate if it exists but is incomplete (e.g., missing expected structure or keys)
+    if [[ ! -f "$REPO_ROOT/ansible/group_vars/all.yml" ]] || ! grep -q "k3s_version\|ctfd_version\|multijuicer_version" "$REPO_ROOT/ansible/group_vars/all.yml" 2>/dev/null; then
+        if [[ -f "$REPO_ROOT/ansible/group_vars/all.yml" ]]; then
+            log "${YELLOW}Existing all.yml detected but found to be incomplete. Backing up and renewing from template...${NC}"
+            cp "$REPO_ROOT/ansible/group_vars/all.yml" "$REPO_ROOT/ansible/group_vars/all.yml.bak"
+        fi
         cp "$REPO_ROOT/ansible/group_vars/all.yml.example" "$REPO_ROOT/ansible/group_vars/all.yml"
         log "${YELLOW}all.yml created from template${NC}"
         [[ $MODE == "guided" ]] && nano "$REPO_ROOT/ansible/group_vars/all.yml"
