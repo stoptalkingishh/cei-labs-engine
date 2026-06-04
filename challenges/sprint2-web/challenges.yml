@@ -1,28 +1,64 @@
----
-apiVersion: k8s.cei-labs.local/v1
-kind: ChallengePack
-metadata:
-  name: sprint2-web-exploitation
-  namespace: ctf-challenges
-spec:
-  sprint: 2
-  category: "Web Security"
-  challenges:
-    - id: "natas-0"
-      title: "OverTheWire: Natas Baseline"
-      difficulty: "Easy"
-      points: 100
-      description: "Inspect target raw DOM structures to extract primary configuration passcodes."
-      flag_type: "static"
-      # FIXED (Item M5): Standardized flag format wrapper to match canonical CTFd regex schema parameters
-      secret: "flag{source_code_inspection_is_fundamental}"
+# Sprint 2 — Web Security & Systems Challenges
+# Load with: ./scripts/challenges-load.sh --sprint 2
+# Sprint 2 is locked until Sprint 1 gate is cleared.
+# Gate: Bandit Level 15 complete + 20 CmdChallenge problems solved.
+challenges:
+  - name: "OTW Natas Level 0"
+    author: "OverTheWire"
+    category: "OTW — Natas"
+    description: |
+      Natas Web Security — Level 0
+      Natas teaches the basics of server-side web security.
+      Each level requires you to find the password for the next level.
+      Access Level 0 at:
 
-    - id: "juice-shop-xss"
-      title: "JuiceShop Cross-Site Scripting (XSS)"
-      difficulty: "Medium"
-      points: 250
-      description: "Inject a malicious payload to compromise the active administrator browser session matrix."
-      flag_type: "dynamic"
-      generator: "multijuicer-webhook-verify"
-      # FIXED (Item M5): Appended flag formatting structural hint string parameters for automated validation mapping
-      flag_format_hint: "flag{[a-f0-9]{32}}"
+      http://natas0.natas.labs.overthewire.org
+      Username: natas0
+      Password: natas0
+      The password for the next level is hidden on this page.
+      Use your browser's page source viewer to find it.
+      Submit the password you find as the flag.
+      🔗 OTW Natas
+    value: 100
+    type: standard
+    flags:
+      - flag{source_code_inspection_is_fundamental}
+    tags:
+      - web
+      - source-code
+      - http
+    hints:
+      - cost: 0
+        content: "Right-click the page and select View Page Source."
+    requirements:
+      prerequisites:
+        - "🔓 Sprint 1 Complete — Sprint 2 Unlocked"
+
+  - name: "JuiceShop Cross-Site Scripting (XSS)"
+    author: "OWASP"
+    category: "OWASP Juice Shop"
+    description: |
+      Reflected XSS
+      The Juice Shop is running at: http://juiceshop.ctf.local
+      Log in with your assigned credentials and find a page that
+      reflects user input without sanitization.
+      Inject a script tag that triggers an alert box.
+      Submit the flag displayed in the MultiJuicer dashboard after
+      completing the challenge.
+      🔗 Juice Shop Documentation
+    value: 250
+    type: standard
+    flags:
+      - flag{xss_reflected_dom_injection_complete}
+    tags:
+      - web
+      - xss
+      - javascript
+    hints:
+      - cost: 25
+        content: "Look at the search bar — does it reflect your input in the URL or page?"
+      - cost: 50
+        content: "Try: <script>alert('xss')</script> in the search field."
+    requirements:
+      prerequisites:
+        - "OTW Natas Level 0"

@@ -1,27 +1,65 @@
----
-apiVersion: k8s.cei-labs.local/v1
-kind: ChallengePack
-metadata:
-  name: sprint3-pccc-infrastructure
-  namespace: ctf-challenges
-spec:
-  sprint: 3
-  category: "SIGINT & Infrastructure Operations"
-  challenges:
-    - id: "crapi-idor"
-      title: "crAPI Insecure Direct Object Reference"
-      difficulty: "Medium"
-      points: 300
-      description: "Manipulate sequential backend REST API payload indices to harvest sensitive customer driver metrics profiles."
-      flag_type: "static"
-      # FIXED (Item M5): Standardized flag format wrapper to match canonical CTFd regex schema parameters
-      secret: "flag{broken_object_level_authorization_success}"
+# Sprint 3 — Binary Exploitation & PCCC Core Operations
+# Load with: ./scripts/challenges-load.sh --sprint 3
+# Sprint 3 is locked until Sprint 2 gate is cleared.
+# Gate: Bandit complete + 25 Juice Shop flags + 5 PCAP analysis challenges.
+challenges:
+  - name: "crAPI Insecure Direct Object Reference"
+    author: "OWASP"
+    category: "crAPI — API Security"
+    description: |
+      Broken Object Level Authorization (BOLA)
+      The crAPI application is running at: http://crapi.ctf.local
+      Register an account, then find a way to access another user's
+      vehicle data by manipulating API request parameters.
+      The flag is located inside the hidden vehicle report for user ID 2.
+      🔗 crAPI Documentation
+    value: 300
+    type: standard
+    flags:
+      - flag{broken_object_level_authorization_success}
+    tags:
+      - api
+      - bola
+      - idor
+      - rest
+    hints:
+      - cost: 30
+        content: "Inspect the API request when you view your own vehicle report. What parameter identifies the vehicle?"
+      - cost: 60
+        content: "Try changing the vehicle ID or user ID in the API request to a different number."
+    requirements:
+      prerequisites:
+        - "🔓 Sprint 2 Complete — Sprint 3 Unlocked"
 
-    - id: "pccc-skilling-sigint"
-      title: "PCCC Skilling Lab: Signal Analysis"
-      difficulty: "Hard"
-      points: 500
-      description: "Reconstruct raw hex payload captures extracted from a compromised network communication vector."
-      flag_type: "static"
-      # FIXED (Item M5): Standardized flag format wrapper to match canonical CTFd regex schema parameters
-      secret: "flag{high_frequency_spectrum_reconstructed}"
+  - name: "PCCC Skilling Lab — SIGINT Analysis"
+    author: "CISA/CMU"
+    category: "PCCC — Skilling Labs"
+    description: |
+      Signal Intelligence Infrastructure Challenge
+      Access your analyst workstation:
+
+      ssh operator@<bastion-ip> -p <your-port>
+      The evidence files for this challenge are in ~/cases/sigint/.
+      Analyze the provided PCAP file to identify:
+      The command-and-control server IP address
+      The beacon interval in seconds
+      The data exfiltration protocol used
+      Submit the flag found after completing the analysis.
+      Format: flag{c2_ip:interval:protocol}
+    value: 500
+    type: standard
+    flags:
+      - flag{192.168.56.101:30:dns}
+    tags:
+      - pccc
+      - network-forensics
+      - pcap
+      - c2
+    hints:
+      - cost: 50
+        content: "Use tshark to filter DNS traffic: tshark -r capture.pcap -Y dns"
+      - cost: 100
+        content: "Look for periodic queries to the same domain at regular intervals."
+    requirements:
+      prerequisites:
+        - "crAPI Insecure Direct Object Reference"

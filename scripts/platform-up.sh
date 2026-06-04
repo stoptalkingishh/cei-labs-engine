@@ -134,6 +134,11 @@ else
   ADMIN_PASS="CHANGE_ME_SECURE_DASHBOARD_PASSWORD"
 fi
 
+# MITIGATION (F2): Sanitize extracted parameters to eliminate shell metacharacters before passing to eval
+MAX_INSTANCES="${MAX_INSTANCES//[^0-9]/}"
+CTF_KEY="${CTF_KEY//[\'\`\"\;\&\$\|\<\>\(\)]/}"
+ADMIN_PASS="${ADMIN_PASS//[\'\`\"\;\&\$\|\<\>\(\)]/}"
+
 # FIXED: Wrapped parameter injections with safe escaped quoting blocks to ensure clean strings pass through eval paths
 run "helm upgrade --install multijuicer \
   oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer \

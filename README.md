@@ -41,7 +41,7 @@ Before initiating a deployment, update `ansible/group_vars/all.yml` to reflect y
 │  - K3s Server (Leader)      │   │  - K3s Agent                │
 │  - CTFd + MariaDB (PVC)     │   │  - Node Label: role=juiceshop│
 │  - Local Registry (PVC)     │   │  - MultiJuicer Instances    │
-│  - Traefik / MetalLB        │   │    (Up to 30 dynamic pods)  │
+│  - Traefik / MetalLB        │   │     (Up to 30 dynamic pods)  │
 └─────────────────────────────┘   └─────────────────────────────┘
 ┌─────────────────────────────┐
 │  NODE 3 — Analyst + Targets │

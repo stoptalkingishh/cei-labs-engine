@@ -25,7 +25,7 @@ DRY_RUN=false
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 
 log_info()  { echo -e "${GREEN}[+]${NC} $*"; }
-log_warn()  { echo -e "${YELLOW}[!]{NC} $*"; }
+log_warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 log_error() { echo -e "${RED}[-]${NC} $*" >&2; }
 
 # ── HARDENED ARGUMENT PARSER ──────────────────────────────────────────────────
