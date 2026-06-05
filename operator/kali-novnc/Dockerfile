@@ -59,10 +59,10 @@ RUN mkdir -p /home/operator/.vnc \
     && printf '#!/bin/bash\nxfce4-session &\n' > /home/operator/.vnc/xstartup \
     && chmod +x /home/operator/.vnc/xstartup
 
-# Generate VNC password and fail if creation does not succeed
+# Generate VNC password non-interactively using the filter flag (-f) and verify file creation
 RUN command -v vncpasswd && \
-    printf '%s\n%s\n\n' "${VNC_PASSWORD}" "${VNC_PASSWORD}" \
-    | vncpasswd /home/operator/.vnc/passwd && \
+    echo "${VNC_PASSWORD}" | vncpasswd -f > /home/operator/.vnc/passwd && \
+    chmod 600 /home/operator/.vnc/passwd && \
     test -f /home/operator/.vnc/passwd
 
 USER root
