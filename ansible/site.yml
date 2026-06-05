@@ -7,8 +7,15 @@
   hosts: localhost
   gather_facts: false
   tasks:
+    - name: Check if required collections are already installed locally
+      ansible.builtin.command: ansible-galaxy collection list
+      register: local_collections_check
+      changed_when: false
+      failed_when: false
+
     - name: Ensure prerequisite external collections are locally cached
       ansible.builtin.command: ansible-galaxy collection install --ignore-errors -r {{ playbook_dir }}/requirements.yml
+      when: local_collections_check.rc != 0 or "kubernetes.core" not in local_collections_check.stdout
       changed_when: false
 
 - name: Phase 1 - Global Prerequisite and Security Hardening Baseline
@@ -51,22 +58,15 @@
     - name: Validate unique physical cluster nodes are reporting Ready state
       ansible.builtin.shell: |
         set -o pipefail
-        current_nodes=$(kubectl get nodes --no-headers 2>/dev/null || echo "None")
-        echo "=== Current Registered Nodes ==="
-        echo "$current_nodes"
-        
         ready_count=$(kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null \
           | tr ' ' '\n' | grep -c '^True$' || echo 0)
-        
-        echo "=== Ready Nodes Count ==="
         echo "$ready_count"
-        echo "$ready_count" > /tmp/ready_nodes_count.tmp
       register: ready_nodes_check
       changed_when: false
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
       until: >
-        (lookup('file', '/tmp/ready_nodes_count.tmp') | trim | int) == (
+        (ready_nodes_check.stdout | trim | int) == (
         (groups.control_plane | default([]) +
          groups.workers | default([]) +
          groups.analyst_workers | default([]) +
@@ -83,7 +83,7 @@
           {{ (groups.control_plane | default([]) + groups.workers | default([]) + 
               groups.analyst_workers | default([]) + groups.juiceshop_workers | default([])) | unique | length }}
       when: >
-        (lookup('file', '/tmp/ready_nodes_count.tmp') | trim | int) != (
+        (ready_nodes_check.stdout | trim | int) != (
         (groups.control_plane | default([]) +
          groups.workers | default([]) +
          groups.analyst_workers | default([]) +

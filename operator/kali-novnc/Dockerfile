@@ -57,7 +57,7 @@ RUN mkdir -p /home/operator/.vnc \
 
 RUN printf '%s\n%s\n\n' "${VNC_PASSWORD}" "${VNC_PASSWORD}" \
     | vncpasswd /home/operator/.vnc/passwd 2>/dev/null \
-    ; true
+    && test -f /home/operator/.vnc/passwd
 
 USER root
 

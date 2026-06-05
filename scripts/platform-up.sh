@@ -24,7 +24,7 @@ log_error() { echo -e "${RED}[-]${NC} $*" >&2; }
 
 verify_dependencies() {
   local missing_deps=()
-  for cmd in kubectl helm ansible jq curl; do
+  for cmd in kubectl helm ansible ansible-playbook jq curl; do
     if ! command -v "$cmd" &>/dev/null; then
       missing_deps+=("$cmd")
     fi

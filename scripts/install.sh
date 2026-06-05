@@ -11,7 +11,7 @@ print_header() {
     clear
     echo -e "${BLUE}╔══════════════════════════════════════════════════════════╗"
     echo -e "║           CEI Labs Engine - Interactive Installer        ║"
-    echo -e "║               Cybersecurity Training Platform            ║"
+    echo -e "║              Cybersecurity Training Platform             ║"
     echo -e "╚══════════════════════════════════════════════════════════╝${NC}"
 }
 
@@ -22,7 +22,7 @@ log_error() { echo -e "[$(date '+%H:%M:%S')] ${RED}[-]${NC} $*" | tee -a "$LOG_F
 
 verify_dependencies() {
     local missing_deps=()
-    for cmd in kubectl helm ansible jq curl; do
+    for cmd in kubectl helm ansible ansible-playbook jq curl git docker; do
         if ! command -v "$cmd" &>/dev/null; then
             missing_deps+=("$cmd")
         fi

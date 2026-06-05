@@ -13,10 +13,10 @@ jobs:
   validate-yaml:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -61,7 +61,7 @@ jobs:
   validate-helm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v5
 
       - name: Install Helm
         run: |
@@ -78,19 +78,22 @@ jobs:
           if [ -d "k8s/ingress" ] && [ -f "k8s/ingress/traefik-values.yml" ]; then
             echo "[*] Linting Traefik core chart configurations..."
             helm repo add traefik https://traefik.github.io/charts --force-update
-            # FIXED (Item H002): Added --skip-tests to isolate template validation from cluster API discovery constraints
-            if helm template traefik traefik/traefik -f k8s/ingress/traefik-values.yml --skip-tests > /dev/null; then
+            if helm template traefik traefik/traefik -f k8s/ingress/traefik-values.yml --skip-tests > rendered-traefik.yaml 2>&1; then
               traefik_status="Passed"
             else
+              echo "[-] Traefik Rendering Failure Details:"
+              cat rendered-traefik.yaml
               traefik_status="Failed"
             fi
           fi
           
           if [ -d "k8s/multijuicer" ] && [ -f "k8s/multijuicer/values.yml" ]; then
             echo "[*] Linting MultiJuicer chart templates..."
-            if helm template multijuicer oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer -f k8s/multijuicer/values.yml > /dev/null; then
+            if helm template multijuicer oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer -f k8s/multijuicer/values.yml > rendered-multijuicer.yaml 2>&1; then
               multijuicer_status="Passed"
             else
+              echo "[-] MultiJuicer Rendering Failure Details:"
+              cat rendered-multijuicer.yaml
               multijuicer_status="Failed"
             fi
           fi
@@ -113,7 +116,7 @@ jobs:
   validate-k8s:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v5
 
       - name: Install kubeconform
         run: |
@@ -124,7 +127,6 @@ jobs:
         run: |
           if [ -d "k8s" ]; then
             set +e
-            # Modified find logic to exclude all variants of Helm values configuration files
             find k8s/ -type f \( -name "*.yml" -o -name "*.yaml" \) \
               ! -name "*values.yaml" ! -name "*values.yml" | \
             xargs -r kubeconform \
@@ -159,10 +161,10 @@ jobs:
   validate-ansible:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -211,7 +213,7 @@ jobs:
   validate-dockerfiles:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v5
 
       - name: Lint Dockerfiles with hadolint
         id: docker_lint
@@ -239,7 +241,7 @@ jobs:
   validate-scripts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v5
 
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
