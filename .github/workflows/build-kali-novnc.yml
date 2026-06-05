@@ -54,4 +54,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VNC_PASSWORD=${{ secrets.VNC_PASSWORD || 'ChangeMe2025!' }}
           no-cache: true

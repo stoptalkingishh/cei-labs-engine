@@ -48,7 +48,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # FIXED: Replaced -g operator with explicitly requested --no-user-group flag
 RUN useradd -m -s /bin/bash --no-user-group operator
-
 RUN echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
     && mkdir -p /etc/sudoers.d \
     && echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator \

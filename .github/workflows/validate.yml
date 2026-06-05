@@ -153,7 +153,7 @@ jobs:
           else
             echo "No k8s directory found, skipping validation."
             echo "### ☸️ Kubernetes Manifest Validation" >> "$GITHUB_STEP_SUMMARY"
-            echo "⚠️ No \`k8s\` directory located within repository layout. Validation skipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ No \`k8s\` directory located within repository layout. Validation skipped." >> "$GITHUB_SUMMARY"
           fi
 
   validate-ansible:
@@ -216,7 +216,7 @@ jobs:
       - name: Lint Dockerfiles with hadolint
         id: docker_lint
         continue-on-error: true
-        uses: hadolint/hadolint-action@v3
+        uses: hadolint/hadolint-action@v3.1.0
         with:
           recursive: true
           ignore: DL3002,DL3006,DL3007,DL3008,DL3009,DL3013,DL3015,DL3018,DL3042,DL4006,SC2015,SC2028,DL3059

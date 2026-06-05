@@ -29,27 +29,13 @@ ports:
       default: true
     exposedPort: 80
     protocol: TCP
-    # HTTP-to-HTTPS redirect intentionally disabled.
-    # Enabling redirectTo while IngressRoutes lack a tls: block causes
-    # a redirect loop — HTTP redirects to HTTPS, but HTTPS has no cert
-    # configured on the route, producing a TLS handshake failure.
-    # To re-enable after cert trust is established on all clients:
-    #   redirectTo:
-    #     port: websecure
-    #     priority: 10
   websecure:
     port: 8443
     expose:
       default: true
     exposedPort: 443
     protocol: TCP
-    tls:
-      enabled: true
-
-ingressClassResource:
-  enabled: true
-  default: true
-  name: traefik
+    # TLS is handled at the IngressRoute level + cert-manager; removed invalid inline tls
 
 providers:
   kubernetesCRD:
