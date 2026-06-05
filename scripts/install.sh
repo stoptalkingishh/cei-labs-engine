@@ -245,7 +245,8 @@ main() {
     ./scripts/setup-cases.sh
 
     echo -e "\n${BLUE}[4/6] Executing Ansible Host Core Infrastructure Playbook...${NC}"; progress_bar 55
-    ansible-playbook -i ansible/inventory.ini ansible/site.yml
+    # Added --ask-become-pass to fix interactive sudo authentication issues
+    ansible-playbook -i ansible/inventory.ini ansible/site.yml --ask-become-pass
 
     echo -e "\n${BLUE}[5/6] Triggering K3s Platform Helm App Deployments...${NC}"; progress_bar 80
     ./scripts/platform-up.sh
