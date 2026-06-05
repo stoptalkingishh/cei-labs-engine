@@ -1,9 +1,27 @@
 # cei-labs-engine
+
 CEI Labs is a modular, multi-tenant cyber range engineered on a lightweight K3s mini-PC cluster. Built to decouple core infrastructure from individual modules, CEI Labs functions as an evolving platform capable of orchestrating diverse capture-the-flag environments, threat hunting sandboxes, and deep network analysis pipelines.
+
 # CEI Labs // CTF Infrastructure Engine
-A self-hosted, progressive cybersecurity training platform built for the President's Cup Cybersecurity Competition (PCCC) pipeline. Flexible K3s topology supporting standalone single-host, dual-host, or high-availability three-node hardware configurations running CTFd, MultiJuicer (OWASP Juice Shop), SSH analyst containers, Kali noVNC workstations, and self-hosted target wrappers.
+
+A self-hosted, progressive cybersecurity training platform built for the President's Cup Cybersecurity Competition (PCCC) pipeline. Cross-platform, OS-independent K3s topology supporting standalone single-host, dual-host, or high-availability three-node configurations running CTFd, MultiJuicer (OWASP Juice Shop), SSH analyst containers, Kali noVNC workstations, and self-hosted target wrappers.
+
+## Core System Operating System Baselines
+
+> 🚨 **Critical OS Requirement:** The CEI Labs Engine relies heavily on native Linux kernel primitives (cgroups, namespaces, and iptables routing architectures) to manage container isolation and cluster networking. **It cannot be deployed directly on bare-metal Windows or macOS.** 
+
+### 1. Single-Node Deployment Baseline
+* **Native Environment:** A single physical machine running a standard Linux distribution (Kernel 5.15+).
+* **Non-Linux Fallback:** If your primary workstation runs Windows or macOS, you **must** provision a Linux Virtual Machine using a local hypervisor (e.g., Proxmox VE, VirtualBox, VMware Workstation, Hyper-V, or Parallels) allocated with the minimum hardware specifications outlined below.
+
+### 2. Multi-Node Deployment Baseline (Dual / Cluster)
+* **Native Distributed Environment:** Separate physical or virtual target machines, each running an independent instance of a Linux operating system distribution. All target nodes must share a unified Local Area Network (LAN) with static IP assignments.
+* **Hypervisor/Cloud Environments:** Can be fully orchestrated across virtualized infrastructure environments (e.g., Proxmox VE, VMware ESXi, AWS VPC, or Google Cloud Compute Engine) by spinning up the required count of independent Linux minimal server instances.
+* **Supported Distributions:** The automation scripts handle multi-OS provisioning transparently across **Ubuntu/Debian (`apt`)**, **RHEL/Fedora/Rocky Linux (`dnf`)**, and **Arch Linux (`pacman`)**.
+
+---
+
 ## Confirmed Dependency Versions
-> ⚠️ **Note:** The underlying dependencies below are manually maintained and subject to version drift over time. These versions should be verified periodically against their respective repositories and your localized `ansible/group_vars/all.yml` properties to ensure optimal system stability and security patching before execution.
 
 | Component | Version | Source / Notes |
 |---|---|---|
@@ -16,76 +34,119 @@ A self-hosted, progressive cybersecurity training platform built for the Preside
 | **Traefik** | v3.x | Managed Helm Ingress handling dedicated external TLS routing |
 | **MariaDB** | 10.11 | Pinned PVC storage backing ctfd-db |
 | **Redis** | 7-alpine | Banking CTFd caching layer |
-| **Ubuntu** | 24.04 LTS | Node base operating system |
-## Technical Hardware Performance Profiles
-Before initiating a deployment, update ansible/group_vars/all.yml to reflect your physical target hardware limits:
-| Deployment Mode | Managed Host Nodes | Target vCPUs | Baseline RAM | Target Storage Size | Max Target Participants |
+| **Linux Agnostic** | Kernel 5.15+ | Supported across Debian/Ubuntu, RHEL/Fedora, and Arch distributions |
+
+---
+
+## Target Environment Allocation Profiles
+
+Before initiating a deployment, update `ansible/group_vars/all.yml` to reflect your target environment resource allocations. Profiles scale based on expected concurrent training cohorts:
+
+| Deployment Mode | Managed Host Nodes | Target vCPUs | Baseline RAM | Target Storage Size | Recommended Group Minimum |
 |---|---|---|---|---|---|
-| **single** | 1 Node (Combined) | 4 Cores | 16 GB | 100 GB SSD | Up to 10 Users |
-| **dual** | 2 Nodes (Segregated) | 4 + 4 Cores | 16 + 16 GB | 100 + 100 GB SSD | Up to 20 Users |
-| **cluster** | 3 Nodes (HA Dedicated) | 4 + 4 + 4 Cores | 32 + 16 + 16 GB | 256 + 100 + 100 GB SSD | Up to 30 Users |
-## Hardware Layout & Topology (Production Cluster Example)
+| **single** | 1 Node (Combined) | 4 Cores | 16 GB | 100 GB SSD | Evaluation / Up to 10 Users |
+| **dual** | 2 Nodes (Segregated) | 4 + 4 Cores | 16 + 16 GB | 100 + 100 GB SSD | Mid-Scale / Up to 20 Users |
+| **cluster** | 3 Nodes (HA Dedicated) | 4 + 4 + 4 Cores | 32 + 16 + 16 GB | 256 + 100 + 100 GB SSD | Enterprise / Up to 30 Users |
+
+---
+
+## Infrastructure Layout & Cluster Architecture Topology
+
 ┌─────────────────────────────┐   ┌─────────────────────────────┐
-│  NODE 1 — Control Plane     │   │  NODE 2 — Juice Shop        │
-│  Hardware: OptiPlex 7080    │   │  Hardware: N100 Mini PC     │
-│  Specs: i5, 32GB, 256GB SSD │   │  Specs: 16GB RAM, 512GB SSD │
+│  NODE 1 — Control Plane     │   │  NODE 2 — Juice Shop Workload│
+│  Minimum: 4 vCPU / 32GB RAM │   │  Minimum: 4 vCPU / 16GB RAM │
+│  Baseline: Any Linux OS     │   │  Baseline: Any Linux OS     │
 │                             │   │                             │
-│  - K3s Server (Leader)      │   │  - K3s Agent                │
+│  - K3s Server (Leader)      │   │  - K3s Agent Node           │
 │  - CTFd + MariaDB (PVC)     │   │  - Node Label: role=juiceshop│
 │  - Local Registry (PVC)     │   │  - MultiJuicer Instances    │
-│  - Traefik / MetalLB        │   │     (Up to 30 dynamic pods)  │
+│  - Traefik / MetalLB        │   │     (Dynamic scaled pods)   │
 └─────────────────────────────┘   └─────────────────────────────┘
 ┌─────────────────────────────┐
 │  NODE 3 — Analyst + Targets │
-│  Hardware: N100 Mini PC     │
-│  Specs: 16GB RAM, 512GB SSD │
+│  Minimum: 4 vCPU / 16GB RAM │
+│  Baseline: Any Linux OS     │
 │                             │
-│  - K3s Agent                │
+│  - K3s Agent Node           │
 │  - Node Label: role=analyst │
 │  - SSH Analyst Containers   │
 │  - Kali noVNC Workstations  │
 │  - Self-Hosted PCCC Targets │
 └─────────────────────────────┘
+
+---
+
 ## Training Sprint Structure (CTFd Gated)
+
 ### Sprint 1 — Foundational Fluency (UNLOCKED)
  * **Labs:** OverTheWire Bandit (0–15), CmdChallenge (1–20)
  * **Mechanism:** External targets with static flag verification.
  * *Gating:* Passwords from Bandit 15 and final CmdChallenge unlock Sprint 2.
+
 ### Sprint 2 — Systems, Web & Forensics (LOCKED)
  * **Labs:** OverTheWire Bandit (16–34), Natas (0–15), Krypton, Leviathan
  * **Self-Hosted:** OWASP Juice Shop (100+ challenges via MultiJuicer), PCAP/Log Forensics
  * *Gating:* Requires Sprint 1 complete + 25 Juice Shop flags + 5 PCAP challenges.
+
 ### Sprint 3 — Advanced Operations (LOCKED)
  * **Labs:** OverTheWire Narnia & Behemoth (Binary Exploitation), Natas (16–34)
  * **Self-Hosted:** OWASP crAPI (Shared instance), PCCC Skilling Labs, Historical PCCC Scenarios.
  * *Destination:* Open matrix sandbox; no downstream restrictions.
-## Quick Start (Post-Hardware Assembly)
+
+---
+
+## Quick Start (OS-Independent Interactive Installer)
+
+The range engine features a portable deployment wizard (`scripts/install.sh`) that dynamically inspects your Linux environment, detects the native package management architecture, handles host dependency injection, and configures cluster variables mid-flight.
+
+### 1. Retrieve the Repository Workspace
 ```bash
-# 1. Clone the repository
-git clone [https://github.com/](https://github.com/)<your-org>/cei-labs-engine
+git clone [https://github.com/stoptalkingishh/cei-labs-engine](https://github.com/stoptalkingishh/cei-labs-engine)
 cd cei-labs-engine
+2. Execute the Provisioning Pipeline
+Grant execution privileges across the script utilities tree, prepare your localized case volume storage mounts, and trigger the installer:
 
-# 2. Configure inventory and cluster variable parameters
-cp ansible/group_vars/all.yml.example ansible/group_vars/all.yml
-nano ansible/group_vars/all.yml
-nano ansible/inventory.ini
+Bash
+chmod +x scripts/*.sh
 
-# 3. Provision the host forensic file structures and mount points
+# Establish forensic storage layers and user share paths
 ./scripts/setup-cases.sh
 
-# 4. Execute cluster provisioning playbook
-# (Installs OS updates, secures runtimes, handles token acquisition, and brings up K3s)
-ansible-playbook -i ansible/inventory.ini ansible/site.yml
+# Run the central interactive configuration wizard
+./scripts/install.sh
+3. Native Package Mapping & Fallback Architecture
+The initialization pipeline intelligently maps dependency footprints depending on what ecosystem your host machine operates under:
 
-# 5. Spin up Core Engine Platforms
-# (Deploys Core Namespaces, Local Registry PVC, cert-manager, Traefik, CTFd, and MultiJuicer)
-./scripts/platform-up.sh
+Debian / Ubuntu Systems (apt): Configures stable base repositories and patches tooling via advanced packaging utilities.
 
-# 6. Populate curriculum challenges and scoring engines
-# (Run after initial administrative account setup steps)
+Red Hat / Fedora / Rocky Linux (dnf): Pulls required enterprise utilities, scales repository mirrors, and resolves specific sysstat/moby tracking binary names.
+
+Arch Linux (pacman): Synchs database indices and provisions rolling infrastructure dependencies natively via standard pacman targets.
+
+Universal Fallback Model: If a standard package manager is absent, the execution layer abstracts dependency compilation to localized Python Pip runtime variables (PIP_BREAK_SYSTEM_PACKAGES=1) to anchor Ansible and jq without interrupting OS integrity.
+
+4. Interactive Configuration Options
+When running the wizard, you will step through the following dynamic prompts:
+
+Dependency Management: Choose Automated Install to let the engine provision your OS-specific packages, or select Manual Validation to run a binary audit against a custom pre-built environment.
+
+Orchestration Complexity Profiles:
+
+Simple Mode: Tailored for local virtual machines or rapid environment evaluations. Bypasses distributed networking blocks, locks host targets to a localized localhost array, and applies resource-light parameters.
+
+Advanced Mode: Unlocks full distributed multi-host topologies (single/dual/cluster), handles layer-2 load balancing configuration flags (MetalLB), and safely spawns an available shell editor text terminal environment (vi or nano) to let you map nodes onto your inventory space directly.
+
+Security Token Customization Matrix: Prompts you live to inject unique administrative values (CTFd application secret strings, MariaDB storage backend user passwords, and MultiJuicer control panel master keys) instead of relying on unsafe static defaults.
+
+5. Curriculum Ingestion & Range Performance Metrics
+Once the cluster state is active, run the following sync utilities to seed training targets and monitor host health parameters:
+
+Bash
+# Populate OWASP Juice Shop challenge schemes
 ./scripts/juice-shop-ctf-import.sh
+
+# Ingest underlying static and containerized challenge modules
 ./scripts/challenges-load.sh
 
-# 7. Audit local operational range state
-kubectl get nodes -o wide
-kubectl get pods -A
+# Launch the unified cyber range monitoring dashboard
+./scripts/status.sh
