@@ -246,10 +246,12 @@ main() {
 
     echo -e "\n${BLUE}[4/6] Executing Ansible Host Core Infrastructure Playbook...${NC}"; progress_bar 55
     
-    # Injected inline runtime configs to resolve local sudo stream matching timeouts
+    # Injected inline configuration parameters plus custom prompt regex matching 
+    # to catch custom Ansible sudo streams and prevent execution drops
     ANSIBLE_PIPELINING=True \
     ANSIBLE_INTERPRETER_PYTHON=auto_silent \
-    ANSIBLE_TIMEOUT=30 \
+    ANSIBLE_TIMEOUT=60 \
+    ANSIBLE_BECOME_PASSWORD_PROMPT="(?i)password[: ]*" \
     ansible-playbook -i ansible/inventory.ini ansible/site.yml --ask-become-pass
 
     echo -e "\n${BLUE}[5/6] Triggering K3s Platform Helm App Deployments...${NC}"; progress_bar 80
