@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xfce4 \
     xfce4-terminal \
     tigervnc-standalone-server \
+    tigervnc-tools \
     novnc \
     websockify \
     wireshark \
@@ -44,7 +45,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir --break-system-packages volatility3
 
-# FIXED: Replaced -g operator with explicitly requested --no-user-group flag
+# Verify vncpasswd exists after installation
+RUN command -v vncpasswd
+
+# Create operator user
 RUN useradd -m -s /bin/bash --no-log-init --no-user-group operator
 
 RUN echo "operator:${VNC_PASSWORD}" | chpasswd
@@ -55,9 +59,11 @@ RUN mkdir -p /home/operator/.vnc \
     && printf '#!/bin/bash\nxfce4-session &\n' > /home/operator/.vnc/xstartup \
     && chmod +x /home/operator/.vnc/xstartup
 
-RUN printf '%s\n%s\n\n' "${VNC_PASSWORD}" "${VNC_PASSWORD}" \
-    | vncpasswd /home/operator/.vnc/passwd 2>/dev/null \
-    && test -f /home/operator/.vnc/passwd
+# Generate VNC password and fail if creation does not succeed
+RUN command -v vncpasswd && \
+    printf '%s\n%s\n\n' "${VNC_PASSWORD}" "${VNC_PASSWORD}" \
+    | vncpasswd /home/operator/.vnc/passwd && \
+    test -f /home/operator/.vnc/passwd
 
 USER root
 
