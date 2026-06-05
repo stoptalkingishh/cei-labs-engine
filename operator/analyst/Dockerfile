@@ -1,9 +1,12 @@
 FROM ubuntu:24.04
 
-ARG OPERATOR_PASSWORD=TrainingPlatform2025
+ARG OPERATOR_PASSWORD
 ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Strict validation: Fail build if repository secrets were not supplied
+RUN test -n "$OPERATOR_PASSWORD"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
@@ -46,10 +49,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# Create operator user and set password (robust fallback for CI when secret is missing/empty)
+# Create operator user and set password using strictly validated runtime secret
 RUN useradd -m -s /bin/bash --no-user-group operator && \
-    PASSWORD="${OPERATOR_PASSWORD:-TrainingPlatform2025}" && \
-    echo "operator:${PASSWORD}" | chpasswd && \
+    echo "operator:${OPERATOR_PASSWORD}" | chpasswd && \
     mkdir -p /etc/sudoers.d && \
     echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator && \
     chmod 0440 /etc/sudoers.d/operator

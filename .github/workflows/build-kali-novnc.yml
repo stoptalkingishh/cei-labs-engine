@@ -55,5 +55,5 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VNC_PASSWORD=${{ secrets.VNC_PASSWORD || 'ChangeMe2025!' }}
+            VNC_PASSWORD=${{ secrets.VNC_PASSWORD }}
           no-cache: true
