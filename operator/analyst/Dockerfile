@@ -46,12 +46,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# FIXED: Replaced -g operator with explicitly requested --no-user-group flag
-RUN useradd -m -s /bin/bash --no-user-group operator
-RUN echo "operator:${OPERATOR_PASSWORD}" | chpasswd \
-    && mkdir -p /etc/sudoers.d \
-    && echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator \
-    && chmod 0440 /etc/sudoers.d/operator
+# Create operator user and set password (robust for CI)
+RUN useradd -m -s /bin/bash --no-user-group operator && \
+    echo "operator:${OPERATOR_PASSWORD}" | chpasswd && \
+    mkdir -p /etc/sudoers.d && \
+    echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator && \
+    chmod 0440 /etc/sudoers.d/operator
 
 USER operator
 WORKDIR /home/operator

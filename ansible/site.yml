@@ -9,7 +9,6 @@
   tasks:
     - name: Ensure prerequisite external collections are locally cached
       ansible.builtin.command: ansible-galaxy collection install --ignore-errors -r {{ playbook_dir }}/requirements.yml
-      # The '--ignore-errors' flag lets ansible-galaxy skip installation dynamically if matching versions are already found locally
       changed_when: false
 
 - name: Phase 1 - Global Prerequisite and Security Hardening Baseline
@@ -52,7 +51,6 @@
     - name: Validate unique physical cluster nodes are reporting Ready state
       ansible.builtin.shell: |
         set -o pipefail
-        # Explicitly check cluster node status and output useful debug info on failure
         current_nodes=$(kubectl get nodes --no-headers 2>/dev/null || echo "None")
         echo "=== Current Registered Nodes ==="
         echo "$current_nodes"
@@ -81,9 +79,9 @@
     - name: Handle cluster readiness validation failure
       ansible.builtin.fail:
         msg: >
-          Cluster readiness check failed. Expected total nodes:
-          {{ (groups.control_plane | default([]) + groups.workers | default([]) + groups.analyst_workers | default([]) + groups.juiceshop_workers | default([])) | unique | length }}.
-          Ensure all physical nodes are online, properly registered via K3s, and not transiently failing.
+          Cluster readiness check failed. Expected total nodes: 
+          {{ (groups.control_plane | default([]) + groups.workers | default([]) + 
+              groups.analyst_workers | default([]) + groups.juiceshop_workers | default([])) | unique | length }}
       when: >
         (lookup('file', '/tmp/ready_nodes_count.tmp') | trim | int) != (
         (groups.control_plane | default([]) +
