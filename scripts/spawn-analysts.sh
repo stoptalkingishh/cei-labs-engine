@@ -61,7 +61,7 @@ show_status() {
   kubectl get pods -n "${NAMESPACE}" -l app=analyst -o json | jq -r '
     .items[] | 
     "\(.metadata.labels.participant) | \(.status.phase) | \(.spec.containers[0].ports[0].containerPort) | \(.status.podIP)"
-  ' 2>/dev/null | while IFS=' | ' read -r user phase cport pip; do
+  ' 2>/dev/null | while IFS=' | ' read -r user phase _ pip; do
     # Fetching corresponding nodeport translation parameters mapping safely
     sport=$(kubectl get svc -n "${NAMESPACE}" -l participant="${user}" -o jsonpath='{.items[0].spec.ports[0].nodePort}' 2>/dev/null || echo "N/A")
     printf "%-20s | %-12s | %-6s | %-10s\n" "${user}" "${phase}" "${sport}" "${pip}"

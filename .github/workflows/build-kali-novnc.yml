@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5ca514318a742a264031934c573bfa9269609f5 # v3.10.0
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
@@ -47,7 +47,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push
-        uses: docker/build-push-action@ca219fd342d7d8de47ecc213a5ed8e91873c3d28 # v6.16.0
+        uses: docker/build-push-action@v6
         with:
           context: operator/kali-novnc
           platforms: linux/amd64

@@ -78,7 +78,8 @@ jobs:
           if [ -d "k8s/ingress" ] && [ -f "k8s/ingress/traefik-values.yml" ]; then
             echo "[*] Linting Traefik core chart configurations..."
             helm repo add traefik https://traefik.github.io/charts --force-update
-            if helm template traefik traefik/traefik -f k8s/ingress/traefik-values.yml > /dev/null; then
+            # FIXED (Item H002): Added --skip-tests to isolate template validation from cluster API discovery constraints
+            if helm template traefik traefik/traefik -f k8s/ingress/traefik-values.yml --skip-tests > /dev/null; then
               traefik_status="Passed"
             else
               traefik_status="Failed"
@@ -123,7 +124,9 @@ jobs:
         run: |
           if [ -d "k8s" ]; then
             set +e
-            find k8s/ -type f \( -name "*.yml" -o -name "*.yaml" \) | \
+            # Modified find logic to exclude all variants of Helm values configuration files
+            find k8s/ -type f \( -name "*.yml" -o -name "*.yaml" \) \
+              ! -name "*values.yaml" ! -name "*values.yml" | \
             xargs -r kubeconform \
               -strict \
               -ignore-missing-schemas \
@@ -213,7 +216,7 @@ jobs:
       - name: Lint Dockerfiles with hadolint
         id: docker_lint
         continue-on-error: true
-        uses: hadolint/hadolint-action@543e01abec74b12e612a2ee79b5cfa97645eb45d # v3.1.0
+        uses: hadolint/hadolint-action@v3
         with:
           recursive: true
           ignore: DL3002,DL3006,DL3007,DL3008,DL3009,DL3013,DL3015,DL3018,DL3042,DL4006,SC2015,SC2028,DL3059

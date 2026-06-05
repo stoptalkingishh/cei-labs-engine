@@ -26,15 +26,22 @@ init_history() {
 }
 
 log_metrics() {
-    local ts=$(date '+%Y-%m-%d %H:%M:%S')
-    local cpu=$(kubectl top nodes --no-headers 2>/dev/null | awk '{print $2}' | head -n1 | tr -d 'm' || echo 0)
+    local ts
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    local cpu
+    cpu=$(kubectl top nodes --no-headers 2>/dev/null | awk '{print $2}' | head -n1 | tr -d 'm' || echo 0)
     [[ -z "$cpu" ]] && cpu=0
-    local mem=$(kubectl top nodes --no-headers 2>/dev/null | awk '{print $3}' | head -n1 | tr -d 'Mi' || echo 0)
+    local mem
+    mem=$(kubectl top nodes --no-headers 2>/dev/null | awk '{print $3}' | head -n1 | tr -d 'Mi' || echo 0)
     [[ -z "$mem" ]] && mem=0
-    local disk=$(df -h / | tail -n1 | awk '{print $5}' | tr -d '%')
-    local analysts=$(kubectl get pods -n analyst -l app=analyst --no-headers 2>/dev/null | wc -l)
-    local kali=$(kubectl get pods -n analyst --no-headers 2>/dev/null | grep -i kali | wc -l)
-    local load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1 | tr -d ' ')
+    local disk
+    disk=$(df -h / | tail -n1 | awk '{print $5}' | tr -d '%')
+    local analysts
+    analysts=$(kubectl get pods -n analyst -l app=analyst --no-headers 2>/dev/null | wc -l)
+    local kali
+    kali=$(kubectl get pods -n analyst --no-headers 2>/dev/null | grep -i kali | wc -l)
+    local load
+    load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1 | tr -d ' ')
 
     echo "$ts,all,$cpu,$mem,$disk,$analysts,$kali,$load" >> "$HISTORY_CSV"
 
@@ -62,14 +69,16 @@ show_container_resources() {
 
 show_service_health() {
     echo -e "\n${BLUE}=== Service Health ===${NC}"
-    local pending=$(kubectl get pods -A --no-headers 2>/dev/null | grep -E 'Pending|CrashLoopBackOff|Error' | wc -l)
+    local pending
+    pending=$(kubectl get pods -A --no-headers 2>/dev/null | grep -E 'Pending|CrashLoopBackOff|Error' | wc -l)
     [[ $pending -gt 0 ]] && echo -e "${RED}⚠ $pending pods in bad state${NC}" || echo -e "${GREEN}✓ Core services healthy${NC}"
 }
 
 show_network() {
     echo -e "\n${BLUE}=== Network Bandwidth ===${NC}"
     if command -v ifstat &>/dev/null; then
-        local iface=$(ip route | grep default | awk '{print $5}' | head -n1)
+        local iface
+        iface=$(ip route | grep default | awk '{print $5}' | head -n1)
         [[ -n "$iface" ]] && ifstat -i "$iface" 1 4 | tail -n 4
     fi
 }

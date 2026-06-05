@@ -28,7 +28,6 @@ log_warn "Extracting configuration tokens from Ansible Workspace..."
 CTFD_KEY=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('ctfd_secret_key', ''))")
 DB_PASS=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('ctfd_db_password', ''))")
 DB_ROOT=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('ctfd_db_root_password', ''))")
-DOMAIN=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('base_domain', 'ctf.local'))")
 
 if [[ -z "${CTFD_KEY}" || -z "${DB_PASS}" || -z "${DB_ROOT}" ]]; then
   log_error "Failure: Found empty or unconfigured core secrets parameters inside all.yml."

@@ -1,11 +1,14 @@
 FROM kalilinux/kali-rolling:latest
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG VNC_PASSWORD=TrainingPlatform2025
-
-ENV VNC_PASSWORD=${VNC_PASSWORD}
+ARG VNC_PASSWORD
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Validate that the argument is passed dynamically and fail build early if empty
+RUN test -n "$VNC_PASSWORD"
+
+ENV VNC_PASSWORD=${VNC_PASSWORD}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xfce4 \
