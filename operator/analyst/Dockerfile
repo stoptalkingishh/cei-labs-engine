@@ -46,9 +46,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# Create operator user and set password (robust for CI)
+# Create operator user and set password (robust fallback for CI when secret is missing/empty)
 RUN useradd -m -s /bin/bash --no-user-group operator && \
-    echo "operator:${OPERATOR_PASSWORD}" | chpasswd && \
+    PASSWORD="${OPERATOR_PASSWORD:-TrainingPlatform2025}" && \
+    echo "operator:${PASSWORD}" | chpasswd && \
     mkdir -p /etc/sudoers.d && \
     echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator && \
     chmod 0440 /etc/sudoers.d/operator
