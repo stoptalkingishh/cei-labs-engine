@@ -15,7 +15,24 @@ print_header() {
     echo -e "╚══════════════════════════════════════════════════════════╝${NC}"
 }
 
-log() { echo -e "[$(date '+%H:%M:%S')] $1" | tee -a "$LOG_FILE"; }
+# Standardized logging helpers to enforce style consistency across scripts
+log_info()  { echo -e "[$(date '+%H:%M:%S')] ${GREEN}[+]${NC} $*" | tee -a "$LOG_FILE"; }
+log_warn()  { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
+log_error() { echo -e "[$(date '+%H:%M:%S')] ${RED}[-]${NC} $*" | tee -a "$LOG_FILE" >&2; }
+
+verify_dependencies() {
+    local missing_deps=()
+    for cmd in kubectl helm ansible jq curl; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing_deps+=("$cmd")
+        fi
+    done
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        log_error "FATAL: Missing required core dependencies: ${missing_deps[*]}"
+        log_warn "Please install the missing binaries before executing the range platform wizard."
+        exit 1
+    fi
+}
 
 progress_bar() {
     local percent=$1; local width=50
@@ -35,7 +52,7 @@ select_mode() {
         3) MODE="advanced" ;;
         *) MODE="general" ;;
     esac
-    log "${GREEN}Mode selected: $MODE${NC}"
+    log_info "Mode selected: $MODE"
 }
 
 detect_existing() {
@@ -54,8 +71,9 @@ detect_existing() {
 }
 
 main() {
+    verify_dependencies
     print_header
-    log "CEI Labs Installation Started"
+    log_info "CEI Labs Installation Started"
     select_mode
     detect_existing
 
@@ -63,14 +81,21 @@ main() {
     sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends git curl python3-pip unzip jq ifstat sysstat
 
     echo -e "${BLUE}[2/8] Configuration...${NC}"; progress_bar 40
+    # Expanded validation pattern matching to ensure critical deployment parameters exist in addition to baseline versions
+    local config_pattern="k3s_version\|ctfd_version\|multijuicer_version\|deployment_mode\|use_metallb\|multijuicer_max_instances\|multijuicer_ctf_key\|multijuicer_admin_password"
+    
     # Create file if missing, or recreate if it exists but is incomplete (e.g., missing expected structure or keys)
-    if [[ ! -f "$REPO_ROOT/ansible/group_vars/all.yml" ]] || ! grep -q "k3s_version\|ctfd_version\|multijuicer_version" "$REPO_ROOT/ansible/group_vars/all.yml" 2>/dev/null; then
+    if [[ ! -f "$REPO_ROOT/ansible/group_vars/all.yml" ]] || ! grep -q "$config_pattern" "$REPO_ROOT/ansible/group_vars/all.yml" 2>/dev/null; then
         if [[ -f "$REPO_ROOT/ansible/group_vars/all.yml" ]]; then
-            log "${YELLOW}Existing all.yml detected but found to be incomplete. Backing up and renewing from template...${NC}"
-            cp "$REPO_ROOT/ansible/group_vars/all.yml" "$REPO_ROOT/ansible/group_vars/all.yml.bak"
+            log_warn "Existing all.yml detected but found to be incomplete. Backing up and renewing from template..."
+            if cp "$REPO_ROOT/ansible/group_vars/all.yml" "$REPO_ROOT/ansible/group_vars/all.yml.bak" 2>/dev/null; then
+                log_info "Backup created successfully at: $REPO_ROOT/ansible/group_vars/all.yml.bak"
+            else
+                log_error "Failed to back up existing all.yml file"
+            fi
         fi
         cp "$REPO_ROOT/ansible/group_vars/all.yml.example" "$REPO_ROOT/ansible/group_vars/all.yml"
-        log "${YELLOW}all.yml created from template${NC}"
+        log_warn "all.yml created from template"
         [[ $MODE == "guided" ]] && nano "$REPO_ROOT/ansible/group_vars/all.yml"
     fi
 

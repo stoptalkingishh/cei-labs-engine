@@ -19,6 +19,13 @@ DEFAULT_PORT=30001
 DEFAULT_TAG="latest"
 DEFAULT_ORG="your-org"
 
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+
+# Standardized logging helpers to enforce style consistency across scripts
+log_info()  { echo -e "${GREEN}[+]${NC} $*"; }
+log_warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+log_error() { echo -e "${RED}[-]${NC} $*" >&2; }
+
 # FIXED: Sanitized Python inline configurations to utilize escaped double-quotes for variable parsing
 if [[ -f "$VARS_FILE" ]]; then
   BASE_PORT=$(python3 -c "import yaml; c=yaml.safe_load(open(\"${VARS_FILE}\")); print(c.get('analyst_base_port', ${DEFAULT_PORT}))" 2>/dev/null || echo "$DEFAULT_PORT")
@@ -39,14 +46,14 @@ get_bastion_ip() {
 }
 
 teardown_all() {
-  echo "[-] Initializing structural platform namespace wiping routine..."
+  log_warn "Initializing structural platform namespace wiping routine..."
   kubectl delete pods,services -n "${NAMESPACE}" -l app=analyst --timeout=60s || true
-  echo "[+] Cleanup complete. Space cleared successfully."
+  log_info "Cleanup complete. Space cleared successfully."
 }
 
 show_status() {
   echo "═════════════════════════════════════════════════════════════════════"
-  echo "  Active Labs — Dynamic Analyst Provisioning Matrix"
+  echo "   Active Labs — Dynamic Analyst Provisioning Matrix"
   echo "═════════════════════════════════════════════════════════════════════"
   printf "%-20s | %-12s | %-6s | %-10s\n" "Participant" "Pod Status" "Port" "IP Address"
   echo "─────────────────────────────────────────────────────────────────────"
@@ -64,7 +71,7 @@ show_status() {
 
 # ── Route Logic Controller ───────────────────────────────────────────────────
 if [[ $# -eq 0 ]]; then
-  echo "[-] Error: Missing operational argument criteria targets."
+  log_error "Missing operational argument criteria targets."
   echo "Usage: $0 [roster.txt | --teardown | --status]"
   exit 1
 fi
@@ -79,13 +86,13 @@ fi
 
 ROSTER="$1"
 if [[ ! -f "$ROSTER" ]]; then
-  echo "[-] Error: Specified lab target roster file ($ROSTER) could not be resolved."
+  log_error "Specified lab target roster file ($ROSTER) could not be resolved."
   exit 1
 fi
 
 BASTION_IP=$(get_bastion_ip)
-echo "[+] Utilizing target connectivity route gateway: ${BASTION_IP}"
-echo "[*] Initializing cloud infrastructure namespaces..."
+log_info "Utilizing target connectivity route gateway: ${BASTION_IP}"
+log_warn "Initializing cloud infrastructure namespaces..."
 kubectl create namespace "${NAMESPACE}" 2>/dev/null || true
 
 COUNTER=0
@@ -181,4 +188,4 @@ EOF
 
 done < "$ROSTER"
 echo "═════════════════════════════════════════════════════════════════════"
-echo "[+] Active workspace environment configurations provisioned successfully."
+log_info "Active workspace environment configurations provisioned successfully."

@@ -8,6 +8,11 @@ HISTORY_CSV="$REPO_ROOT/status-history.csv"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BLUE='\033[0;34m'; NC='\033[0m'
 
+# Standardized logging helpers to enforce style consistency across scripts
+log_info()  { echo -e "[$(date '+%H:%M:%S')] ${GREEN}[+]${NC} $*" | tee -a "$LOG_FILE"; }
+log_warn()  { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
+log_error() { echo -e "[$(date '+%H:%M:%S')] ${RED}[-]${NC} $*" | tee -a "$LOG_FILE" >&2; }
+
 print_header() {
     clear
     echo -e "${BLUE}╔══════════════════════════════════════════════════════════╗"
@@ -34,7 +39,7 @@ log_metrics() {
     echo "$ts,all,$cpu,$mem,$disk,$analysts,$kali,$load" >> "$HISTORY_CSV"
 
     if [[ $analysts -gt 15 ]]; then
-        echo -e "${RED}[WARNING] High Analyst Load: $analysts containers${NC}" | tee -a "$LOG_FILE"
+        log_error "WARNING: High Analyst Load: $analysts containers"
     fi
 }
 

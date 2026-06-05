@@ -10,10 +10,109 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  validate-yaml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install PyYAML
+        run: pip install PyYAML
+
+      - name: Parse and validate YAML files
+        run: |
+          python3 -c '
+          import os, sys, yaml
+          success = True
+          invalid_files = []
+          for root, dirs, files in os.walk("."):
+              # Skip hidden directories like .git
+              if any(d.startswith(".") for d in root.split(os.sep)):
+                  continue
+              for file in files:
+                  if file.endswith((".yml", ".yaml")):
+                      path = os.path.join(root, file)
+                      try:
+                          with open(path, "r") as f:
+                              # Load all documents if multi-document file
+                              list(yaml.safe_load_all(f))
+                      except Exception as e:
+                          print(f"[-] Invalid YAML format in {path}: {e}", file=sys.stderr)
+                          invalid_files.append(f"{path}: {e}")
+                          success = False
+          if not success:
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write("### ❌ YAML Validation Failed\n")
+                  summary.write("The following files failed parsing validation:\n")
+                  for error in invalid_files:
+                      summary.write(f"- `{error}`\n")
+              sys.exit(1)
+          
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("### ✅ YAML Validation Passed\n")
+              summary.write("All YAML configurations parsed cleanly without structural defects.\n")
+          print("[+] All YAML configurations parsed cleanly.")
+          '
+
+  validate-helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Helm
+        run: |
+          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          chmod 700 get_helm.sh
+          ./get_helm.sh
+
+      - name: Render and validate Helm templates
+        run: |
+          # Dry-run render localized Helm deployment files against baseline project configurations
+          traefik_status="Skipped"
+          multijuicer_status="Skipped"
+          
+          if [ -d "k8s/ingress" ] && [ -f "k8s/ingress/traefik-values.yml" ]; then
+            echo "[*] Linting Traefik core chart configurations..."
+            helm repo add traefik https://traefik.github.io/charts --force-update
+            if helm template traefik traefik/traefik -f k8s/ingress/traefik-values.yml > /dev/null; then
+              traefik_status="Passed"
+            else
+              traefik_status="Failed"
+            fi
+          fi
+          
+          if [ -d "k8s/multijuicer" ] && [ -f "k8s/multijuicer/values.yml" ]; then
+            echo "[*] Linting MultiJuicer chart templates..."
+            if helm template multijuicer oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer -f k8s/multijuicer/values.yml > /dev/null; then
+              multijuicer_status="Passed"
+            else
+              multijuicer_status="Failed"
+            fi
+          fi
+          
+          {
+            echo "### 📦 Helm Template Validation Summary"
+            echo "| Chart Deployment | Validation Status |"
+            echo "| --- | --- |"
+            echo "| Traefik Ingress Route | $traefik_status |"
+            echo "| MultiJuicer Balancer | $multijuicer_status |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          
+          if [ "$traefik_status" = "Failed" ] || [ "$multijuicer_status" = "Failed" ]; then
+            echo "[-] Helm template rendering validation failed."
+            exit 1
+          fi
+          
+          echo "[+] Helm templates rendered and validated successfully."
+
   validate-k8s:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install kubeconform
         run: |
@@ -23,23 +122,44 @@ jobs:
       - name: Validate Kubernetes manifests
         run: |
           if [ -d "k8s" ]; then
+            set +e
             find k8s/ -type f \( -name "*.yml" -o -name "*.yaml" \) | \
             xargs -r kubeconform \
               -strict \
               -ignore-missing-schemas \
               -schema-location default \
-              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' || true
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' > kubeconform_output.txt 2>&1
+            exit_code=$?
+            set -e
+            
+            cat kubeconform_output.txt
+            
+            {
+              echo "### ☸️ Kubernetes Manifest Validation"
+              if [ $exit_code -eq 0 ]; then
+                echo "✅ All Kubernetes manifests are valid according to strict API schema checks."
+              else
+                echo "❌ Kubernetes manifest schema validation detected structural discrepancies:"
+                echo "\`\`\`text"
+                cat kubeconform_output.txt
+                echo "\`\`\`"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+            
+            exit $exit_code
           else
             echo "No k8s directory found, skipping validation."
+            echo "### ☸️ Kubernetes Manifest Validation" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ No \`k8s\` directory located within repository layout. Validation skipped." >> "$GITHUB_STEP_SUMMARY"
           fi
 
   validate-ansible:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5.6.0
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.6.0
         with:
           python-version: '3.11'
 
@@ -59,26 +179,64 @@ jobs:
       - name: Lint Ansible roles and playbooks
         run: |
           if [ -d "ansible" ]; then
-            ansible-lint ansible/ || true
+            set +e
+            ansible-lint ansible/ > ansible_lint_output.txt 2>&1
+            exit_code=$?
+            set -e
+            
+            cat ansible_lint_output.txt
+            
+            {
+              echo "### ⚙️ Ansible Playbook & Role Linting"
+              if [ $exit_code -eq 0 ]; then
+                echo "✅ Ansible configuration rules matched syntax standard conventions cleanly."
+              else
+                echo "❌ Rule discrepancies or structural syntax problems caught by ansible-lint:"
+                echo "\`\`\`text"
+                cat ansible_lint_output.txt
+                echo "\`\`\`"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+            
+            exit $exit_code
           else
             echo "No ansible directory found, skipping linting."
+            echo "### ⚙️ Ansible Playbook & Role Linting" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ No \`ansible\` resource tree detected. Evaluation skipped." >> "$GITHUB_STEP_SUMMARY"
           fi
 
   validate-dockerfiles:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Lint Dockerfiles with hadolint
-        uses: hadolint/hadolint-action@v3.1.0
+        id: docker_lint
+        continue-on-error: true
+        uses: hadolint/hadolint-action@543e01abec74b12e612a2ee79b5cfa97645eb45d # v3.1.0
         with:
           recursive: true
           ignore: DL3002,DL3006,DL3007,DL3008,DL3009,DL3013,DL3015,DL3018,DL3042,DL4006,SC2015,SC2028,DL3059
 
+      - name: Report Dockerfile summary
+        run: |
+          {
+            echo "### 🐳 Dockerfile Quality Lint Summary"
+            if [ "${{ steps.docker_lint.outcome }}" = "success" ]; then
+              echo "✅ Hadolint execution found no optimization deviations in workspace Dockerfiles."
+            else
+              echo "❌ Hadolint structural check flagged container definition optimizations or syntax warnings."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          
+          if [ "${{ steps.docker_lint.outcome }}" != "success" ]; then
+            exit 1
+          fi
+
   validate-scripts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
@@ -86,8 +244,29 @@ jobs:
       - name: Run ShellCheck on all scripts
         run: |
           if [ -d "scripts" ]; then
+            set +e
             find scripts/ -type f -name "*.sh" | \
-            xargs -r shellcheck --shell=bash --external-sources --severity=warning || true
+            xargs -r shellcheck --shell=bash --external-sources --severity=warning > shellcheck_output.txt 2>&1
+            exit_code=$?
+            set -e
+            
+            cat shellcheck_output.txt
+            
+            {
+              echo "### 🐚 Bash Script Analysis (ShellCheck)"
+              if [ $exit_code -eq 0 ]; then
+                echo "✅ All workspace deployment scripts align securely with ShellCheck baseline quality guidelines."
+              else
+                echo "❌ Potential logical pitfalls, portability issues, or shell warnings detected:"
+                echo "\`\`\`text"
+                cat shellcheck_output.txt
+                echo "\`\`\`"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+            
+            exit $exit_code
           else
             echo "No scripts directory found, skipping ShellCheck."
+            echo "### 🐚 Bash Script Analysis (ShellCheck)" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ Scripts root hierarchy tracking directory not found. Check skipped." >> "$GITHUB_STEP_SUMMARY"
           fi

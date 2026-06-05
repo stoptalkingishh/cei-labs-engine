@@ -22,6 +22,13 @@ CTF_KEY="${CTF_KEY:-}"
 JUICESHOP_URL="${JUICESHOP_URL:-http://juiceshop.ctf.local}"
 IMPORT_FILE="/tmp/juice-shop-ctfd-import.zip"
 
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+
+# Standardized logging helpers to enforce style consistency across scripts
+log_info()  { echo -e "${GREEN}[+]${NC} $*"; }
+log_warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+log_error() { echo -e "${RED}[-]${NC} $*" >&2; }
+
 # ── Validate inputs ───────────────────────────────────────────────────────────
 if [[ -z "$CTFD_ADMIN_TOKEN" ]]; then
   read -rsp "CTFd admin token: " CTFD_ADMIN_TOKEN
@@ -33,17 +40,17 @@ if [[ -z "$CTF_KEY" ]]; then
   echo
 fi
 
-echo "[+] Waiting for Juice Shop to be reachable at ${JUICESHOP_URL}..."
+log_info "Waiting for Juice Shop to be reachable at ${JUICESHOP_URL}..."
 for i in $(seq 1 20); do
   if curl -sf "${JUICESHOP_URL}/api/Challenges" > /dev/null 2>&1; then
-    echo "[+] Juice Shop is up."
+    log_info "Juice Shop is up."
     break
   fi
   echo "    Attempt ${i}/20 — waiting 10s..."
   sleep 10
 done
 
-echo "[+] Running juice-shop-ctf-cli..."
+log_info "Running juice-shop-ctf-cli..."
 # juice-shop-ctf-cli prompts for:
 #   - CTF framework: ctfd
 #   - Juice Shop URL
@@ -58,9 +65,9 @@ zip
 ${IMPORT_FILE}
 EOF
 
-echo "[+] Generated import file: ${IMPORT_FILE}"
+log_info "Generated import file: ${IMPORT_FILE}"
 
-echo "[+] Importing into CTFd at ${CTFD_URL}..."
+log_info "Importing into CTFd at ${CTFD_URL}..."
 curl -s -X POST \
   "${CTFD_URL}/api/v1/import" \
   -H "Authorization: Token ${CTFD_ADMIN_TOKEN}" \
@@ -69,8 +76,8 @@ curl -s -X POST \
   | jq '.'
 
 echo ""
-echo "[+] Juice Shop challenges imported into CTFd."
+log_info "Juice Shop challenges imported into CTFd."
 echo "    Verify at: ${CTFD_URL}/admin/challenges"
 echo ""
-echo "    IMPORTANT: All Juice Shop flags are seeded from CTF_KEY."
-echo "    If you change the key in values.yml, re-run this script."
+log_warn "IMPORTANT: All Juice Shop flags are seeded from CTF_KEY."
+log_warn "If you change the key in values.yml, re-run this script."

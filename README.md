@@ -3,6 +3,8 @@ CEI Labs is a modular, multi-tenant cyber range engineered on a lightweight K3s 
 # CEI Labs // CTF Infrastructure Engine
 A self-hosted, progressive cybersecurity training platform built for the President's Cup Cybersecurity Competition (PCCC) pipeline. Flexible K3s topology supporting standalone single-host, dual-host, or high-availability three-node hardware configurations running CTFd, MultiJuicer (OWASP Juice Shop), SSH analyst containers, Kali noVNC workstations, and self-hosted target wrappers.
 ## Confirmed Dependency Versions
+> ⚠️ **Note:** The underlying dependencies below are manually maintained and subject to version drift over time. These versions should be verified periodically against their respective repositories and your localized `ansible/group_vars/all.yml` properties to ensure optimal system stability and security patching before execution.
+
 | Component | Version | Source / Notes |
 |---|---|---|
 | **K3s** | v1.32.5+k3s1 | Stable — Single-server SQLite control plane |
@@ -60,7 +62,7 @@ Before initiating a deployment, update ansible/group_vars/all.yml to reflect you
 ## Quick Start (Post-Hardware Assembly)
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<your-org>/cei-labs-engine
+git clone [https://github.com/](https://github.com/)<your-org>/cei-labs-engine
 cd cei-labs-engine
 
 # 2. Configure inventory and cluster variable parameters
@@ -87,11 +89,3 @@ ansible-playbook -i ansible/inventory.ini ansible/site.yml
 # 7. Audit local operational range state
 kubectl get nodes -o wide
 kubectl get pods -A
-
-```
-## Management Scripts (New)
-### Interactive Tools
- * **./scripts/install.sh** → Guided/General/Advanced installer with progress bars
- * **./scripts/uninstall.sh** → Safe/Full/Nuclear uninstall options
- * **./scripts/repair.sh** → Diagnostics + auto-repair with backups
-All scripts feature colored output, logging, and interactive prompts tailored to user experience level.

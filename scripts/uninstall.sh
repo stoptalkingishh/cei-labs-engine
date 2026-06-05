@@ -14,7 +14,10 @@ print_header() {
     echo -e "╚══════════════════════════════════════════════════════════╝${NC}"
 }
 
-log() { echo -e "[$(date '+%H:%M:%S')] $1" | tee -a "$LOG_FILE"; }
+# Standardized logging helpers to enforce style consistency across scripts
+log_info()  { echo -e "[$(date '+%H:%M:%S')] ${GREEN}[+]${NC} $*" | tee -a "$LOG_FILE"; }
+log_warn()  { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
+log_error() { echo -e "[$(date '+%H:%M:%S')] ${RED}[-]${NC} $*" | tee -a "$LOG_FILE" >&2; }
 
 select_depth() {
     print_header
@@ -28,30 +31,35 @@ select_depth() {
 
 main() {
     print_header
-    echo -e "${RED}⚠️  WARNING: You are about to initiate the uninstallation process for CEI Labs Engine.${NC}"
-    echo -e "${RED}Depending on the chosen depth, this action can permanently remove infrastructure, data, and configurations.${NC}"
+    log_warn "WARNING: You are about to initiate the uninstallation process for CEI Labs Engine."
+    log_warn "Depending on the chosen depth, this action can permanently remove infrastructure, data, and configurations."
     read -p "Type 'DESTROY' to confirm uninstall: " CONFIRM
     [[ "$CONFIRM" != "DESTROY" ]] && exit 0
 
     select_depth
-    log "Uninstall started at depth: $DEPTH_LEVEL"
+    log_info "Uninstall started at depth: $DEPTH_LEVEL"
 
     if [[ $DEPTH_LEVEL == "safe" ]]; then
         # Safe mode preserves stateful resources (PVCs/PVs) by selectively deleting deployments/statefulsets while keeping data intact
+        log_warn "Removing standard workload controllers while preserving stateful resource definitions..."
         kubectl delete deployment,ingress,service,daemonset,horizontalpodautoscaler,cronjob --all -A || true
     fi
 
     if [[ $DEPTH_LEVEL == "full" ]]; then
+        log_warn "Executing full range teardown script..."
         ./scripts/platform-down.sh
     fi
 
     if [[ $DEPTH_LEVEL == "nuclear" ]]; then
+        log_error "Executing nuclear clearance. Purging all underlying cluster systems and configurations..."
         ./scripts/platform-down.sh
-        sudo /usr/local/bin/k3s-uninstall.sh || true
+        if [[ -f "/usr/local/bin/k3s-uninstall.sh" ]]; then
+            sudo /usr/local/bin/k3s-uninstall.sh || true
+        fi
         sudo rm -rf /etc/rancher /var/lib/rancher
     fi
 
-    echo -e "${GREEN}Uninstall completed.${NC}"
+    log_info "Uninstall completed."
 }
 
 main "$@"
