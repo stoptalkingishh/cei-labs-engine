@@ -233,6 +233,11 @@ EOF
 
 main() {
     print_header
+    
+    # Pre-emptively cache sudo permissions interactively via the host's terminal wrapper
+    echo -e "${YELLOW}[!] Authenticating deployment terminal host permissions...${NC}"
+    sudo -v
+
     handle_dependencies
     select_mode
     detect_existing
@@ -246,13 +251,10 @@ main() {
 
     echo -e "\n${BLUE}[4/6] Executing Ansible Host Core Infrastructure Playbook...${NC}"; progress_bar 55
     
-    # Injected inline configuration parameters plus custom prompt regex matching 
-    # to catch custom Ansible sudo streams and prevent execution drops
-    ANSIBLE_PIPELINING=True \
+    # Executes playbook with inherited environment privilege tracking tokens (-E)
+    # This prevents the subshell from throwing new interactive string-matching challenge loops
     ANSIBLE_INTERPRETER_PYTHON=auto_silent \
-    ANSIBLE_TIMEOUT=60 \
-    ANSIBLE_BECOME_PASSWORD_PROMPT="(?i)password[: ]*" \
-    ansible-playbook -i ansible/inventory.ini ansible/site.yml --ask-become-pass
+    sudo -E ansible-playbook -i ansible/inventory.ini ansible/site.yml
 
     echo -e "\n${BLUE}[5/6] Triggering K3s Platform Helm App Deployments...${NC}"; progress_bar 80
     ./scripts/platform-up.sh
