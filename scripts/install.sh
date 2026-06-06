@@ -111,7 +111,7 @@ handle_dependencies() {
                     exit 1
                 fi
                 ;;
-         Taraefik esac
+        esac
 
         if command -v systemctl &>/dev/null; then
             log_info "Enabling and starting Docker daemon service structures..."
@@ -152,7 +152,7 @@ select_mode() {
 }
 
 detect_existing() {
-    if [ -f /etc/rancher/k3s/k3s.yaml ] || command -v kubectl &>/dev/null && kubectl get ns ctfd &>/dev/null 2>&1; then
+    if [ -f /etc/rancher/k3s/k3s.yaml ] || { command -v kubectl &>/dev/null && kubectl get ns ctfd &>/dev/null 2>&1; }; then
         echo -e "${YELLOW}Existing CEI Labs cluster or K3s daemon layer detected!${NC}"
         echo "1) Upgrade Cluster (Preserve state)"
         echo "2) Full Reinstall  (Purge and reinitialize)"
@@ -311,7 +311,7 @@ verify_network_routing() {
     echo ""
     echo -e "${YELLOW}For LAN access without DNS:${NC}"
     echo "  Add to /etc/hosts on each participant machine:"
-    echo "     ${lb_ip}  ctfd.ctf.local juiceshop.ctf.local registry.ctf.local"
+    echo "     ${lb_ip}   ctfd.ctf.local juiceshop.ctf.local registry.ctf.local"
     echo ""
     echo "  Or just use the IP directly: http://${lb_ip}"
 }
@@ -332,10 +332,10 @@ main() {
     print_header
     log_info "CEI Labs Engine Deployment Commencing..."
     
-    echo -e "\n${BLUE}[3/6] Running Local Case File Directory Blueprinting...${NC}"; progress_bar 30
+    echo -e "\n${BLUE}[3/7] Running Local Case File Directory Blueprinting...${NC}"; progress_bar 30
     ./scripts/setup-cases.sh
 
-    echo -e "\n${BLUE}[4/6] Executing Ansible Host Core Infrastructure Playbook...${NC}"; progress_bar 55
+    echo -e "\n${BLUE}[4/7] Executing Ansible Host Core Infrastructure Playbook...${NC}"; progress_bar 55
     
     # Executes playbook with inherited environment privilege tracking tokens (-E)
     # This prevents the subshell from throwing new interactive string-matching challenge loops
@@ -344,7 +344,7 @@ main() {
        -i "$REPO_ROOT/ansible/inventory.ini" \
        "$REPO_ROOT/ansible/site.yml"
 
-    echo -e "\n${BLUE}[5/6] Triggering K3s Platform Helm App Deployments...${NC}"; progress_bar 80
+    echo -e "\n${BLUE}[5/7] Triggering K3s Platform Helm App Deployments...${NC}"; progress_bar 80
     ./scripts/platform-up.sh
 
     echo -e "\n${BLUE}[6/7] Verifying Network Routing Configuration...${NC}"; progress_bar 90

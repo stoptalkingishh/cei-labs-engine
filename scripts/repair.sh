@@ -56,11 +56,9 @@ main() {
         fi
         
         # Verify valid baseline infrastructure orchestrator configuration settings
-        for key in "k3s_version"; do
-            if ! grep -q "$key" "$REPO_ROOT/ansible/group_vars/all.yml"; then
-                log_error "Critical cluster configuration parameter definition missing: $key"
-            fi
-        done
+        if ! grep -q "k3s_version" "$REPO_ROOT/ansible/group_vars/all.yml"; then
+            log_error "Critical cluster configuration parameter definition missing: k3s_version"
+        fi
     fi
 
     # Check 3: Check basic inventory layout file
