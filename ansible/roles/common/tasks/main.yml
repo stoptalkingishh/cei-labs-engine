@@ -53,7 +53,7 @@
     port: "6443"
     proto: tcp
   when: >
-    (groups['control_plane'] is defined and inventory_hostname in groups['control_plane']) or 
+    (groups['control_plane'] is defined and inventory_hostname in groups['control_plane']) or
     (groups['initial_master_node'] is defined and inventory_hostname in groups['initial_master_node']) or
     (groups['master_nodes'] is defined and inventory_hostname in groups['master_nodes'])
 
@@ -76,7 +76,7 @@
     proto: tcp
   loop: ["80", "443"]
   when: >
-    (groups['control_plane'] is defined and inventory_hostname in groups['control_plane']) or 
+    (groups['control_plane'] is defined and inventory_hostname in groups['control_plane']) or
     (groups['initial_master_node'] is defined and inventory_hostname in groups['initial_master_node']) or
     (groups['master_nodes'] is defined and inventory_hostname in groups['master_nodes'])
 
