@@ -27,7 +27,7 @@
     - role: common
 
 - name: Phase 2 - Initialize Control Plane Infrastructure
-  hosts: control_plane
+  hosts: control_plane:initial_master_node:master_nodes
   become: true
   serial: 1
   tags: ["infra", "k3s-server"]
@@ -35,7 +35,7 @@
     - role: k3s-server
 
 - name: Phase 3 - Join Worker and Analyst Nodes to Cluster Runtime
-  hosts: workers:analyst_workers:juiceshop_workers
+  hosts: workers:analyst_workers:juiceshop_workers:worker_nodes
   become: true
   serial: "50%"
   tags: ["infra", "k3s-agent"]
@@ -43,16 +43,18 @@
     - role: k3s-agent
 
 - name: Phase 4 - Provision Core Networking and Bare-Metal Load Balancer
-  hosts: control_plane[0]
+  hosts: "{{ groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first }}"
   tags: ["networking", "metallb"]
   tasks:
     - name: Deploy MetalLB layer-2 infrastructure routing rules
       ansible.builtin.include_role:
         name: metallb
-      when: hostvars[groups['control_plane'][0]]['use_metallb'] | default(true) | bool
+      when: >
+        hostvars[groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first]['use_metallb'] 
+        | default(true) | bool
 
 - name: Phase 5 - Verify Cluster Readiness and Apply Node Labels
-  hosts: control_plane[0]
+  hosts: "{{ groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first }}"
   tags: ["apps", "bootstrap"]
   tasks:
     - name: Validate unique physical cluster nodes are reporting Ready state
@@ -68,7 +70,10 @@
       until: >
         (ready_nodes_check.stdout | trim | int) == (
         (groups.control_plane | default([]) +
+         groups.initial_master_node | default([]) +
+         groups.master_nodes | default([]) +
          groups.workers | default([]) +
+         groups.worker_nodes | default([]) +
          groups.analyst_workers | default([]) +
          groups.juiceshop_workers | default([])) | unique | length
         )
@@ -80,12 +85,16 @@
       ansible.builtin.fail:
         msg: >
           Cluster readiness check failed. Expected total nodes:
-          {{ (groups.control_plane | default([]) + groups.workers | default([]) +
+          {{ (groups.control_plane | default([]) + groups.initial_master_node | default([]) + groups.master_nodes | default([]) +
+              groups.workers | default([]) + groups.worker_nodes | default([]) +
               groups.analyst_workers | default([]) + groups.juiceshop_workers | default([])) | unique | length }}
       when: >
         (ready_nodes_check.stdout | trim | int) != (
         (groups.control_plane | default([]) +
+         groups.initial_master_node | default([]) +
+         groups.master_nodes | default([]) +
          groups.workers | default([]) +
+         groups.worker_nodes | default([]) +
          groups.analyst_workers | default([]) +
          groups.juiceshop_workers | default([])) | unique | length
         )
@@ -94,7 +103,7 @@
       ansible.builtin.shell: |
         kubectl label node {{ item }} role=analyst --overwrite
       loop: "{{ groups.analyst_workers | default([]) }}"
-      when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') != 'single'
+      when: hostvars[groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first]['deployment_mode'] | default('cluster') != 'single'
       changed_when: true
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
@@ -103,7 +112,7 @@
       ansible.builtin.shell: |
         kubectl label node {{ item }} role=juiceshop --overwrite
       loop: "{{ groups.juiceshop_workers | default([]) }}"
-      when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') != 'single'
+      when: hostvars[groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first]['deployment_mode'] | default('cluster') != 'single'
       changed_when: true
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
@@ -112,7 +121,7 @@
       ansible.builtin.shell: |
         kubectl label node --all role=analyst --overwrite
         kubectl label node --all role=juiceshop --overwrite
-      when: hostvars[groups['control_plane'][0]]['deployment_mode'] | default('cluster') == 'single'
+      when: hostvars[groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first]['deployment_mode'] | default('cluster') == 'single'
       changed_when: true
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
