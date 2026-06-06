@@ -28,8 +28,8 @@
 
 - name: Phase 2 - Initialize Control Plane Infrastructure
   hosts: >-
-    {{ groups['control_plane'] | default([]) + 
-       groups['initial_master_node'] | default([]) + 
+    {{ groups['control_plane'] | default([]) +
+       groups['initial_master_node'] | default([]) +
        groups['master_nodes'] | default([]) }}
   become: true
   serial: 1
@@ -39,9 +39,9 @@
 
 - name: Phase 3 - Join Worker and Analyst Nodes to Cluster Runtime
   hosts: >-
-    {{ groups['workers'] | default([]) + 
-       groups['analyst_workers'] | default([]) + 
-       groups['juiceshop_workers'] | default([]) + 
+    {{ groups['workers'] | default([]) +
+       groups['analyst_workers'] | default([]) +
+       groups['juiceshop_workers'] | default([]) +
        groups['worker_nodes'] | default([]) }}
   become: true
   serial: "50%"
@@ -51,8 +51,8 @@
 
 - name: Phase 4 - Provision Core Networking and Bare-Metal Load Balancer
   hosts: >-
-    {{ (groups['control_plane'] | default([]) + 
-        groups['initial_master_node'] | default([]) + 
+    {{ (groups['control_plane'] | default([]) +
+        groups['initial_master_node'] | default([]) +
         groups['master_nodes'] | default([])) | first | default('localhost') }}
   tags: ["networking", "metallb"]
   tasks:
@@ -66,8 +66,8 @@
 
 - name: Phase 5 - Verify Cluster Readiness and Apply Node Labels
   hosts: >-
-    {{ (groups['control_plane'] | default([]) + 
-        groups['initial_master_node'] | default([]) + 
+    {{ (groups['control_plane'] | default([]) +
+        groups['initial_master_node'] | default([]) +
         groups['master_nodes'] | default([])) | first | default('localhost') }}
   tags: ["apps", "bootstrap"]
   tasks:
