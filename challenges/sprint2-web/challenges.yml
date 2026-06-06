@@ -15,6 +15,7 @@ challenges:
       http://natas0.natas.labs.overthewire.org
       Username: natas0
       Password: natas0
+
       The password for the next level is hidden on this page.
       Use your browser's page source viewer to find it.
       Submit the password you find as the flag.
@@ -34,6 +35,33 @@ challenges:
       prerequisites:
         - "🔓 Sprint 1 Complete — Sprint 2 Unlocked"
 
+  - name: "OTW Natas Level 1"
+    author: "OverTheWire"
+    category: "OTW — Natas"
+    description: |
+      Natas Web Security — Level 1
+      Access Level 1 using the password discovered in Level 0 at:
+      http://natas1.natas.labs.overthewire.org
+
+      The developers have blocked right-clicks on this page to protect their code.
+      Find a way to bypass this client-side block and read the page source.
+    value: 150
+    type: standard
+    flags:
+      - flag{view_source_via_url_or_devtools_bypass}
+    tags:
+      - web
+      - client-side
+      - obfuscation
+    hints:
+      - cost: 15
+        content: "If right-click is disabled, try using the standard browser hotkeys: F12 or Ctrl+Shift+I to open Developer Tools."
+      - cost: 30
+        content: "Alternatively, prepend 'view-source:' directly to the URL in your address bar."
+    requirements:
+      prerequisites:
+        - "OTW Natas Level 0"
+
   - name: "JuiceShop Cross-Site Scripting (XSS)"
     author: "OWASP"
     category: "OWASP Juice Shop"
@@ -42,6 +70,7 @@ challenges:
       The Juice Shop is running at: http://juiceshop.ctf.local
       Log in with your assigned credentials and find a page that
       reflects user input without sanitization.
+
       Inject a script tag that triggers an alert box.
       Submit the flag displayed in the MultiJuicer dashboard after
       completing the challenge.
@@ -61,4 +90,30 @@ challenges:
         content: "Try: <script>alert('xss')</script> in the search field."
     requirements:
       prerequisites:
-        - "OTW Natas Level 0"
+        - "OTW Natas Level 1"
+
+  - name: "JuiceShop SQL Injection (SQLi)"
+    author: "OWASP"
+    category: "OWASP Juice Shop"
+    description: |
+      SQL Injection Login Bypass
+      Target Instance: http://juiceshop.ctf.local
+
+      The platform login mechanism dynamically interpolates strings without parameterized queries.
+      Leverage classic SQL comment syntaxes to break the backend query structure and log in as the Administrator without entering a password.
+    value: 300
+    type: standard
+    flags:
+      - flag{sqli_admin_authentication_bypass_validated}
+    tags:
+      - web
+      - sqli
+      - database
+    hints:
+      - cost: 30
+        content: "The administrator email is usually admin@juice-sh.op. What characters drop the rest of an active SQL query block?"
+      - cost: 60
+        content: "Try placing ' or 1=1-- into the email address input field."
+    requirements:
+      prerequisites:
+        - "JuiceShop Cross-Site Scripting (XSS)"

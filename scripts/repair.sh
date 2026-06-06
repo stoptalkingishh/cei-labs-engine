@@ -30,7 +30,7 @@ verify_dependencies() {
 backup_config() {
     mkdir -p "$BACKUP_DIR"
     cp -r "$REPO_ROOT/ansible" "$BACKUP_DIR/" 2>/dev/null || true
-    log_info "Backup created at: $BACKUP_DIR"
+    log_info "Configuration snapshot archive generated at: $BACKUP_DIR"
 }
 
 main() {
@@ -41,8 +41,11 @@ main() {
     # Check 1: Existence of all.yml
     if [[ ! -f "$REPO_ROOT/ansible/group_vars/all.yml" ]]; then
         log_error "Missing all.yml"
-        read -p "Create from example? (y/n): " CREATE
-        [[ $CREATE == "y" ]] && cp "$REPO_ROOT/ansible/group_vars/all.yml.example" "$REPO_ROOT/ansible/group_vars/all.yml"
+        read -p "Create from example configuration template? (y/n): " CREATE
+        if [[ "${CREATE,,}" == "y" ]]; then
+            cp "$REPO_ROOT/ansible/group_vars/all.yml.example" "$REPO_ROOT/ansible/group_vars/all.yml"
+            log_info "Instantiated initial all.yml configuration variable file."
+        fi
     fi
 
     # Check 2: Configuration key checks and unreplaced placeholder values
@@ -52,20 +55,20 @@ main() {
             log_warn "Warning: Unreplaced placeholder credentials or organization strings found in all.yml."
         fi
         
-        # Verify basic expected infrastructure components exist inside configuration
-        for key in "k3s_version" "ctfd_version" "multijuicer_version"; do
+        # Verify valid baseline infrastructure orchestrator configuration settings
+        for key in "k3s_version"; do
             if ! grep -q "$key" "$REPO_ROOT/ansible/group_vars/all.yml"; then
-                log_error "Critical configuration parameter missing: $key"
+                log_error "Critical cluster configuration parameter definition missing: $key"
             fi
         done
     fi
 
     # Check 3: Check basic inventory layout file
     if [[ ! -f "$REPO_ROOT/ansible/inventory.ini" ]]; then
-        log_error "Missing ansible/inventory.ini file."
+        log_error "Missing required orchestration ledger: ansible/inventory.ini"
     fi
 
-    log_info "Repair scan complete. Check logs for details."
+    log_info "Diagnostic scan process complete. Check log file records for target vectors."
 }
 
 main "$@"

@@ -102,14 +102,16 @@ handle_dependencies() {
                 log_warn "Attempting universal fallback installation via Python PIP for Ansible infrastructure..."
                 if command -v pip3 &>/dev/null || command -v pip &>/dev/null; then
                     export PIP_BREAK_SYSTEM_PACKAGES=1
+                    pushd "$REPO_ROOT" >/dev/null
                     pip3 install --upgrade pip setuptools || true
                     pip3 install ansible jq || pip install ansible jq
+                    popd >/dev/null
                 else
                     log_error "FATAL: Python Pip missing. Cannot complete automated fallback deployment."
                     exit 1
                 fi
                 ;;
-        esac
+         Taraefik esac
 
         if command -v systemctl &>/dev/null; then
             log_info "Enabling and starting Docker daemon service structures..."
@@ -231,12 +233,96 @@ EOF
     sed -i "s/multijuicer_admin_password:.*/multijuicer_admin_password: \"$JUICE_PASS\"/" "$REPO_ROOT/ansible/group_vars/all.yml"
 }
 
+setup_ctfd() {
+    print_header
+    echo -e "${YELLOW}CTFd Initialization Required${NC}"
+    echo ""
+
+    # Determine access URL based on deployment mode
+    local ctfd_url
+    if [[ "$MODE" == "simple" ]]; then
+        # Single node: use the MetalLB IP from all.yml if available, else NodePort
+        local lb_ip
+        lb_ip=$(kubectl get svc -n traefik traefik \
+            -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+        if [[ -n "$lb_ip" ]]; then
+            ctfd_url="http://${lb_ip}"
+        else
+            # Fallback to NodePort
+            local node_port
+            node_port=$(kubectl get svc -n traefik traefik \
+                -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}' 2>/dev/null || echo "80")
+            ctfd_url="http://$(hostname -I | awk '{print $1}'):${node_port}"
+        fi
+    else
+        ctfd_url="http://ctfd.ctf.local"
+    fi
+
+    echo -e "${GREEN}CTFd is running at: ${BLUE}${ctfd_url}${NC}"
+    echo ""
+    echo "  Before running juice-shop-ctf-import.sh or challenges-load.sh,"
+    echo "  you must complete the CTFd setup wizard:"
+    echo ""
+    echo "  1. Open ${ctfd_url} in your browser"
+    echo "  2. Complete the setup wizard (name, email, password)"
+    echo "  3. Go to: Admin Panel → Settings → Access Tokens"
+    echo "  4. Create a new token and copy it"
+    echo "  5. Update ctfd_admin_token in ansible/group_vars/all.yml"
+    echo ""
+    read -p "Press ENTER when CTFd setup is complete (or S to skip): " SETUP_CONFIRM
+    if [[ "${SETUP_CONFIRM,,}" != "s" ]]; then
+        log_info "CTFd setup acknowledged."
+        read -p "Paste your CTFd admin token (leave blank to set later): " CTFD_TOKEN
+        if [[ -n "$CTFD_TOKEN" ]]; then
+            sed -i "s/ctfd_admin_token:.*/ctfd_admin_token: \"$CTFD_TOKEN\"/" \
+                "$REPO_ROOT/ansible/group_vars/all.yml"
+            log_info "CTFd admin token saved to all.yml."
+        fi
+    fi
+}
+
+verify_network_routing() {
+    print_header
+    echo -e "${YELLOW}Network Routing Verification${NC}"
+    echo ""
+
+    local lb_ip
+    lb_ip=$(kubectl get svc -n traefik traefik \
+        -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
+
+    echo -e "${BLUE}Service Access Points:${NC}"
+    printf "  %-25s %s\n" "CTFd Scoreboard:" "http://${lb_ip}  (and http://ctfd.ctf.local)"
+    printf "  %-25s %s\n" "MultiJuicer Admin:" "http://${lb_ip}/balancer/admin  (and http://juiceshop.ctf.local/balancer/admin)"
+    printf "  %-25s %s\n" "Container Registry:" "http://registry.ctf.local:5000"
+    echo ""
+
+    if [[ "$lb_ip" == "pending" ]]; then
+        log_warn "MetalLB IP not yet assigned. Check: kubectl get svc -n traefik traefik"
+    else
+        log_info "MetalLB IP assigned: ${lb_ip}"
+        if curl -sf --max-time 5 "http://${lb_ip}" > /dev/null 2>&1; then
+            log_info "CTFd is reachable at http://${lb_ip}"
+        else
+            log_warn "CTFd not yet responding at http://${lb_ip} — may still be starting."
+            log_warn "Check: kubectl get pods -n ctfd"
+        fi
+    fi
+
+    echo ""
+    echo -e "${YELLOW}For LAN access without DNS:${NC}"
+    echo "  Add to /etc/hosts on each participant machine:"
+    echo "     ${lb_ip}  ctfd.ctf.local juiceshop.ctf.local registry.ctf.local"
+    echo ""
+    echo "  Or just use the IP directly: http://${lb_ip}"
+}
+
 main() {
     print_header
     
     # Pre-emptively cache sudo permissions interactively via the host's terminal wrapper
     echo -e "${YELLOW}[!] Authenticating deployment terminal host permissions...${NC}"
     sudo -v
+    cd "$REPO_ROOT"
 
     handle_dependencies
     select_mode
@@ -254,22 +340,40 @@ main() {
     # Executes playbook with inherited environment privilege tracking tokens (-E)
     # This prevents the subshell from throwing new interactive string-matching challenge loops
     ANSIBLE_INTERPRETER_PYTHON=auto_silent \
-    sudo -E ansible-playbook -i ansible/inventory.ini ansible/site.yml
+    sudo -E ansible-playbook \
+       -i "$REPO_ROOT/ansible/inventory.ini" \
+       "$REPO_ROOT/ansible/site.yml"
 
     echo -e "\n${BLUE}[5/6] Triggering K3s Platform Helm App Deployments...${NC}"; progress_bar 80
     ./scripts/platform-up.sh
 
-    echo -e "\n${BLUE}[6/6] Building Sandbox Workspace Analyst Tooling Images...${NC}"; progress_bar 95
-    docker build -t ctf-analyst:latest -f operator/analyst/Dockerfile operator/analyst || log_warn "Docker build skipped or failed. Local development image execution non-blocking."
+    echo -e "\n${BLUE}[6/7] Verifying Network Routing Configuration...${NC}"; progress_bar 90
+    verify_network_routing
+
+    echo -e "\n${BLUE}[7/7] CTFd Initialization Guidance...${NC}"; progress_bar 95
+    setup_ctfd
+
+    local final_ip
+    final_ip=$(kubectl get svc -n traefik traefik \
+        -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "see: kubectl get svc -n traefik traefik")
 
     print_header
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗"
     echo -e "║            CEI Labs Cluster Engine Synchronized!         ║"
     echo -e "╚══════════════════════════════════════════════════════════╝${NC}"
-    echo -e "Deployment complete. Finalize range seeding rules with these utilities:\n"
-    echo -e "  1. Ingest OWASP Challenge Schemes: ${YELLOW}./scripts/juice-shop-ctf-import.sh${NC}"
-    echo -e "  2. Populate Target Curriculum Blocks: ${YELLOW}./scripts/challenges-load.sh${NC}"
-    echo -e "  3. Real-Time Resource Health Dashboard: ${YELLOW}./scripts/status.sh${NC}\n"
+    echo ""
+    echo -e "${BLUE}Access Points:${NC}"
+    echo -e "  CTFd Scoreboard:    ${GREEN}http://${final_ip}${NC}"
+    echo -e "  MultiJuicer Admin:  ${GREEN}http://${final_ip}/balancer/admin${NC}"
+    echo -e "  With DNS:           ${YELLOW}ctfd.ctf.local / juiceshop.ctf.local${NC}"
+    echo ""
+    echo -e "${BLUE}Next Steps:${NC}"
+    echo -e "  1. Complete CTFd setup wizard if not done"
+    echo -e "  2. Import Juice Shop challenges: ${YELLOW}./scripts/juice-shop-ctf-import.sh${NC}"
+    echo -e "  3. Load OTW challenges:          ${YELLOW}./scripts/challenges-load.sh${NC}"
+    echo -e "  4. Spawn analyst workspaces:     ${YELLOW}./scripts/spawn-analysts.sh roster.txt${NC}"
+    echo -e "  5. Check platform status:         ${YELLOW}./scripts/status.sh${NC}"
+    echo ""
 }
 
 main "$@"
