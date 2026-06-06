@@ -56,27 +56,27 @@
   changed_when: true
   tags: [helm]
 
-- name: Ensure .kube directory exists for ubuntu user
+- name: Ensure .kube directory exists for deployment user
   ansible.builtin.file:
-    path: /home/ubuntu/.kube
+    path: "{{ ansible_env.HOME }}/.kube"
     state: directory
-    owner: ubuntu
-    group: ubuntu
+    owner: "{{ ansible_real_user_id }}"
+    group: "{{ ansible_real_group_id }}"
     mode: "0700"
 
-- name: Copy kubeconfig to ubuntu home
+- name: Copy kubeconfig to user home
   ansible.builtin.copy:
     src: /etc/rancher/k3s/k3s.yaml
-    dest: /home/ubuntu/.kube/config
-    owner: ubuntu
-    group: ubuntu
+    dest: "{{ ansible_env.HOME }}/.kube/config"
+    owner: "{{ ansible_real_user_id }}"
+    group: "{{ ansible_real_group_id }}"
     mode: "0600"
     remote_src: true
   tags: [k3s]
 
-- name: Add KUBECONFIG to ubuntu bashrc
+- name: Add KUBECONFIG to user bashrc
   ansible.builtin.lineinfile:
-    path: /home/ubuntu/.bashrc
+    path: "{{ ansible_env.HOME }}/.bashrc"
     regexp: '^export KUBECONFIG='
-    line: "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml"
+    line: "export KUBECONFIG={{ ansible_env.HOME }}/.kube/config"
     state: present
