@@ -27,7 +27,7 @@
     - role: common
 
 - name: Phase 2 - Initialize Control Plane Infrastructure
-  hosts: control_plane:initial_master_node:master_nodes
+  hosts: "{{ groups['control_plane'] | default([]) + groups['initial_master_node'] | default([]) + groups['master_nodes'] | default([]) }}"
   become: true
   serial: 1
   tags: ["infra", "k3s-server"]
@@ -35,7 +35,7 @@
     - role: k3s-server
 
 - name: Phase 3 - Join Worker and Analyst Nodes to Cluster Runtime
-  hosts: workers:analyst_workers:juiceshop_workers:worker_nodes
+  hosts: "{{ groups['workers'] | default([]) + groups['analyst_workers'] | default([]) + groups['juiceshop_workers'] | default([]) + groups['worker_nodes'] | default([]) }}"
   become: true
   serial: "50%"
   tags: ["infra", "k3s-agent"]
@@ -43,18 +43,19 @@
     - role: k3s-agent
 
 - name: Phase 4 - Provision Core Networking and Bare-Metal Load Balancer
-  hosts: "{{ groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first }}"
+  hosts: "{{ (groups['control_plane'] | default([]) + groups['initial_master_node'] | default([]) + groups['master_nodes'] | default([])) | first | default('localhost') }}"
   tags: ["networking", "metallb"]
   tasks:
     - name: Deploy MetalLB layer-2 infrastructure routing rules
       ansible.builtin.include_role:
         name: metallb
       when: >
-        hostvars[groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first]['use_metallb'] 
-        | default(true) | bool
+        groups['initial_master_node'] is defined or
+        groups['control_plane'] is defined or
+        groups['master_nodes'] is defined
 
 - name: Phase 5 - Verify Cluster Readiness and Apply Node Labels
-  hosts: "{{ groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first }}"
+  hosts: "{{ (groups['control_plane'] | default([]) + groups['initial_master_node'] | default([]) + groups['master_nodes'] | default([])) | first | default('localhost') }}"
   tags: ["apps", "bootstrap"]
   tasks:
     - name: Validate unique physical cluster nodes are reporting Ready state
@@ -103,7 +104,8 @@
       ansible.builtin.shell: |
         kubectl label node {{ item }} role=analyst --overwrite
       loop: "{{ groups.analyst_workers | default([]) }}"
-      when: hostvars[groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first]['deployment_mode'] | default('cluster') != 'single'
+      when: >
+        groups['analyst_workers'] is defined and (groups['analyst_workers'] | length > 0)
       changed_when: true
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
@@ -112,7 +114,8 @@
       ansible.builtin.shell: |
         kubectl label node {{ item }} role=juiceshop --overwrite
       loop: "{{ groups.juiceshop_workers | default([]) }}"
-      when: hostvars[groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first]['deployment_mode'] | default('cluster') != 'single'
+      when: >
+        groups['juiceshop_workers'] is defined and (groups['juiceshop_workers'] | length > 0)
       changed_when: true
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
@@ -121,7 +124,8 @@
       ansible.builtin.shell: |
         kubectl label node --all role=analyst --overwrite
         kubectl label node --all role=juiceshop --overwrite
-      when: hostvars[groups['control_plane'] | default(groups['initial_master_node']) | default(groups['master_nodes']) | first]['deployment_mode'] | default('cluster') == 'single'
+      when: >
+        groups['initial_master_node'] is defined and (groups['initial_master_node'] | length > 0)
       changed_when: true
       environment:
         KUBECONFIG: "/etc/rancher/k3s/k3s.yaml"
