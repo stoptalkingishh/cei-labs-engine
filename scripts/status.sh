@@ -31,14 +31,14 @@ log_metrics() {
     [[ -z "$cpu" ]] && cpu=0
     mem=$(kubectl top nodes --no-headers 2>/dev/null | awk '{print $3}' | head -n1 | tr -d 'Mi' || echo 0)
     [[ -z "$mem" ]] && mem=0
-    disk=$(df -h / | tail -n1 | awk '{print $5}' | tr -d '%')
-    analysts=$(kubectl get pods -n analyst -l app=analyst --no-headers 2>/dev/null | wc -l)
-    kali=$(kubectl get pods -n analyst --no-headers 2>/dev/null | grep -i kali | wc -l)
+    disk=$(df -h / | tail -n1 | awk '{print $5}' | tr -d '%' | tr -d '[:space:]')
+    analysts=$(kubectl get pods -n analyst -l app=analyst --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+    kali=$(kubectl get pods -n analyst --no-headers 2>/dev/null | grep -i kali | wc -l | tr -d '[:space:]')
     load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1 | tr -d ' ' || echo "0.00")
 
     echo "$ts,all,$cpu,$mem,$disk,$analysts,$kali,$load" >> "$HISTORY_CSV"
 
-    if [[ $analysts -gt 15 ]]; then
+    if [[ "$analysts" -gt 15 ]]; then
         log_error "WARNING: High Analyst Load: $analysts containers"
     fi
 }
@@ -82,8 +82,8 @@ show_service_routing() {
     printf "  %-22s -> %s\n" "Internal Core Registry" "http://${lb_ip}:5000"
     
     echo -e "\n  ${YELLOW}Active Dynamic Ingress Routes (Traefik Map):${NC}"
-    if kubectl get ingressroutes -A &>/dev/null; then
-        kubectl get ingressroutes -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,MATCH:.spec.routes[*].match" | sed 's/^/    /'
+    if kubectl get ingressroute.traefik.io -A &>/dev/null; then
+        kubectl get ingressroute.traefik.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,MATCH:.spec.routes[*].match" | sed 's/^/    /'
     else
         echo "    No custom IngressRoute definitions discovered."
     fi
@@ -93,16 +93,17 @@ show_service_routing() {
 show_cluster_health() {
     echo -e "${BLUE}=== 3. Microservice Pod Health Context ===${NC}"
     
-    # Calculate pod statuses across core workspaces
+    # Calculate pod statuses across core workspaces and safely strip whitespaces
     local running pending crashed
-    running=$(kubectl get pods -A --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
-    pending=$(kubectl get pods -A --field-selector=status.phase=Pending --no-headers 2>/dev/null | wc -l)
-    crashed=$(kubectl get pods -A --no-headers 2>/dev/null | grep -E 'CrashLoopBackOff|Error|ImagePullBackOff' | wc -l || echo 0)
+    running=$(kubectl get pods -A --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+    pending=$(kubectl get pods -A --field-selector=status.phase=Pending --no-headers 2>/dev/null | wc -l | tr -d '[:space:]')
+    crashed=$(kubectl get pods -A --no-headers 2>/dev/null | grep -E 'CrashLoopBackOff|Error|ImagePullBackOff' | wc -l | tr -d '[:space:]' || echo 0)
+    [[ -z "$crashed" ]] && crashed=0
 
     printf "  Running Pods Pool : %s\n" "$running"
     printf "  Pending Pods Pool : %s\n" "$pending"
     
-    if [[ $crashed -gt 0 ]]; then
+    if [[ "$crashed" -gt 0 ]]; then
         printf "  Degraded Pod State: ${RED}%s pods in failed status loops${NC}\n" "$crashed"
         echo -e "  ${RED}Targeting Fault Vectors:${NC}"
         kubectl get pods -A --no-headers 2>/dev/null | grep -E 'CrashLoopBackOff|Error|ImagePullBackOff' | awk '{print "    - ["$1"] "$2" ("$4")"}'
@@ -134,14 +135,19 @@ show_ctfd_reachability() {
 show_analyst_workspaces() {
     echo -e "${BLUE}=== 5. Ephemeral Student Analyst Workspaces ===${NC}"
     
-    local running_ubuntu running_kali
-    running_ubuntu=$(kubectl get pods -n analyst -l app=analyst --no-headers 2>/dev/null | grep -v -i kali | grep -c "Running" || echo 0)
-    running_kali=$(kubectl get pods -n analyst --no-headers 2>/dev/null | grep -i kali | grep -c "Running" || echo 0)
+    local running_ubuntu running_kali total_workspaces
+    running_ubuntu=$(kubectl get pods -n analyst -l app=analyst --no-headers 2>/dev/null | grep -v -i kali | grep -c "Running" | tr -d '[:space:]' || echo 0)
+    running_kali=$(kubectl get pods -n analyst --no-headers 2>/dev/null | grep -i kali | grep -c "Running" | tr -d '[:space:]' || echo 0)
+    
+    # Ensure variables default to 0 if an empty string slip occurs
+    running_ubuntu=${running_ubuntu:-0}
+    running_kali=${running_kali:-0}
+    total_workspaces=$((running_ubuntu + running_kali))
 
     printf "  Active Dedicated Ubuntu Hosts: %s\n" "$running_ubuntu"
     printf "  Active Graphical Kali Instances: %s\n" "$running_kali"
     
-    if [[ $((running_ubuntu + running_kali)) -gt 0 ]]; then
+    if [[ "$total_workspaces" -gt 0 ]]; then
         echo -e "\n  ${YELLOW}Active Sandbox Node Directory Assignments:${NC}"
         printf "    %-15s %-35s %-12s\n" "NAMESPACE" "POD NAME" "STATUS"
         kubectl get pods -n analyst -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,STATUS:.status.phase" --no-headers | sed 's/^/    /'

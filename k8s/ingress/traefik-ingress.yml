@@ -1,11 +1,7 @@
 ---
 # k8s/ingress/traefik-ingress.yml
 # Traefik IngressRoute definitions for all platform services.
-# Routes match both the .ctf.local FQDN and the direct LAN IP (192.168.1.200).
-# This allows headless access via http://192.168.1.200 without /etc/hosts.
-#
-# If your MetalLB IP is different, update the IP in each match rule below
-# to match the EXTERNAL-IP shown by: kubectl get svc -n traefik traefik
+# Routes match both the .ctf.local FQDN and direct LAN IP routes.
 
 # CTFd IngressRoute
 apiVersion: traefik.io/v1alpha1
@@ -18,7 +14,7 @@ spec:
     - web
     - websecure
   routes:
-    - match: Host(`ctfd.ctf.local`) || Host(`192.168.1.200`)
+    - match: Host(`ctfd.ctf.local`) || HostRegexp(`{ip:[0-9.]+}`)
       kind: Rule
       services:
         - name: ctfd
@@ -38,7 +34,7 @@ spec:
     - web
     - websecure
   routes:
-    - match: Host(`juiceshop.ctf.local`) || (Host(`192.168.1.200`) && PathPrefix(`/balancer`))
+    - match: Host(`juiceshop.ctf.local`) || (HostRegexp(`{ip:[0-9.]+}`) && PathPrefix(`/balancer`))
       kind: Rule
       services:
         - name: multijuicer

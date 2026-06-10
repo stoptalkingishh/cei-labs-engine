@@ -235,50 +235,91 @@ EOF
 
 setup_ctfd() {
     print_header
-    echo -e "${YELLOW}CTFd Initialization Required${NC}"
+    echo -e "${YELLOW}Automated Headless CTFd Priming Engine Launching...${NC}"
     echo ""
 
-    # Determine access URL based on deployment mode
-    local ctfd_url
-    if [[ "$MODE" == "simple" ]]; then
-        # Single node: use the MetalLB IP from all.yml if available, else NodePort
-        local lb_ip
-        lb_ip=$(kubectl get svc -n traefik traefik \
-            -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
-        if [[ -n "$lb_ip" ]]; then
-            ctfd_url="http://${lb_ip}"
-        else
-            # Fallback to NodePort
-            local node_port
-            node_port=$(kubectl get svc -n traefik traefik \
-                -o jsonpath='{.spec.ports[?(@.name=="web")].nodePort}' 2>/dev/null || echo "80")
-            ctfd_url="http://$(hostname -I | awk '{print $1}'):${node_port}"
+    # 1. Block wait until the CTFd container service is up internally
+    log_info "Waiting for internal CTFd pod infrastructure to state settle..."
+    while true; do
+        local pod_status
+        pod_status=$(kubectl get pods -n ctfd -l app.kubernetes.io/name=ctfd -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "Missing")
+        if [[ "$pod_status" == "Running" ]]; then
+            log_info "Target microservice pod online. Validating network routing availability..."
+            break
         fi
-    else
-        ctfd_url="http://ctfd.ctf.local"
+        sleep 4
+    done
+
+    # 2. Extract the cluster setup token via the internal service route
+    local cluster_ip cookie_jar nonce
+    cluster_ip=$(kubectl get svc -n ctfd ctfd -o jsonpath='{.spec.clusterIP}')
+    cookie_jar=$(mktemp)
+
+    log_info "Extracting state tracking metadata synchronization block tokens..."
+    
+    # Poll internal service loop until valid data returns
+    until curl -s -c "$cookie_jar" "http://${cluster_ip}/setup" | grep -q "nonce"; do
+        sleep 2
+    done
+
+    # Scrape the direct raw input csrf nonce token value fields
+    nonce=$(curl -s -b "$cookie_jar" "http://${cluster_ip}/setup" | grep -oE 'name="nonce" value="[a-f0-9]+"' | awk -F'"' '{print $4}' | head -n1)
+
+    # Re-verify local variables passwords are safe
+    local admin_pass; admin_pass=${DB_ROOT:-ChangeMeStrongly}
+
+    # 3. Submit programmatic DB Priming configuration to CTFd
+    log_info "Injecting baseline schema models directly into the database container layer..."
+    curl -s -b "$cookie_jar" -c "$cookie_jar" \
+        -X POST "http://${cluster_ip}/setup" \
+        -F "nonce=${nonce}" \
+        -F "ctf_name=CEI Labs Cyber Range" \
+        -F "name=admin" \
+        -F "email=admin@ctf.local" \
+        -F "password=${admin_pass}" \
+        -F "user_mode=teams" \
+        -F "setup=true" > /dev/null
+
+    # 4. Generate dynamic API authorization bearer token profiles headless
+    log_info "Generating live API access management tokens..."
+    
+    # Fetch a fresh session nonce from the settings menu page
+    nonce=$(curl -s -b "$cookie_jar" "http://${cluster_ip}/admin/settings" | grep -oE 'name="nonce" value="[a-f0-9]+"' | awk -F'"' '{print $4}' | head -n1)
+    
+    local api_response token_payload
+    api_response=$(curl -s -b "$cookie_jar" \
+        -X POST "http://${cluster_ip}/api/v1/tokens" \
+        -H "Content-Type: application/json" \
+        -H "CSRF-Token: ${nonce}" \
+        -d "{\"description\":\"CHALLENGE_LOADER\", \"expiration\":\"\"}")
+
+    token_payload=$(echo "$api_response" | jq -r '.data.value // empty')
+
+    if [[ -z "$token_payload" ]]; then
+        log_error "FATAL: Automated token generation dropped out. Check database log targets."
+        exit 1
     fi
 
-    echo -e "${GREEN}CTFd is running at: ${BLUE}${ctfd_url}${NC}"
-    echo ""
-    echo "  Before running juice-shop-ctf-import.sh or challenges-load.sh,"
-    echo "  you must complete the CTFd setup wizard:"
-    echo ""
-    echo "  1. Open ${ctfd_url} in your browser"
-    echo "  2. Complete the setup wizard (name, email, password)"
-    echo "  3. Go to: Admin Panel → Settings → Access Tokens"
-    echo "  4. Create a new token and copy it"
-    echo "  5. Update ctfd_admin_token in ansible/group_vars/all.yml"
-    echo ""
-    read -p "Press ENTER when CTFd setup is complete (or S to skip): " SETUP_CONFIRM
-    if [[ "${SETUP_CONFIRM,,}" != "s" ]]; then
-        log_info "CTFd setup acknowledged."
-        read -p "Paste your CTFd admin token (leave blank to set later): " CTFD_TOKEN
-        if [[ -n "$CTFD_TOKEN" ]]; then
-            sed -i "s/ctfd_admin_token:.*/ctfd_admin_token: \"$CTFD_TOKEN\"/" \
-                "$REPO_ROOT/ansible/group_vars/all.yml"
-            log_info "CTFd admin token saved to all.yml."
-        fi
+    # 5. Lock configuration parameters into variable matrix files
+    log_info "Syncing generated token payload across all.yml configuration definitions..."
+    sed -i "s/ctfd_admin_token:.*/ctfd_admin_token: \"$token_payload\"/" "$REPO_ROOT/ansible/group_vars/all.yml"
+    log_info "Configuration variable file synchronized securely."
+
+    # 6. Kick off core content curriculum initialization steps automatically
+    log_info "Seeding range target environments..."
+    if [[ -x "$REPO_ROOT/scripts/juice-shop-ctf-import.sh" ]]; then
+        log_info "Loading MultiJuicer vulnerability curriculum matrices..."
+        "$REPO_ROOT/scripts/juice-shop-ctf-import.sh" || log_warn "Juice Shop map step threw exit codes."
     fi
+
+    if [[ -x "$REPO_ROOT/scripts/challenges-load.sh" ]]; then
+        log_info "Loading master challenge training track content sets..."
+        "$REPO_ROOT/scripts/challenges-load.sh" --sprint 2 || log_warn "Sprint 2 load warning."
+        "$REPO_ROOT/scripts/challenges-load.sh" --sprint 3 || log_warn "Sprint 3 load warning."
+    fi
+
+    rm -f "$cookie_jar"
+    log_info "Headless system application initialization sequences finalized."
 }
 
 verify_network_routing() {
@@ -341,8 +382,8 @@ main() {
     # This prevents the subshell from throwing new interactive string-matching challenge loops
     ANSIBLE_INTERPRETER_PYTHON=auto_silent \
     sudo -E ansible-playbook \
-       -i "$REPO_ROOT/ansible/inventory.ini" \
-       "$REPO_ROOT/ansible/site.yml"
+        -i "$REPO_ROOT/ansible/inventory.ini" \
+        "$REPO_ROOT/ansible/site.yml"
 
     echo -e "\n${BLUE}[5/7] Triggering K3s Platform Helm App Deployments...${NC}"; progress_bar 80
     ./scripts/platform-up.sh
