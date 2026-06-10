@@ -1,245 +1,402 @@
-# cei-labs-engine
+# CEI Labs Engine
 
-CEI Labs is a modular, multi-tenant cyber range engineered on a lightweight K3s mini-PC cluster. Built to decouple core infrastructure from individual modules, CEI Labs functions as an evolving platform capable of orchestrating diverse capture-the-flag environments, threat hunting sandboxes, and deep network analysis pipelines.
+## Analyst Training Range & CTF Infrastructure Platform
 
-# CEI Labs // CTF Infrastructure Engine
+CEI Labs Engine is a self-hosted analyst training range designed to support technical skill development through progressively challenging hands-on exercises.
 
-A self-hosted, progressive cybersecurity training platform built for the President's Cup Cybersecurity Competition (PCCC) pipeline. Cross-platform, OS-independent K3s topology supporting standalone single-host, dual-host, or high-availability three-node configurations running CTFd, MultiJuicer (OWASP Juice Shop), SSH analyst containers, Kali noVNC workstations, and self-hosted target wrappers.
+Built on Kubernetes (K3s), CEI Labs provides a scalable platform for hosting Capture-the-Flag (CTF) events, analyst development programs, and competition preparation exercises.
 
-## Core System Operating System Baselines
-
-> 🚨 **Critical OS Requirement:** The CEI Labs Engine relies heavily on native Linux kernel primitives (cgroups, namespaces, and iptables routing architectures) to manage container isolation and cluster networking. **It cannot be deployed directly on bare-metal Windows or macOS.** ### 1. Single-Node Deployment Baseline
-
-* **Native Environment:** A single physical machine running a standard Linux distribution (Kernel 5.15+).
-* **Non-Linux Fallback:** If your primary workstation runs Windows or macOS, you **must** provision a Linux Virtual Machine using a local hypervisor (e.g., Proxmox VE, VirtualBox, VMware Workstation, Hyper-V, or Parallels) allocated with the minimum hardware specifications outlined below.
-
-### 2. Multi-Node Deployment Baseline (Dual / Cluster)
-
-* **Native Distributed Environment:** Separate physical or virtual target machines, each running an independent instance of a Linux operating system distribution. All target nodes must share a unified Local Area Network (LAN) with static IP assignments.
-* **Hypervisor/Cloud Environments:** Can be fully orchestrated across virtualized infrastructure environments (e.g., Proxmox VE, VMware ESXi, AWS VPC, or Google Cloud Compute Engine) by spinning up the required count of independent Linux minimal server instances.
-* **Supported Distributions:** The automation scripts handle multi-OS provisioning transparently across **Ubuntu/Debian (`apt`)**, **RHEL/Fedora/Rocky Linux (`dnf`)**, and **Arch Linux (`pacman`)**.
+The platform is designed to support users ranging from intelligence analysts with limited technical experience to advanced cyber practitioners preparing for competition and operational environments.
 
 ---
 
-## Confirmed Dependency Versions
+# Project Goals
 
-| Component | Version | Source / Notes |
-| --- | --- | --- |
-| **K3s** | v1.32.5+k3s1 | Stable — Single-server SQLite control plane |
-| **Helm** | v4.2.0 | Feature release — Uses Server-Side Apply (SSA) |
-| **CTFd** | v3.8.2 | Latest stable — Security patched |
-| **MultiJuicer** | v10.0.0 | Latest stable — Root-level parameter schema layout |
-| **OWASP Juice Shop** | v17+ | Dynamic deployment via MultiJuicer |
-| **MetalLB** | latest | Bare-metal Layer 2 LoadBalancer pool |
-| **Traefik** | v3.x | Managed Helm Ingress handling dedicated external TLS routing |
-| **MariaDB** | 10.11 | Pinned PVC storage backing ctfd-db |
-| **Redis** | 7-alpine | Banking CTFd caching layer |
-| **Linux Agnostic** | Kernel 5.15+ | Supported across Debian/Ubuntu, RHEL/Fedora, and Arch distributions |
+## Current Goal
 
----
+Deliver a stable analyst-focused training platform capable of supporting a live CTF event.
 
-## Target Environment Allocation Profiles
+The immediate focus is providing:
 
-Before initiating a deployment, update `ansible/group_vars/all.yml` to reflect your target environment resource allocations. Profiles scale based on expected concurrent training cohorts:
-
-| Deployment Mode | Managed Host Nodes | Target vCPUs | Baseline RAM | Target Storage Size | Recommended Group Minimum |
-| --- | --- | --- | --- | --- | --- |
-| **single** | 1 Node (Combined) | 4 Cores | 16 GB | 100 GB SSD | Evaluation / Up to 10 Users |
-| **dual** | 2 Nodes (Segregated) | 4 + 4 Cores | 16 + 16 GB | 100 + 100 GB SSD | Mid-Scale / Up to 20 Users |
-| **cluster** | 3 Nodes (HA Dedicated) | 4 + 4 + 4 Cores | 32 + 16 + 16 GB | 256 + 100 + 100 GB SSD | Enterprise / Up to 30 Users |
+* Reliable CTF hosting
+* Browser-based analyst workstations
+* Progressive technical learning paths
+* Competition management through CTFd
+* President's Cup preparation exercises
 
 ---
 
-## Infrastructure Layout & Cluster Architecture Topology
+## Future Vision
+
+Following the initial event, CEI Labs will expand into a broader training ecosystem supporting:
+
+* SOC Analyst Training
+* Threat Hunting Exercises
+* Digital Forensics Labs
+* Cyber Threat Intelligence (CTI)
+* SIGINT-Oriented Challenges
+* CYBINT-Oriented Challenges
+* Intelligence Analysis Exercises
+* Custom Scenario-Based Training
+
+These capabilities are part of the long-term roadmap and are not required for the current event deployment.
+
+---
+
+# Training Tracks
+
+The current curriculum is organized around progressive learning tracks designed to accommodate multiple experience levels.
+
+## Foundations Track
+
+Based primarily on OverTheWire Bandit.
+
+Focus Areas:
+
+* Linux Fundamentals
+* Command Line Navigation
+* SSH
+* File Permissions
+* Bash Usage
+* System Enumeration
+
+Target Audience:
+
+* Intelligence Analysts
+* New Cyber Personnel
+* Non-Technical Users
+* Entry-Level Participants
+
+Objective:
+
+Develop confidence operating in Linux environments and understanding basic system concepts.
+
+---
+
+## Operations Track
+
+Based primarily on OverTheWire Natas.
+
+Focus Areas:
+
+* Web Applications
+* HTTP
+* Authentication
+* Cookies
+* Sessions
+* Basic Reconnaissance
+
+Target Audience:
+
+* Technical Analysts
+* SOC Personnel
+* Intermediate Participants
+
+Objective:
+
+Develop familiarity with common web technologies and application security concepts.
+
+---
+
+## Analysis Track
+
+Based primarily on OverTheWire Leviathan.
+
+Focus Areas:
+
+* Enumeration
+* Investigation
+* Privilege Concepts
+* Binary Interaction
+* Analytical Problem Solving
+
+Target Audience:
+
+* Advanced Users
+* Cyber Practitioners
+* Competition Participants
+
+Objective:
+
+Develop the ability to solve unfamiliar technical problems using analytical methods.
+
+---
+
+# Competition Preparation
+
+The platform is intended to support preparation for events such as the President's Cup Cybersecurity Competition.
+
+Planned challenge categories include:
+
+* Linux
+* Networking
+* Web
+* Forensics
+* Reverse Engineering
+* Cryptography
+* OSINT
+* Threat Analysis
+
+Additional challenge content will be added over time as the platform matures.
+
+---
+
+# Core Platform Components
+
+The current CEI Labs deployment includes:
+
+| Component          | Purpose                             |
+| ------------------ | ----------------------------------- |
+| K3s                | Lightweight Kubernetes Platform     |
+| CTFd               | Competition Management Platform     |
+| MultiJuicer        | Dynamic OWASP Juice Shop Deployment |
+| OWASP Juice Shop   | Web Security Training Environment   |
+| Kali noVNC         | Browser-Based Analyst Workstations  |
+| Analyst Containers | SSH-Based Training Environments     |
+| MariaDB            | Persistent Application Database     |
+| Redis              | Caching and Session Management      |
+| MetalLB            | Bare-Metal Load Balancing           |
+| Traefik            | Ingress and Routing                 |
+
+---
+
+# Supported Deployment Models
+
+CEI Labs supports multiple deployment architectures.
+
+## Single Node
+
+Recommended for:
+
+* Development
+* Testing
+* Small Training Events
+
+Resources:
+
+* 4 CPU Cores
+* 16 GB RAM
+* 100 GB SSD
+
+Supports approximately:
+
+* Up to 10 concurrent users
+
+---
+
+## Dual Node
+
+Recommended for:
+
+* Small Team Exercises
+* Department Training
+
+Resources:
+
+* 8 CPU Cores Total
+* 32 GB RAM Total
+
+Supports approximately:
+
+* Up to 20 concurrent users
+
+---
+
+## Three Node Cluster
+
+Recommended for:
+
+* Production Events
+* Competition Hosting
+
+Resources:
+
+* 12 CPU Cores Total
+* 64 GB RAM Total
+
+Supports approximately:
+
+* Up to 30 concurrent users
+
+---
+
+# High-Level Architecture
+
+```text
+                        Internet
+                            │
+                            ▼
+                        Traefik
+                            │
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+        ▼                   ▼                   ▼
+      CTFd            MultiJuicer         Workstations
+        │                   │                   │
+        ▼                   ▼                   ▼
+     MariaDB          Juice Shop Pods      Kali / SSH
+        │
+        ▼
+      Redis
 
 ```
-┌─────────────────────────────┐   ┌─────────────────────────────┐
-│  NODE 1 — Control Plane     │   │  NODE 2 — Juice Shop Workload│
-│  Minimum: 4 vCPU / 32GB RAM │   │  Minimum: 4 vCPU / 16GB RAM │
-│  Baseline: Any Linux OS     │   │  Baseline: Any Linux OS     │
-│                             │   │                             │
-│  - K3s Server (Leader)      │   │  - K3s Agent Node           │
-│  - CTFd + MariaDB (PVC)     │   │  - Node Label: role=juiceshop│
-│  - Local Registry (PVC)     │   │  - MultiJuicer Instances    │
-│  - Traefik / MetalLB        │   │     (Dynamic scaled pods)   │
-└─────────────────────────────┘   └─────────────────────────────┘
-┌─────────────────────────────┐
-│  NODE 3 — Analyst + Targets │
-│  Minimum: 4 vCPU / 16GB RAM │
-│  Baseline: Any Linux OS     │
-│                             │
-│  - K3s Agent Node           │
-│  - Node Label: role=analyst │
-│  - SSH Analyst Containers   │
-│  - Kali noVNC Workstations  │
-│  - Self-Hosted PCCC Targets │
-└─────────────────────────────┘
 
+---
+
+# Operating System Requirements
+
+## Supported Linux Distributions
+
+* Ubuntu
+* Debian
+* Rocky Linux
+* Fedora
+* Arch Linux
+
+Kernel Version:
+
+```text
+5.15+
 ```
 
 ---
 
-## Training Sprint Structure (CTFd Gated)
+## Non-Linux Hosts
 
-### Sprint 1 — Foundational Fluency (UNLOCKED)
+Windows and macOS users must deploy CEI Labs within a Linux virtual machine.
 
-* **Labs:** OverTheWire Bandit (0–15), CmdChallenge (1–20)
-* **Mechanism:** External targets with static flag verification.
-* *Gating:* Passwords from Bandit 15 and final CmdChallenge unlock Sprint 2.
+Supported Hypervisors:
 
-### Sprint 2 — Systems, Web & Forensics (LOCKED)
-
-* **Labs:** OverTheWire Bandit (16–34), Natas (0–15), Krypton, Leviathan
-* **Self-Hosted:** OWASP Juice Shop (100+ challenges via MultiJuicer), PCAP/Log Forensics
-* *Gating:* Requires Sprint 1 complete + 25 Juice Shop flags + 5 PCAP challenges.
-
-### Sprint 3 — Advanced Operations (LOCKED)
-
-* **Labs:** OverTheWire Narnia & Behemoth (Binary Exploitation), Natas (16–34)
-* **Self-Hosted:** OWASP crAPI (Shared instance), PCCC Skilling Labs, Historical PCCC Scenarios.
-* *Destination:* Open matrix sandbox; no downstream restrictions.
+* Proxmox
+* VMware
+* Hyper-V
+* VirtualBox
+* Parallels
 
 ---
 
-## Quick Start (OS-Independent Interactive Installer)
+# Quick Start
 
-The range engine features a portable deployment wizard (`scripts/install.sh`) that dynamically inspects your Linux environment, detects the native package management architecture, handles host dependency injection, and configures cluster variables mid-flight.
-
-### 1. Retrieve the Repository Workspace
+Clone the repository:
 
 ```bash
 git clone https://github.com/stoptalkingishh/cei-labs-engine.git
 cd cei-labs-engine
-
 ```
 
-### 2. Execute the Provisioning Pipeline
-
-Grant execution privileges across the script utilities tree, prepare your localized case volume storage mounts, and trigger the installer:
+Prepare scripts:
 
 ```bash
 chmod +x scripts/*.sh
+```
 
-# Establish forensic storage layers and user share paths
+Initialize case storage:
+
+```bash
 ./scripts/setup-cases.sh
+```
 
-# Run the central interactive configuration wizard
+Launch the installation wizard:
+
+```bash
 ./scripts/install.sh
-
 ```
 
-### 3. Native Package Mapping & Fallback Architecture
+The installer will:
 
-The initialization pipeline intelligently maps dependency footprints depending on what ecosystem your host machine operates under:
+* Detect your operating system
+* Install required dependencies
+* Configure K3s
+* Configure Kubernetes services
+* Configure CTFd
+* Configure MultiJuicer
+* Configure supporting infrastructure
 
-* **Debian / Ubuntu Systems (apt):** Configures stable base repositories and patches tooling via advanced packaging utilities.
-* **Red Hat / Fedora / Rocky Linux (dnf):** Pulls required enterprise utilities, scales repository mirrors, and resolves specific sysstat/moby tracking binary names.
-* **Arch Linux (pacman):** Synchs database indices and provisions rolling infrastructure dependencies natively via standard pacman targets.
-* **Universal Fallback Model:** If a standard package manager is absent, the execution layer abstracts dependency compilation to localized Python Pip runtime variables (`PIP_BREAK_SYSTEM_PACKAGES=1`) to anchor Ansible and jq without interrupting OS integrity.
+---
 
-### 4. Interactive Configuration Options
+# Initial CTFd Configuration
 
-When running the wizard, you will step through the following dynamic prompts:
+After deployment:
 
-* **Dependency Management:** Choose Automated Install to let the engine provision your OS-specific packages, or select Manual Validation to run a binary audit against a custom pre-built environment.
-* **Orchestration Complexity Profiles:**
-* **Simple Mode:** Tailored for local virtual machines or rapid environment evaluations. Bypasses distributed networking blocks, locks host targets to a localized localhost array, and applies resource-light parameters.
-* **Advanced Mode:** Unlocks full distributed multi-host topologies (single/dual/cluster), handles layer-2 load balancing configuration flags (MetalLB), and safely spawns an available shell editor text terminal environment (vi or nano) to let you map nodes onto your inventory space directly.
+1. Open the CTFd web interface.
+2. Complete the initial setup wizard.
+3. Create an administrator account.
+4. Generate an API token.
+5. Add the token to:
 
+```yaml
+ansible/group_vars/all.yml
+```
 
-* **Security Token Customization Matrix:** Prompts you live to inject unique administrative values (CTFd application secret strings, MariaDB storage backend user passwords, and MultiJuicer control panel master keys) instead of relying on unsafe static defaults.
-
-### 5. Curriculum Ingestion & Range Performance Metrics
-
-Once the cluster state is active, run the following sync utilities to seed training targets and monitor host health parameters:
+6. Load challenge content:
 
 ```bash
-# Populate OWASP Juice Shop challenge schemes
-./scripts/juice-shop-ctf-import.sh
-
-# Ingest underlying static and containerized challenge modules
 ./scripts/challenges-load.sh
-
 ```
 
 ---
 
-## Network Entrypoints & Ingress Service Routing Table
+# Monitoring
 
-Once installation terminates successfully, workloads are bound to your Layer-2 LoadBalancer IP space allocation managed via MetalLB and routed under the Traefik proxy ingress.
-
-> 💡 **Routing Reference:** If running in **Simple Mode**, `<LoadBalancer-IP>` defaults to your primary host node network interface address.
-
-| Target Platform Application | Target Network Route Location | Underlying Protocol / Port Access Vector |
-| --- | --- | --- |
-| **CTFd Scoreboard Interface** | `http://<LoadBalancer-IP>/` | HTTP / TCP Port 80 (Redirected to 443) |
-| **MultiJuicer Student Gateway** | `http://<LoadBalancer-IP>/balancer` | HTTP / Web Sockets Reverse Proxy |
-| **OWASP crAPI Sandbox Shared Matrix** | `http://<LoadBalancer-IP>:8888/` | Direct Target Access Vector |
-| **Internal Docker Registry** | `http://<LoadBalancer-IP>:5000/` | Image Storage Backend Registry Access |
-| **Ephemeral Analyst SSH Terminal Node** | `ssh operator@<Host-IP>` | Port 2222 (Iterates dynamically per user) |
-| **Graphical Kali Workstations (noVNC)** | `http://<LoadBalancer-IP>/workspace/` | Automated UI VNC Browser Stream |
-
----
-
-## Post-Install CTFd Application Onboarding Setup
-
-Before executing `./scripts/challenges-load.sh`, you must complete the initial manual database priming inside the CTFd web panel interface to establish base state schemas:
-
-1. Open your web browser and navigate to `http://<LoadBalancer-IP>`.
-2. **Setup Wizard Configuration:**
-* Provide your target deployment name (e.g., `CEI Labs Cyber Range`).
-* Create the primary root cluster administrative credential profile.
-
-
-3. **Generate a Live API Access Token:**
-* Authenticate into the platform using your newly created administrative profile credentials.
-* Access the application menu path: **Settings** -> **Tokens**.
-* Select **Generate Token**, name the identifier `CHALLENGE_LOADER`, and choose **No Expiration**.
-* Copy the returned API token string immediately.
-
-
-4. **Link the API Token Payload to the Local Environment:**
-* Return to your terminal prompt on the deployment host.
-* Open `ansible/group_vars/all.yml` and paste the token string directly into the `ctfd_api_token` configuration parameter line.
-
-
-5. **Seed the Curriculum Content Matrices:**
-* Execute the ingestion pipeline scripts to populate the active range targets:
-```bash
-./scripts/challenges-load.sh --sprint 2
-./scripts/challenges-load.sh --sprint 3
-
-```
-
-
-
-
-
----
-
-## Unified Range Telemetry & Status Monitoring Dashboard
-
-The range environment includes a production-ready logging dashboard to let operators track bare-metal infrastructure capacities, network connection endpoints, cluster deployment health, and user container usage states in real time.
-
-To initialize the telemetry monitor console window, execute:
+Launch the platform monitoring dashboard:
 
 ```bash
 ./scripts/status.sh
-
 ```
 
-### Operational View Interface Selection
+Available views include:
 
-Upon launching the application utility script framework, you will be prompted to select an execution view style interface:
+* Infrastructure Health
+* Kubernetes Status
+* Service Availability
+* Resource Utilization
+* Workspace Activity
+* Historical Usage Metrics
 
-* **Option 1: Real-time Dashboard Core Interface (Interactive)**
-Spawns a terminal screen displaying 5 live analytical blocks. Refreshes telemetry parameters dynamically every 8 seconds:
-1. *Host Infrastructure Matrix:* Monitors real-time daemon process runs (`k3s`, `ufw`), active bare-metal memory consumption, and storage space limits inside `/opt/ctf-cases`.
-2. *Network Service Access & Ingress Map:* Evaluates LoadBalancer route maps and checks dynamic Traefik IngressRoute paths across all active workspaces.
-3. *Microservice Pod Health Context:* Flags scheduling issues, pod start crashes, or repository image mirror download blocks (`ImagePullBackOff`).
-4. *Scoreboard Ingress Accessibility Check:* Conducts continuous curl tests to verify public routing availability for the primary student scoring panel.
-5. *Ephemeral Student Analyst Workspaces:* Provides a directory map showing active user sandboxes (Ubuntu terminals and graphical Kali noVNC environments).
+---
 
+# Event Readiness Roadmap
 
-* **Option 2: Historical Metric Analysis Ledger (CSV Timeline View)**
-Outputs a tab-separated ledger tracking past server load changes, peak student user concurrent session bursts, and resource pool history limits recorded into `status-history.csv`. Useful for sizing hardware requirements for future target exercise events.
+## Phase 1 — Platform Stability
+
+* Validate deployments
+* Verify backups
+* Verify recovery procedures
+* Verify persistence
+
+## Phase 2 — Training Delivery
+
+* Deploy Bandit curriculum
+* Deploy Natas curriculum
+* Deploy Leviathan curriculum
+* Validate challenge progression
+
+## Phase 3 — Event Execution
+
+* Support live users
+* Validate scoring
+* Validate workstations
+* Conduct competition operations
+
+---
+
+# Contributing
+
+Contributions are welcome.
+
+Priority areas include:
+
+* Deployment Reliability
+* Documentation
+* Challenge Automation
+* Infrastructure Hardening
+* Competition Tooling
+* Analyst Training Content
+
+---
+
+# Disclaimer
+
+CEI Labs Engine is intended for educational, training, and competition purposes only.
+
+Users are responsible for ensuring compliance with all applicable organizational policies, laws, and regulations when deploying or operating the platform.
