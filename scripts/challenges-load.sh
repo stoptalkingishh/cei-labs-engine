@@ -14,11 +14,11 @@
 
 set -euo pipefail
 
-KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
-export KUBECONFIG
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-CTFD_URL="${CTFD_URL:-http://ctfd.ctf.local}"
+CTFD_URL="${CTFD_URL:-https://ctfd.ctf.local}"
 CTFD_ADMIN_TOKEN="${CTFD_ADMIN_TOKEN:-}"
+SYNC_SECRET_FILE="${SYNC_SECRET_FILE:-$REPO_ROOT/docker/secrets/plugin_shared_secret.txt}"
 SPRINT="all"
 DRY_RUN=false
 
@@ -77,6 +77,63 @@ if [[ "$DRY_RUN" == "false" ]]; then
   fi
 fi
 
+# ── INSTANCE MAPPING SYNC ──────────────────────────────────────────────────────
+# Optional: a challenge.yml may declare an `instance_type` (and the images/
+# ports it needs — see docker/orchestrator/README.md) for challenges that
+# should offer a "Launch Environment" link. Pushes that mapping into the
+# CTFd instance-launcher plugin so the link works. Silently does nothing for
+# ordinary challenges that don't declare instance_type.
+sync_instance_mapping() {
+  local challenge_path="$1"
+
+  if [[ ! -f "$SYNC_SECRET_FILE" ]]; then
+    return 0
+  fi
+
+  local payload
+  payload=$(python3 - "$challenge_path" <<'PYEOF' 2>/dev/null || true
+import json
+import sys
+
+import yaml
+
+with open(sys.argv[1]) as f:
+    data = yaml.safe_load(f) or {}
+
+instance_type = data.get("instance_type")
+if not instance_type:
+    sys.exit(0)
+
+print(json.dumps({
+    "challenge_name": data.get("name"),
+    "instance_type": instance_type,
+    "image": data.get("image"),
+    "port": data.get("port"),
+    "target_image": data.get("target_image"),
+    "attacker_image": data.get("attacker_image"),
+    "attacker_port": data.get("attacker_port"),
+}))
+PYEOF
+  )
+
+  [[ -z "$payload" ]] && return 0
+
+  local sync_secret
+  sync_secret=$(cat "$SYNC_SECRET_FILE")
+  local http_code
+  http_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+    -X POST "${CTFD_URL}/plugins/instance-launcher/admin/mappings/sync" \
+    -H "X-Sync-Auth: ${sync_secret}" \
+    -H "Content-Type: application/json" \
+    -d "$payload")
+
+  if [[ "$http_code" == "200" ]]; then
+    log_info "Synced instance mapping for $(basename "$challenge_path")"
+  else
+    log_warn "Instance mapping sync returned HTTP ${http_code} for $(basename "$challenge_path")"
+  fi
+}
+
 # ── CHALLENGE INGESTION HANDLER ───────────────────────────────────────────────
 load_sprint() {
   local dir="$1"
@@ -113,6 +170,7 @@ load_sprint() {
           fi
         fi
       )
+      sync_instance_mapping "$challenge_path"
     fi
   done < <(find "$dir" -maxdepth 1 -type f \( -name "*.yml" -o -name "*.yaml" \) -print0 2>/dev/null)
 }

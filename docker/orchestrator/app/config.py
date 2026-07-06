@@ -1,0 +1,42 @@
+"""docker/orchestrator/app/config.py
+
+Environment-driven configuration. Secrets are read from Docker Swarm secret
+files (mounted under /run/secrets/<name>) rather than plain env vars.
+"""
+import os
+
+
+def _read_secret(name: str, default: str = "") -> str:
+    path = f"/run/secrets/{name}"
+    if os.path.isfile(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return default
+
+
+class Config:
+    # Network Traefik shares with orchestrator-created public-facing
+    # containers (Juice Shop, attacker noVNC). Must match the actual deployed
+    # name of docker/stack.yml's `challenge-edge` network (stack-name-prefixed).
+    CHALLENGE_NETWORK = os.environ.get("CHALLENGE_NETWORK", "cei-labs_challenge-edge")
+
+    # Domain used to build per-team access URLs, e.g. <owner>-<key>.apps.<BASE_DOMAIN>
+    BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "ctf.local")
+
+    # Hard cap on total concurrent instances (mirrors MultiJuicer's maxInstances).
+    MAX_INSTANCES = int(os.environ.get("ORCHESTRATOR_MAX_INSTANCES", "30"))
+
+    # Idle instances are torn down after this many minutes without a touch.
+    IDLE_GRACE_MINUTES = int(os.environ.get("ORCHESTRATOR_IDLE_GRACE_MINUTES", "120"))
+
+    # How often the reaper thread sweeps for idle instances.
+    REAP_INTERVAL_SECONDS = int(os.environ.get("ORCHESTRATOR_REAP_INTERVAL_SECONDS", "60"))
+
+    # Shared secret the CTFd plugin must present (X-Orchestrator-Auth header).
+    # Participants never see this — the plugin calls the orchestrator server-to-server.
+    PLUGIN_SHARED_SECRET = _read_secret("plugin_shared_secret", os.environ.get("PLUGIN_SHARED_SECRET", ""))
+
+    # Protects the /admin/* dashboard endpoints.
+    ADMIN_PASSWORD = _read_secret("orchestrator_admin_password", os.environ.get("ORCHESTRATOR_ADMIN_PASSWORD", ""))
+
+    DOCKER_SOCKET = os.environ.get("DOCKER_SOCKET", "unix://var/run/docker.sock")

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Instance Launcher — Admin</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; }
+    th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #ddd; }
+    form.inline { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    input, select { padding: 0.4rem; border: 1px solid #ccc; border-radius: 4px; }
+    .btn { padding: 0.4rem 0.9rem; border-radius: 6px; border: 1px solid #1a56db; background: #1a56db; color: #fff; cursor: pointer; }
+    .btn-danger { border-color: #c81e1e; background: #c81e1e; }
+  </style>
+</head>
+<body>
+  <h1>Instance Launcher — Challenge Mappings</h1>
+  <p>Assign an instance type to a challenge so its "Launch Environment" link (see the challenge's description) knows what to spin up.</p>
+
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Challenge</th><th>Instance Type</th><th>Image(s)</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for challenge in challenges %}
+      {% set cfg = configs.get(challenge.id) %}
+      <tr>
+        <td>{{ challenge.id }}</td>
+        <td>{{ challenge.name }}</td>
+        <td>{{ cfg.instance_type if cfg else "—" }}</td>
+        <td>
+          {% if cfg %}
+            {% if cfg.instance_type == "target-attacker" %}
+              target: {{ cfg.target_image }}<br>attacker: {{ cfg.attacker_image }}
+            {% else %}
+              {{ cfg.image }}{% if cfg.port %}:{{ cfg.port }}{% endif %}
+            {% endif %}
+          {% else %}
+            —
+          {% endif %}
+        </td>
+        <td>
+          {% if cfg %}
+          <form class="inline" method="post" action="{{ url_for('instance_launcher.admin_delete_mapping', challenge_id=challenge.id) }}">
+            <button class="btn btn-danger" type="submit">Remove</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Add / Update Mapping</h2>
+  <form class="inline" method="post" action="{{ url_for('instance_launcher.admin_mappings') }}">
+    <select name="challenge_id" required>
+      {% for challenge in challenges %}
+      <option value="{{ challenge.id }}">{{ challenge.id }} — {{ challenge.name }}</option>
+      {% endfor %}
+    </select>
+    <select name="instance_type" required>
+      <option value="web-app">web-app</option>
+      <option value="single-target">single-target</option>
+      <option value="target-attacker">target-attacker</option>
+    </select>
+    <input type="text" name="image" placeholder="image (web-app/single-target)">
+    <input type="number" name="port" placeholder="port">
+    <input type="text" name="target_image" placeholder="target_image (target-attacker)">
+    <input type="text" name="attacker_image" placeholder="attacker_image (target-attacker)">
+    <input type="number" name="attacker_port" placeholder="attacker_port">
+    <button class="btn" type="submit">Save</button>
+  </form>
+
+  <p style="margin-top:2rem"><a href="/admin/challenges">&larr; Back to challenge admin</a></p>
+</body>
+</html>

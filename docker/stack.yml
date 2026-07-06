@@ -1,0 +1,229 @@
+version: "3.9"
+# docker/stack.yml
+# CEI Labs Engine — Docker Swarm stack definition.
+# Deploy with: ./scripts/stack-up.sh   (wraps: docker stack deploy -c docker/stack.yml cei-labs)
+#
+# Adding capacity = `docker swarm join` another host, then re-run stack-up.sh.
+# Nothing in this file needs to change based on how many nodes exist.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  # Traefik <-> CTFd only. Deliberately never joined by any challenge
+  # instance, so a compromised Juice Shop/target/attacker container can never
+  # reach CTFd directly by IP even though both sit behind the same Traefik.
+  edge:
+    driver: overlay
+    attachable: false
+  # CTFd <-> DB <-> Redis. Never joined by traefik or anything internet-facing.
+  ctfd-internal:
+    driver: overlay
+    internal: true
+  # CTFd <-> orchestrator only, for the instance-launcher plugin's
+  # server-to-server calls (Phase 4). Internal-only — never reachable from
+  # outside the swarm, and never joined by db/redis or challenge instances.
+  orchestrator-internal:
+    driver: overlay
+    internal: true
+  # Traefik <-> whatever public-facing containers the orchestrator creates
+  # (Juice Shop, attacker noVNC). Isolated from `edge`/CTFd. Team-vs-team
+  # isolation for target-attacker pairs is handled separately: each pair also
+  # gets its own throwaway overlay network created and destroyed by the
+  # orchestrator, so a target is only ever reachable from its own attacker.
+  challenge-edge:
+    driver: overlay
+    attachable: false
+
+volumes:
+  ctfd_db_data:
+  ctfd_uploads:
+
+secrets:
+  ctfd_secret_key:
+    file: ./secrets/ctfd_secret_key.txt
+  ctfd_db_password:
+    file: ./secrets/ctfd_db_password.txt
+  ctfd_db_root_password:
+    file: ./secrets/ctfd_db_root_password.txt
+  ctf_key:
+    file: ./secrets/ctf_key.txt
+  orchestrator_admin_password:
+    file: ./secrets/orchestrator_admin_password.txt
+  plugin_shared_secret:
+    file: ./secrets/plugin_shared_secret.txt
+
+services:
+  # ── Ingress ────────────────────────────────────────────────────────────────
+  traefik:
+    image: traefik:v3.1
+    command:
+      - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
+      - "--providers.swarm.exposedbydefault=false"
+      - "--providers.swarm.network=edge"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--api.dashboard=false"
+      - "--log.level=INFO"
+      # LAN/air-gapped default: self-signed cert dropped in ./traefik/certs/ (see README).
+      # For internet-facing events, replace with the ACME resolver block documented in README.
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+    ports:
+      # Default "ingress" mode (Swarm routing mesh): hitting port 80/443 on
+      # ANY node in the swarm reaches Traefik, wherever it's actually
+      # scheduled. This is what replaces MetalLB — no VIP to manage.
+      - target: 80
+        published: 80
+      - target: 443
+        published: 443
+    networks:
+      - edge
+      - challenge-edge
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/certs:/certs:ro
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+    logging: *default-logging
+
+  # ── CTFd scoring platform ────────────────────────────────────────────────────
+  ctfd-db:
+    image: mariadb:10.11
+    environment:
+      MYSQL_DATABASE: ctfd
+      MYSQL_USER: ctfd
+    secrets:
+      - source: ctfd_db_password
+        target: ctfd_db_password
+      - source: ctfd_db_root_password
+        target: ctfd_db_root_password
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        export MYSQL_PASSWORD="$$(cat /run/secrets/ctfd_db_password)";
+        export MYSQL_ROOT_PASSWORD="$$(cat /run/secrets/ctfd_db_root_password)";
+        exec docker-entrypoint.sh mariadbd
+    volumes:
+      - ctfd_db_data:/var/lib/mysql
+    networks:
+      - ctfd-internal
+    deploy:
+      placement:
+        constraints:
+          - node.labels.ctfd-data == true
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+    logging: *default-logging
+
+  ctfd-redis:
+    image: redis:7-alpine
+    networks:
+      - ctfd-internal
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+    logging: *default-logging
+
+  ctfd:
+    image: ghcr.io/${GITHUB_ORG}/cei-labs-engine/ctfd:${IMAGE_TAG}
+    environment:
+      REDIS_URL: "redis://ctfd-redis:6379"
+      UPLOAD_FOLDER: "/var/uploads"
+      REVERSE_PROXY: "true"
+      WORKERS: "4"
+      ORCHESTRATOR_URL: "http://orchestrator:8080"
+    secrets:
+      - ctfd_secret_key
+      - ctfd_db_password
+      - plugin_shared_secret
+    volumes:
+      - ctfd_uploads:/var/uploads
+    networks:
+      - edge
+      - ctfd-internal
+      - orchestrator-internal
+    depends_on:
+      - ctfd-db
+      - ctfd-redis
+      - orchestrator
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 10
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=edge"
+        - "traefik.http.routers.ctfd.rule=Host(`ctfd.${BASE_DOMAIN}`) || HostRegexp(`^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$`)"
+        - "traefik.http.routers.ctfd.entrypoints=web,websecure"
+        - "traefik.http.routers.ctfd.tls=true"
+        - "traefik.http.services.ctfd.loadbalancer.server.port=8000"
+    logging: *default-logging
+
+  # ── Challenge Instance Orchestrator ──────────────────────────────────────────
+  # Generalized MultiJuicer replacement: spins up per-team Juice Shop instances
+  # today, and per-team target+attacker wargame pairs once that content ships.
+  # Internal-only — never routed to by Traefik directly. Only CTFd's
+  # instance-launcher plugin talks to it (orchestrator-internal network),
+  # authenticated with the plugin_shared_secret. It then talks to the Docker
+  # API to create/remove the actual challenge containers, which Traefik
+  # discovers on its own via challenge-edge once labeled.
+  #
+  # SECURITY NOTE: this service holds read-write access to the Docker socket,
+  # which is equivalent to root on whichever node it runs on. That is the same
+  # trust boundary today's MultiJuicer requires (a k8s ServiceAccount allowed
+  # to create Pods) — it must only ever run on a trusted manager node.
+  orchestrator:
+    image: ghcr.io/${GITHUB_ORG}/cei-labs-engine/orchestrator:${IMAGE_TAG}
+    environment:
+      CHALLENGE_NETWORK: "cei-labs_challenge-edge"
+      BASE_DOMAIN: "${BASE_DOMAIN}"
+      ORCHESTRATOR_MAX_INSTANCES: "${ORCHESTRATOR_MAX_INSTANCES}"
+      ORCHESTRATOR_IDLE_GRACE_MINUTES: "${ORCHESTRATOR_IDLE_GRACE_MINUTES}"
+    secrets:
+      - plugin_shared_secret
+      - orchestrator_admin_password
+      - ctf_key
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - orchestrator-internal
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+    logging: *default-logging

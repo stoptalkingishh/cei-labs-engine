@@ -1,6 +1,7 @@
 ---
 # ansible/roles/common/tasks/main.yml
-# Runs on every node. Installs prerequisites, hardens SSH, sets up firewall.
+# Runs on every node. Installs prerequisites, hardens SSH, sets up the
+# firewall for Docker Swarm (replaces the old K3s-specific port set).
 
 - name: Update apt cache
   ansible.builtin.apt:
@@ -19,8 +20,6 @@
       - tmux
       - unzip
       - jq
-      - open-iscsi
-      - nfs-common
     state: present
 
 - name: Set timezone to UTC
@@ -47,48 +46,40 @@
     port: "22"
     proto: tcp
 
-- name: UFW — allow K3s API server (control plane only)
+- name: UFW — allow Docker Swarm cluster management (manager nodes)
   community.general.ufw:
     rule: allow
-    port: "6443"
+    port: "2377"
     proto: tcp
-  when: >
-    (groups['control_plane'] is defined and inventory_hostname in groups['control_plane']) or
-    (groups['initial_master_node'] is defined and inventory_hostname in groups['initial_master_node']) or
-    (groups['master_nodes'] is defined and inventory_hostname in groups['master_nodes'])
 
-- name: UFW — allow K3s Flannel VXLAN
+- name: UFW — allow Docker Swarm node communication (all nodes)
   community.general.ufw:
     rule: allow
-    port: "8472"
+    port: "7946"
+    proto: "{{ item }}"
+  loop: ["tcp", "udp"]
+
+- name: UFW — allow Docker Swarm overlay network data path (all nodes)
+  community.general.ufw:
+    rule: allow
+    port: "4789"
     proto: udp
 
-- name: UFW — allow K3s kubelet metrics
-  community.general.ufw:
-    rule: allow
-    port: "10250"
-    proto: tcp
-
-- name: UFW — allow HTTP/HTTPS (ingress)
+- name: UFW — allow HTTP/HTTPS
+  # Every node needs this open, not just managers — Traefik is reached via
+  # Swarm's routing mesh, which can forward from any node regardless of
+  # where the traefik service is actually scheduled.
   community.general.ufw:
     rule: allow
     port: "{{ item }}"
     proto: tcp
   loop: ["80", "443"]
-  when: >
-    (groups['control_plane'] is defined and inventory_hostname in groups['control_plane']) or
-    (groups['initial_master_node'] is defined and inventory_hostname in groups['initial_master_node']) or
-    (groups['master_nodes'] is defined and inventory_hostname in groups['master_nodes'])
 
-- name: UFW — allow participant SSH ports (analyst containers)
+- name: UFW — allow participant workspace ports (bulk-spawned analyst/kali + orchestrator instances)
   community.general.ufw:
     rule: allow
     port: "30000:32767"
     proto: tcp
-  when: >
-    (groups['analyst_workers'] is defined and inventory_hostname in groups['analyst_workers']) or
-    (groups['worker_nodes'] is defined and inventory_hostname in groups['worker_nodes']) or
-    (ansible_connection == 'local')
 
 - name: Enable UFW
   community.general.ufw:

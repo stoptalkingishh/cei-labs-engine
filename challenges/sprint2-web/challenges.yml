@@ -67,13 +67,11 @@ challenges:
     category: "OWASP Juice Shop"
     description: |
       Reflected XSS
-      The Juice Shop is running at: http://juiceshop.ctf.local
-      Log in with your assigned credentials and find a page that
-      reflects user input without sanitization.
+      Click "Launch Environment" below to get your own private Juice Shop
+      instance, then log in and find a page that reflects user input
+      without sanitization.
 
       Inject a script tag that triggers an alert box.
-      Submit the flag displayed in the MultiJuicer dashboard after
-      completing the challenge.
       🔗 Juice Shop Documentation
     value: 250
     type: standard
@@ -91,13 +89,19 @@ challenges:
     requirements:
       prerequisites:
         - "OTW Natas Level 1"
+    # Consumed by scripts/challenges-load.sh's instance-mapping sync step —
+    # see docker/orchestrator/README.md for what these fields mean.
+    instance_type: web-app
+    image: "bkimminich/juice-shop:v17.1.1"
+    port: 3000
 
   - name: "JuiceShop SQL Injection (SQLi)"
     author: "OWASP"
     category: "OWASP Juice Shop"
     description: |
       SQL Injection Login Bypass
-      Target Instance: http://juiceshop.ctf.local
+      Click "Launch Environment" below to get your own private Juice Shop
+      instance.
 
       The platform login mechanism dynamically interpolates strings without parameterized queries.
       Leverage classic SQL comment syntaxes to break the backend query structure and log in as the Administrator without entering a password.
@@ -117,3 +121,6 @@ challenges:
     requirements:
       prerequisites:
         - "JuiceShop Cross-Site Scripting (XSS)"
+    instance_type: web-app
+    image: "bkimminich/juice-shop:v17.1.1"
+    port: 3000

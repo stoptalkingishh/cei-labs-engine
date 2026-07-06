@@ -1,0 +1,2 @@
+Place wildcard.pem / wildcard-key.pem here for LAN events (see docker/traefik/dynamic/tls.yml.example).
+This directory is intentionally otherwise empty in git.

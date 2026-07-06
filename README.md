@@ -4,7 +4,7 @@
 
 CEI Labs Engine is a self-hosted analyst training range designed to support technical skill development through progressively challenging hands-on exercises.
 
-Built on Kubernetes (K3s), CEI Labs provides a scalable platform for hosting Capture-the-Flag (CTF) events, analyst development programs, and competition preparation exercises.
+Built on Docker (Swarm mode), CEI Labs provides a scalable platform for hosting Capture-the-Flag (CTF) events, analyst development programs, and competition preparation exercises — deployed with a single command, on one machine or many, with no cluster to manage.
 
 The platform is designed to support users ranging from intelligence analysts with limited technical experience to advanced cyber practitioners preparing for competition and operational environments.
 
@@ -37,7 +37,7 @@ Following the initial event, CEI Labs will expand into a broader training ecosys
 * SIGINT-Oriented Challenges
 * CYBINT-Oriented Challenges
 * Intelligence Analysis Exercises
-* Custom Scenario-Based Training
+* Custom Scenario-Based Training, including self-service target+attacker wargame ranges (see the companion `CEI-Labs-Wargames` repository and the Challenge Instance Orchestrator below)
 
 These capabilities are part of the long-term roadmap and are not required for the current event deployment.
 
@@ -145,78 +145,37 @@ Additional challenge content will be added over time as the platform matures.
 
 The current CEI Labs deployment includes:
 
-| Component          | Purpose                             |
-| ------------------ | ----------------------------------- |
-| K3s                | Lightweight Kubernetes Platform     |
-| CTFd               | Competition Management Platform     |
-| MultiJuicer        | Dynamic OWASP Juice Shop Deployment |
-| OWASP Juice Shop   | Web Security Training Environment   |
-| Kali noVNC         | Browser-Based Analyst Workstations  |
-| Analyst Containers | SSH-Based Training Environments     |
-| MariaDB            | Persistent Application Database     |
-| Redis              | Caching and Session Management      |
-| MetalLB            | Bare-Metal Load Balancing           |
-| Traefik            | Ingress and Routing                 |
+| Component                       | Purpose                                                     |
+| -------------------------------- | ------------------------------------------------------------ |
+| Docker Engine (Swarm mode)       | Container runtime and orchestrator                           |
+| Traefik                          | Ingress, routing, and TLS termination                        |
+| CTFd (custom image)              | Competition management platform + instance-launcher plugin   |
+| Challenge Instance Orchestrator  | Spins up per-team Juice Shop / target+attacker instances on demand |
+| OWASP Juice Shop                 | Web security training environment                            |
+| Kali noVNC                       | Browser-based analyst/attacker workstations                  |
+| Analyst Containers                | SSH-based training environments                              |
+| MariaDB                          | Persistent application database                              |
+| Redis                            | Caching and session management                                |
+
+MetalLB and a dedicated internal image registry are gone: Swarm's routing mesh gives every node the same reachability MetalLB provided, and images are already published to GHCR by CI, so there's nothing to distribute internally.
 
 ---
 
-# Supported Deployment Models
+# Deployment Model
 
-CEI Labs supports multiple deployment architectures.
+CEI Labs runs on **Docker Swarm**. There is no tier to choose between: the same `docker/stack.yml` deploys to one machine or many, and adding capacity is just joining another host to the swarm and re-running the deploy — nothing in the stack definition changes.
 
-## Single Node
+## Single Host
 
-Recommended for:
+Recommended for development, testing, and small training events.
 
-* Development
-* Testing
-* Small Training Events
+Resources: 4 CPU cores, 16 GB RAM, 100 GB SSD — supports roughly up to 10 concurrent users.
 
-Resources:
+`docker swarm init` on that one machine is enough; it becomes a one-node swarm.
 
-* 4 CPU Cores
-* 16 GB RAM
-* 100 GB SSD
+## Multiple Hosts
 
-Supports approximately:
-
-* Up to 10 concurrent users
-
----
-
-## Dual Node
-
-Recommended for:
-
-* Small Team Exercises
-* Department Training
-
-Resources:
-
-* 8 CPU Cores Total
-* 32 GB RAM Total
-
-Supports approximately:
-
-* Up to 20 concurrent users
-
----
-
-## Three Node Cluster
-
-Recommended for:
-
-* Production Events
-* Competition Hosting
-
-Resources:
-
-* 12 CPU Cores Total
-* 64 GB RAM Total
-
-Supports approximately:
-
-* Up to 30 concurrent users
+Recommended for larger events and competition hosting. Join as many hosts as you need — `docker swarm join` on each additional machine (or let `ansible/site.yml` do it for a whole inventory at once). The Swarm scheduler spreads services (including on-demand challenge instances and bulk-spawned workspaces) across every available node automatically.
 
 ---
 
@@ -226,20 +185,21 @@ Supports approximately:
                         Internet
                             │
                             ▼
-                        Traefik
-                            │
-        ┌───────────────────┼───────────────────┐
-        │                   │                   │
-        ▼                   ▼                   ▼
-      CTFd            MultiJuicer         Workstations
-        │                   │                   │
-        ▼                   ▼                   ▼
-     MariaDB          Juice Shop Pods      Kali / SSH
-        │
-        ▼
-      Redis
-
+                        Traefik  (Swarm routing mesh — any node's IP works)
+        ┌───────────────────┼──────────────────────────┐
+        │                   │                           │
+        ▼                   ▼                           ▼
+      CTFd          Challenge Instance          Bulk-Spawned
+   (+ instance-      Orchestrator             Workspaces (SSH/
+    launcher plugin) (Docker API)              noVNC, admin-run)
+        │                   │
+        ▼                   ▼
+  MariaDB + Redis    Juice Shop / Target+Attacker
+                      instances (per-team, on-demand,
+                      isolated overlay networks)
 ```
+
+The instance-launcher plugin (baked into the CTFd image) calls the orchestrator server-to-server whenever a participant opens a challenge configured with an instance type; the orchestrator talks to the Docker API to create the actual containers, which Traefik then discovers and routes to on its own. See `docker/orchestrator/README.md` for the full contract.
 
 ---
 
@@ -259,11 +219,13 @@ Kernel Version:
 5.15+
 ```
 
+Anything that can run a current Docker Engine works.
+
 ---
 
 ## Non-Linux Hosts
 
-Windows and macOS users must deploy CEI Labs within a Linux virtual machine.
+Windows and macOS users must deploy CEI Labs within a Linux virtual machine (or, for local single-host evaluation only, Docker Desktop's own Linux VM).
 
 Supported Hypervisors:
 
@@ -284,33 +246,43 @@ git clone https://github.com/stoptalkingishh/cei-labs-engine.git
 cd cei-labs-engine
 ```
 
-Prepare scripts:
+Prepare scripts and case storage:
 
 ```bash
 chmod +x scripts/*.sh
-```
-
-Initialize case storage:
-
-```bash
 ./scripts/setup-cases.sh
 ```
 
-Launch the installation wizard:
+Configure the stack:
 
 ```bash
-./scripts/install.sh
+cp docker/.env.example docker/.env            # edit BASE_DOMAIN, GITHUB_ORG, etc.
+cp -r docker/secrets.example docker/secrets   # replace every CHANGE_ME value
 ```
 
-The installer will:
+## Single machine
 
-* Detect your operating system
-* Install required dependencies
-* Configure K3s
-* Configure Kubernetes services
-* Configure CTFd
-* Configure MultiJuicer
-* Configure supporting infrastructure
+```bash
+./scripts/stack-up.sh
+```
+
+This initializes a one-node swarm if needed and deploys the full stack.
+
+## Multiple machines
+
+Edit `ansible/inventory.ini` to list your hosts under `[swarm_managers]`/`[swarm_workers]`, then:
+
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/site.yml
+```
+
+This installs Docker, forms the swarm across every listed host, and labels the primary manager to hold stateful services. Then, from that primary manager:
+
+```bash
+./scripts/stack-up.sh
+```
+
+Or just run the interactive installer for either path: `./scripts/install.sh`.
 
 ---
 
@@ -318,40 +290,26 @@ The installer will:
 
 After deployment:
 
-1. Open the CTFd web interface.
-2. Complete the initial setup wizard.
-3. Create an administrator account.
-4. Generate an API token.
-5. Add the token to:
-
-```yaml
-ansible/group_vars/all.yml
-```
-
-6. Load challenge content:
+1. Open `https://ctfd.<your-base-domain>`.
+2. Complete the initial setup wizard (or let `install.sh` do this non-interactively).
+3. Generate an API token, then: `export CTFD_ADMIN_TOKEN=...`
+4. Load challenge content:
 
 ```bash
 ./scripts/challenges-load.sh
 ```
 
+Any challenge whose YAML declares `instance_type` (see `docker/orchestrator/README.md`) automatically gets a "Launch Environment" link wired up via the instance-launcher plugin.
+
 ---
 
 # Monitoring
-
-Launch the platform monitoring dashboard:
 
 ```bash
 ./scripts/status.sh
 ```
 
-Available views include:
-
-* Infrastructure Health
-* Kubernetes Status
-* Service Availability
-* Resource Utilization
-* Workspace Activity
-* Historical Usage Metrics
+Shows a live snapshot: swarm nodes, stack service health, bulk-spawned workspaces, and active self-service challenge instances.
 
 ---
 

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Launch Environment — {{ challenge.name }}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 1.5rem; }
+    .error { background: #fde8e8; border: 1px solid #f5b5b5; color: #8a1f1f; padding: 1rem; border-radius: 6px; }
+    .btn { display: inline-block; padding: 0.6rem 1.2rem; border-radius: 6px; text-decoration: none; font-weight: 600; }
+    .btn-primary { background: #1a56db; color: #fff; }
+    .btn-secondary { background: #eee; color: #1a1a1a; border: 1px solid #ccc; cursor: pointer; }
+    form { display: inline; }
+  </style>
+</head>
+<body>
+  <h1>{{ challenge.name }}</h1>
+
+  {% if error %}
+    <p class="error">Could not reach your environment: {{ error }}</p>
+  {% elif result %}
+    <div class="card">
+      <p>Your environment is ready.</p>
+      {% if result.access.url %}
+        <p><a class="btn btn-primary" href="{{ result.access.url }}" target="_blank" rel="noopener">Open Environment</a></p>
+      {% endif %}
+      {% if result.access.attacker_url %}
+        <p><a class="btn btn-primary" href="{{ result.access.attacker_url }}" target="_blank" rel="noopener">Open Attacker Workstation</a></p>
+        <p>Your target is only reachable from this workstation — it is not exposed anywhere else.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <p>
+    <form method="post" action="{{ url_for('instance_launcher.launch', challenge_id=challenge.id) }}">
+      <button class="btn btn-secondary" type="submit">Reload / Refresh Access</button>
+    </form>
+    <form method="post" action="{{ url_for('instance_launcher.launch', challenge_id=challenge.id) }}">
+      <input type="hidden" name="action" value="reset">
+      <button class="btn btn-secondary" type="submit">Reset My Instance</button>
+    </form>
+  </p>
+
+  <p><a href="/challenges">&larr; Back to challenges</a></p>
+</body>
+</html>

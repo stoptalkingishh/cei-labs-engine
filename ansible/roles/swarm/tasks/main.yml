@@ -1,0 +1,70 @@
+---
+# ansible/roles/swarm/tasks/main.yml
+# Installs Docker Engine and forms/grows the Swarm. Applies to hosts: all in
+# a single play (see site.yml) — with Ansible's default linear strategy,
+# every host completes each task before the play moves to the next task, so
+# the primary manager's init/token-fetch tasks are guaranteed to finish
+# before other hosts reach the join task in the same run.
+#
+# Replaces the old k3s-server, k3s-agent, and metallb roles: there's no
+# "deployment mode" to pick anymore — an inventory with only a manager and no
+# workers forms a one-node swarm; adding hosts under [swarm_workers] later
+# and re-running this playbook grows it. Nothing else changes.
+
+- name: Install Docker Engine
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -fsSL https://get.docker.com | sh
+  args:
+    creates: /usr/bin/docker
+  changed_when: true
+
+- name: Enable and start Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Add the deployment user to the docker group
+  ansible.builtin.user:
+    name: "{{ ansible_user_id }}"
+    groups: docker
+    append: true
+
+- name: Initialize Docker Swarm on the primary manager
+  community.docker.docker_swarm:
+    state: present
+    advertise_addr: "{{ ansible_host | default(ansible_default_ipv4.address) }}"
+  when: inventory_hostname == groups['swarm_managers'][0]
+
+- name: Fetch swarm join tokens from the primary manager
+  community.docker.docker_swarm_info:
+  register: swarm_info
+  when: inventory_hostname == groups['swarm_managers'][0]
+
+- name: Expose join tokens/address for other hosts to consume this run
+  ansible.builtin.set_fact:
+    swarm_manager_token: "{{ swarm_info.swarm_facts.JoinTokens.Manager }}"
+    swarm_worker_token: "{{ swarm_info.swarm_facts.JoinTokens.Worker }}"
+    swarm_manager_addr: "{{ (ansible_host | default(ansible_default_ipv4.address)) }}:2377"
+  when: inventory_hostname == groups['swarm_managers'][0]
+
+- name: Join this host to the swarm
+  community.docker.docker_swarm:
+    state: join
+    advertise_addr: "{{ ansible_host | default(ansible_default_ipv4.address) }}"
+    join_token: >-
+      {{ hostvars[groups['swarm_managers'][0]]['swarm_worker_token']
+         if inventory_hostname in (groups['swarm_workers'] | default([]))
+         else hostvars[groups['swarm_managers'][0]]['swarm_manager_token'] }}
+    remote_addrs:
+      - "{{ hostvars[groups['swarm_managers'][0]]['swarm_manager_addr'] }}"
+  when: inventory_hostname != groups['swarm_managers'][0]
+
+- name: Label the primary manager to host stateful services (DB) and the orchestrator
+  community.docker.docker_node:
+    hostname: "{{ inventory_hostname }}"
+    labels:
+      ctfd-data: "true"
+    labels_state: merge
+  when: inventory_hostname == groups['swarm_managers'][0]

@@ -1,0 +1,13 @@
+# docker/traefik/dynamic/tls.yml.example
+# Optional: drop a real certificate/key in here for LAN events instead of
+# relying on Traefik's auto-generated self-signed default. Copy this file to
+# tls.yml (picked up automatically via the file provider, no restart needed)
+# and place the referenced files under docker/traefik/certs/.
+#
+# For internet-facing events, prefer Let's Encrypt instead — see README for
+# the ACME resolver command-line flags to add to the traefik service.
+
+tls:
+  certificates:
+    - certFile: /certs/wildcard.pem
+      keyFile: /certs/wildcard-key.pem

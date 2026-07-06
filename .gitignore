@@ -3,6 +3,10 @@
 ansible/group_vars/all.yml
 creds.txt
 
+# Docker Swarm deployment secrets/config (real values — see docker/secrets.example/, docker/.env.example)
+docker/secrets/
+docker/.env
+
 # Block local collection capture assets and memory drops
 *.img
 *.raw
@@ -13,3 +17,10 @@ creds.txt
 .kube/
 .idea/
 .vscode/
+
+# Python (orchestrator, CTFd plugin)
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/

@@ -58,105 +58,33 @@ jobs:
           print("[+] All YAML configurations parsed cleanly.")
           '
 
-  validate-helm:
+  validate-stack:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Helm
+      - name: Render docker/stack.yml with a placeholder .env
         run: |
-          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-          chmod 700 get_helm.sh
-          ./get_helm.sh
+          cp docker/.env.example docker/.env
+          cp -r docker/secrets.example docker/secrets
+          (cd docker && docker compose -f stack.yml config --quiet) > compose_output.txt 2>&1
+          exit_code=$?
 
-      - name: Render and validate Helm templates
-        run: |
-          # Dry-run render localized Helm deployment files against baseline project configurations
-          traefik_status="Skipped"
-          multijuicer_status="Skipped"
-          
-          if [ -d "k8s/ingress" ] && [ -f "k8s/ingress/traefik-values.yml" ]; then
-            echo "[*] Linting Traefik core chart configurations..."
-            helm repo add traefik https://traefik.github.io/charts --force-update
-            if helm template traefik traefik/traefik -f k8s/ingress/traefik-values.yml --skip-tests > rendered-traefik.yaml 2>&1; then
-              traefik_status="Passed"
-            else
-              echo "[-] Traefik Rendering Failure Details:"
-              cat rendered-traefik.yaml
-              traefik_status="Failed"
-            fi
-          fi
-          
-          if [ -d "k8s/multijuicer" ] && [ -f "k8s/multijuicer/values.yml" ]; then
-            echo "[*] Linting MultiJuicer chart templates..."
-            if helm template multijuicer oci://ghcr.io/juice-shop/multi-juicer/helm/multi-juicer -f k8s/multijuicer/values.yml > rendered-multijuicer.yaml 2>&1; then
-              multijuicer_status="Passed"
-            else
-              echo "[-] MultiJuicer Rendering Failure Details:"
-              cat rendered-multijuicer.yaml
-              multijuicer_status="Failed"
-            fi
-          fi
-          
+          cat compose_output.txt
+
           {
-            echo "### 📦 Helm Template Validation Summary"
-            echo "| Chart Deployment | Validation Status |"
-            echo "| --- | --- |"
-            echo "| Traefik Ingress Route | $traefik_status |"
-            echo "| MultiJuicer Balancer | $multijuicer_status |"
+            echo "### 🐳 Docker Stack Validation"
+            if [ $exit_code -eq 0 ]; then
+              echo "✅ docker/stack.yml parses and resolves cleanly."
+            else
+              echo "❌ docker/stack.yml failed to render:"
+              echo "\`\`\`text"
+              cat compose_output.txt
+              echo "\`\`\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-          
-          if [ "$traefik_status" = "Failed" ] || [ "$multijuicer_status" = "Failed" ]; then
-            echo "[-] Helm template rendering validation failed."
-            exit 1
-          fi
-          
-          echo "[+] Helm templates rendered and validated successfully."
 
-  validate-k8s:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install kubeconform
-        run: |
-          curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
-            | sudo tar xz -C /usr/local/bin kubeconform
-
-      - name: Validate Kubernetes manifests
-        run: |
-          if [ -d "k8s" ]; then
-            set +e
-            find k8s/ -type f \( -name "*.yml" -o -name "*.yaml" \) \
-              ! -name "*values.yaml" ! -name "*values.yml" | \
-            xargs -r kubeconform \
-              -strict \
-              -ignore-missing-schemas \
-              -schema-location default \
-              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' > kubeconform_output.txt 2>&1
-            exit_code=$?
-            set -e
-            
-            cat kubeconform_output.txt
-            
-            {
-              echo "### ☸️ Kubernetes Manifest Validation"
-              if [ $exit_code -eq 0 ]; then
-                echo "✅ All Kubernetes manifests are valid according to strict API schema checks."
-              else
-                echo "❌ Kubernetes manifest schema validation detected structural discrepancies:"
-                echo "\`\`\`text"
-                cat kubeconform_output.txt
-                echo "\`\`\`"
-              fi
-            } >> "$GITHUB_STEP_SUMMARY"
-            
-            exit $exit_code
-          else
-            echo "No k8s directory found, skipping validation."
-            echo "### ☸️ Kubernetes Manifest Validation" >> "$GITHUB_STEP_SUMMARY"
-            echo "⚠️ No \`k8s\` directory located within repository layout. Validation skipped." >> "$GITHUB_SUMMARY"
-          fi
+          exit $exit_code
 
   validate-ansible:
     runs-on: ubuntu-latest
