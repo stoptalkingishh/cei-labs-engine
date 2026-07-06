@@ -167,6 +167,79 @@ Same shapes as above, admin-authenticated, for an ops dashboard.
   that team's targets, and the targets themselves have no path to the
   internet or to CTFd.
 
+## Configuring multi-challenge deployments (for the wargames repo)
+
+Not every CTF maps one challenge to one container. The `instance_group` and
+`shutdown_on_solve` fields (set per challenge, synced from challenge YAML by
+`scripts/challenges-load.sh`, stored in the CTFd plugin's
+`InstanceChallengeConfig` table — see
+`docker/ctfd/plugins/instance-launcher/models.py`) let a content repo like
+`CEI-Labs-Wargames` describe several different shapes with the same
+mechanism, no orchestrator changes required:
+
+**1. One challenge, one box** (the default — omit both fields):
+
+```yaml
+name: "Natas-style Web Challenge"
+instance_type: single-target
+image: "ghcr.io/org/cei-labs-engine/otw-target:natas0"
+```
+
+**2. One challenge, one target+attacker pair:**
+
+```yaml
+name: "Intro Recon Range"
+instance_type: target-attacker
+target_image: "ghcr.io/org/cei-labs-engine/otw-target:recon1"
+attacker_image: "ghcr.io/org/cei-labs-engine/ctf-kali-novnc:latest"
+```
+
+**3. Several challenges, one shared box** (a boot2root with multiple
+flags at different privilege levels) — give them the same `instance_group`;
+the environment only auto-shuts-down once every one of them is solved:
+
+```yaml
+# challenge A
+name: "Boot2Root — User Flag"
+instance_type: single-target
+image: "ghcr.io/org/cei-labs-engine/wargame-box3:latest"
+instance_group: "box3"
+---
+# challenge B — same box, same group, launched from either challenge's page
+name: "Boot2Root — Root Flag"
+instance_type: single-target
+image: "ghcr.io/org/cei-labs-engine/wargame-box3:latest"
+instance_group: "box3"
+```
+
+**4. A range with multiple distinct targets behind one attacker** — this
+needs no extra field at all: give each challenge its own `instance_key`
+(automatic, derived from challenge id) but the same team naturally shares
+one attacker/network already (see "Instance types" above), so a team
+launching "Range Target A" and "Range Target B" gets one Kali workstation
+that can reach both targets.
+
+**5. Combine 3 and 4** — some challenges in a range share a target
+(`instance_group` set, `instance_type: target-attacker`), others in the same
+range get their own dedicated target — mix and match per challenge.
+
+**Opting out of auto-shutdown for a specific challenge:**
+
+```yaml
+name: "Recon Stage (don't tear down after this one)"
+instance_type: target-attacker
+target_image: "..."
+attacker_image: "..."
+shutdown_on_solve: false
+```
+
+That challenge's own solve never starts a countdown, though it can still be
+a member of an `instance_group` gating a *different* challenge's shutdown.
+
+Constraint: all challenges sharing an `instance_group` should declare the
+same `instance_type` and images — whichever one is launched first is what
+actually creates the container; the others just reuse it.
+
 ## Idle reaping and shutdown countdowns
 
 A background thread sweeps every `ORCHESTRATOR_REAP_INTERVAL_SECONDS`

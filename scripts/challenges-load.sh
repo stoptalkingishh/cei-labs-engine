@@ -112,6 +112,14 @@ print(json.dumps({
     "target_image": data.get("target_image"),
     "attacker_image": data.get("attacker_image"),
     "attacker_port": data.get("attacker_port"),
+    # Optional: multiple challenges sharing the same instance_group share one
+    # deployment (e.g. a boot2root box with several flags) instead of each
+    # getting its own container — see docker/orchestrator/README.md.
+    "instance_group": data.get("instance_group"),
+    # Optional, default true: set false so solving this challenge never
+    # itself triggers the post-solve shutdown countdown (it can still be
+    # part of a group gating other challenges' shutdown).
+    "shutdown_on_solve": data.get("shutdown_on_solve", True),
 }))
 PYEOF
   )

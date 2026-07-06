@@ -47,7 +47,7 @@ def launch(challenge_id: int):
 
     user = get_current_user()
     owner_id = str(user.account_id)
-    instance_key = f"challenge-{challenge_id}"
+    instance_key = config.resolved_instance_key()
     client = OrchestratorClient.from_env()
     action = request.form.get("action") if request.method == "POST" else None
 
@@ -100,6 +100,8 @@ def admin_mappings():
         config.target_image = request.form.get("target_image") or None
         config.attacker_image = request.form.get("attacker_image") or None
         config.attacker_port = int(request.form["attacker_port"]) if request.form.get("attacker_port") else None
+        config.instance_group = request.form.get("instance_group") or None
+        config.shutdown_on_solve = request.form.get("shutdown_on_solve") == "on"
         db.session.commit()
         return redirect(url_for("instance_launcher.admin_mappings"))
 
@@ -147,5 +149,9 @@ def sync_mapping():
     config.target_image = body.get("target_image")
     config.attacker_image = body.get("attacker_image")
     config.attacker_port = body.get("attacker_port")
+    config.instance_group = body.get("instance_group")
+    # Default true: absent/omitted in YAML means "shut down on solve", the
+    # historical/expected behavior — only explicit `false` opts out.
+    config.shutdown_on_solve = body.get("shutdown_on_solve", True)
     db.session.commit()
     return {"status": "synced", "challenge_id": challenge.id}, 200

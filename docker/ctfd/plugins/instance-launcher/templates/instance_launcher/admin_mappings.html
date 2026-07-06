@@ -19,7 +19,7 @@
 
   <table>
     <thead>
-      <tr><th>ID</th><th>Challenge</th><th>Instance Type</th><th>Image(s)</th><th></th></tr>
+      <tr><th>ID</th><th>Challenge</th><th>Instance Type</th><th>Image(s)</th><th>Group</th><th>Shuts down on solve?</th><th></th></tr>
     </thead>
     <tbody>
       {% for challenge in challenges %}
@@ -39,6 +39,8 @@
             —
           {% endif %}
         </td>
+        <td>{{ cfg.instance_group if cfg and cfg.instance_group else "—" }}</td>
+        <td>{{ "yes" if cfg and cfg.shutdown_on_solve else "no" if cfg else "—" }}</td>
         <td>
           {% if cfg %}
           <form class="inline" method="post" action="{{ url_for('instance_launcher.admin_delete_mapping', challenge_id=challenge.id) }}">
@@ -52,6 +54,12 @@
   </table>
 
   <h2>Add / Update Mapping</h2>
+  <p>
+    Give two or more challenges the <strong>same Group</strong> to have them
+    share one deployment (e.g. a single box with several flags) — solving
+    only starts the shutdown countdown once every gating challenge in the
+    group is solved. Leave Group blank for a standalone challenge.
+  </p>
   <form class="inline" method="post" action="{{ url_for('instance_launcher.admin_mappings') }}">
     <select name="challenge_id" required>
       {% for challenge in challenges %}
@@ -68,6 +76,8 @@
     <input type="text" name="target_image" placeholder="target_image (target-attacker)">
     <input type="text" name="attacker_image" placeholder="attacker_image (target-attacker)">
     <input type="number" name="attacker_port" placeholder="attacker_port">
+    <input type="text" name="instance_group" placeholder="group (optional — shared deployments)">
+    <label><input type="checkbox" name="shutdown_on_solve" checked> Shuts down on solve</label>
     <button class="btn" type="submit">Save</button>
   </form>
 
