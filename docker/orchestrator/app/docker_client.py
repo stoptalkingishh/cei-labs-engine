@@ -35,17 +35,23 @@ class DockerOrchestratorClient:
         self._client = docker.DockerClient(base_url=base_url)
 
     # ── Networks ─────────────────────────────────────────────────────────────
-    def ensure_team_network(self, name: str) -> None:
+    def ensure_network(self, name: str, internal: bool = True) -> None:
+        """Creates the network if missing. `internal=True` (the default, and
+        what every challenge-related network should use) means Docker gives
+        it no outbound route at all — a real airgap, not just access control
+        — independent of whether services on it also publish ports or share
+        another (non-internal) network like `challenge-edge` for Traefik."""
         try:
             self._client.networks.get(name)
             return
         except NotFound:
             pass
-        logger.info("creating per-team overlay network %s", name)
+        logger.info("creating overlay network %s (internal=%s)", name, internal)
         self._client.networks.create(
             name,
             driver="overlay",
             attachable=True,
+            internal=internal,
             labels={ORCH_LABEL: "true"},
         )
 
@@ -99,6 +105,19 @@ class DockerOrchestratorClient:
             return
         logger.info("removing service %s", name)
         svc.remove()
+
+    def restart_service(self, name: str) -> bool:
+        """"Reboot Host": restarts the container(s) in place — same service,
+        same network identity/published port, no state carried over inside
+        the container itself. Uses docker-py's force_update(), which bumps
+        the task template's force-update counter and triggers a fresh
+        rolling restart without changing any other config."""
+        svc = self.get_service(name)
+        if svc is None:
+            return False
+        logger.info("restarting service %s in place", name)
+        svc.force_update()
+        return True
 
     def list_managed_services(self) -> list:
         return self._client.services.list(filters={"label": ORCH_LABEL})

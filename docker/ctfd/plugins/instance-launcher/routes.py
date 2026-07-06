@@ -34,6 +34,12 @@ VALID_TYPES = ("web-app", "single-target", "target-attacker")
 @instance_launcher_bp.route("/launch/<int:challenge_id>", methods=["GET", "POST"])
 @authed_only
 def launch(challenge_id: int):
+    """Three actions, one page:
+      - (GET, or POST with no action) "Launch Environment" — create-or-get
+      - POST action=reboot   "Reboot Host" — restart in place
+      - POST action=relaunch "Relaunch Environment" — destroy + recreate fresh
+      - POST action=extend   "+5 more minutes" during a post-solve countdown
+    """
     challenge = Challenges.query.get_or_404(challenge_id)
     config = InstanceChallengeConfig.query.filter_by(challenge_id=challenge_id).first()
     if config is None:
@@ -43,19 +49,25 @@ def launch(challenge_id: int):
     owner_id = str(user.account_id)
     instance_key = f"challenge-{challenge_id}"
     client = OrchestratorClient.from_env()
+    action = request.form.get("action") if request.method == "POST" else None
 
     error = None
-    result = None
+    try:
+        if action == "reboot":
+            client.reboot(owner_id, instance_key)
+        elif action == "relaunch":
+            client.create_or_get(config.instance_type, owner_id, instance_key, config.to_orchestrator_spec(), relaunch=True)
+        elif action == "extend":
+            client.extend_shutdown(owner_id, instance_key)
+        else:
+            client.create_or_get(config.instance_type, owner_id, instance_key, config.to_orchestrator_spec())
+    except OrchestratorError as exc:
+        error = str(exc)
 
-    if request.method == "POST" and request.form.get("action") == "reset":
-        try:
-            client.delete(owner_id, instance_key)
-        except OrchestratorError as exc:
-            error = str(exc)
-
+    status = None
     if error is None:
         try:
-            result = client.create_or_get(config.instance_type, owner_id, instance_key, config.to_orchestrator_spec())
+            status = client.get(owner_id, instance_key)
         except OrchestratorError as exc:
             error = str(exc)
 
@@ -63,7 +75,7 @@ def launch(challenge_id: int):
         "instance_launcher/launch.html",
         challenge=challenge,
         config=config,
-        result=result,
+        status=status,
         error=error,
     )
 

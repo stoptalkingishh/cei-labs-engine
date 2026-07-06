@@ -42,3 +42,24 @@ def network_name(owner_id: str, instance_key: str) -> str:
 
 def access_hostname(owner_id: str, instance_key: str, base_domain: str) -> str:
     return f"{instance_id(owner_id, instance_key)}.apps.{base_domain}"
+
+
+# ── Range-level (shared attacker + isolated network per team) ────────────────
+# Unlike a single instance, a range is scoped to owner_id ALONE — every
+# target-attacker challenge a team launches shares the same attacker and
+# network, so these names must never include instance_key.
+
+def range_network_name(owner_id: str) -> str:
+    return f"chrange-{slugify(owner_id)}"
+
+
+def range_attacker_service_name(owner_id: str) -> str:
+    return f"chrange-{slugify(owner_id)}-attacker"
+
+
+def range_target_service_name(owner_id: str, instance_key: str) -> str:
+    return f"chrange-{instance_id(owner_id, instance_key)}-target"
+
+
+def range_attacker_hostname(owner_id: str, base_domain: str) -> str:
+    return f"{slugify(owner_id)}-attacker.apps.{base_domain}"

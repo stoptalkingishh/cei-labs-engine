@@ -16,6 +16,8 @@ networks:
   # Traefik <-> CTFd only. Deliberately never joined by any challenge
   # instance, so a compromised Juice Shop/target/attacker container can never
   # reach CTFd directly by IP even though both sit behind the same Traefik.
+  # NOT internal: Traefik needs this route out for ACME/Let's Encrypt on
+  # internet-facing deployments (see the ACME note on the traefik service).
   edge:
     driver: overlay
     attachable: false
@@ -30,13 +32,18 @@ networks:
     driver: overlay
     internal: true
   # Traefik <-> whatever public-facing containers the orchestrator creates
-  # (Juice Shop, attacker noVNC). Isolated from `edge`/CTFd. Team-vs-team
-  # isolation for target-attacker pairs is handled separately: each pair also
-  # gets its own throwaway overlay network created and destroyed by the
-  # orchestrator, so a target is only ever reachable from its own attacker.
+  # (Juice Shop, attacker noVNC). Isolated from `edge`/CTFd. `internal: true`
+  # — no challenge container gets outbound internet access via this network
+  # (a real airgap, not just access control). This does NOT block Traefik's
+  # published-port routing mesh, which operates independently of this flag;
+  # Traefik keeps its internet route for ACME via `edge` instead. Team-vs-team
+  # isolation for target-attacker ranges is handled separately: each team's
+  # range gets its own airgapped network created by the orchestrator, so a
+  # target is only ever reachable from its own team's attacker.
   challenge-edge:
     driver: overlay
     attachable: false
+    internal: true
 
 volumes:
   ctfd_db_data:
@@ -180,10 +187,31 @@ services:
       labels:
         - "traefik.enable=true"
         - "traefik.docker.network=edge"
+        - "traefik.http.services.ctfd.loadbalancer.server.port=8000"
+        # Baseline automation/AI-abuse mitigation — see the root README's
+        # "Security & Anti-Automation Posture" section for the full picture;
+        # this is one layer, CTFd's own submission rate limiting (enabled at
+        # setup) is another. Two routers on the same service:
+        #   - ctfd-attempt: a tight per-source-IP limit scoped to the flag
+        #     submission endpoint specifically, where brute-forcing actually happens.
+        #   - ctfd: a much more generous whole-app limit, just to blunt raw
+        #     high-volume scraping/automation without affecting normal use.
+        - "traefik.http.middlewares.ctfd-attempt-ratelimit.ratelimit.average=2"
+        - "traefik.http.middlewares.ctfd-attempt-ratelimit.ratelimit.burst=5"
+        - "traefik.http.middlewares.ctfd-attempt-ratelimit.ratelimit.period=1s"
+        - "traefik.http.routers.ctfd-attempt.rule=(Host(`ctfd.${BASE_DOMAIN}`) || HostRegexp(`^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$`)) && Path(`/api/v1/challenges/attempt`)"
+        - "traefik.http.routers.ctfd-attempt.entrypoints=web,websecure"
+        - "traefik.http.routers.ctfd-attempt.tls=true"
+        - "traefik.http.routers.ctfd-attempt.priority=100"
+        - "traefik.http.routers.ctfd-attempt.middlewares=ctfd-attempt-ratelimit"
+        - "traefik.http.routers.ctfd-attempt.service=ctfd"
+        - "traefik.http.middlewares.ctfd-ratelimit.ratelimit.average=50"
+        - "traefik.http.middlewares.ctfd-ratelimit.ratelimit.burst=100"
         - "traefik.http.routers.ctfd.rule=Host(`ctfd.${BASE_DOMAIN}`) || HostRegexp(`^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$`)"
         - "traefik.http.routers.ctfd.entrypoints=web,websecure"
         - "traefik.http.routers.ctfd.tls=true"
-        - "traefik.http.services.ctfd.loadbalancer.server.port=8000"
+        - "traefik.http.routers.ctfd.priority=1"
+        - "traefik.http.routers.ctfd.middlewares=ctfd-ratelimit"
     logging: *default-logging
 
   # ── Challenge Instance Orchestrator ──────────────────────────────────────────
@@ -206,6 +234,11 @@ services:
       BASE_DOMAIN: "${BASE_DOMAIN}"
       ORCHESTRATOR_MAX_INSTANCES: "${ORCHESTRATOR_MAX_INSTANCES}"
       ORCHESTRATOR_IDLE_GRACE_MINUTES: "${ORCHESTRATOR_IDLE_GRACE_MINUTES}"
+      ORCHESTRATOR_SSH_PORT_RANGE_START: "${ORCHESTRATOR_SSH_PORT_RANGE_START}"
+      ORCHESTRATOR_SSH_PORT_RANGE_END: "${ORCHESTRATOR_SSH_PORT_RANGE_END}"
+      ORCHESTRATOR_SHUTDOWN_DELAY_SECONDS: "${ORCHESTRATOR_SHUTDOWN_DELAY_SECONDS}"
+      ORCHESTRATOR_SHUTDOWN_EXTEND_SECONDS: "${ORCHESTRATOR_SHUTDOWN_EXTEND_SECONDS}"
+      ORCHESTRATOR_SHUTDOWN_MAX_EXTENSIONS: "${ORCHESTRATOR_SHUTDOWN_MAX_EXTENSIONS}"
     secrets:
       - plugin_shared_secret
       - orchestrator_admin_password

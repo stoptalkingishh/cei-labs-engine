@@ -203,6 +203,20 @@ The instance-launcher plugin (baked into the CTFd image) calls the orchestrator 
 
 ---
 
+# Security & Anti-Automation Posture
+
+Automated tools (scripted or AI-driven) attacking CTFd itself to extract flags directly — rather than solving the intended challenge — are mitigated in layers. None of these are unique to "AI" specifically; they're the same controls that blunt any high-volume automated abuse, human-driven or not:
+
+1. **Network segmentation (already structural, not configuration).** Challenge containers (Juice Shop, targets, attacker workstations) live on networks that never include CTFd or its database — see the isolation model above and in `docker/orchestrator/README.md`. Even a fully compromised challenge container has no path to CTFd's data.
+2. **Traefik rate limiting** (`docker/stack.yml`, the `ctfd` service's labels): a tight per-source-IP limit specifically on the flag-submission endpoint (`/api/v1/challenges/attempt`), plus a more generous whole-app limit as a second layer.
+3. **CTFd's own submission rate limiting/lockout.** Enable this in CTFd's admin configuration (Config → Security in the admin panel) after initial setup — it complements the Traefik layer with CTFd's own awareness of per-account (not just per-IP) submission patterns.
+4. **Keep the CTFd image current.** `docker/ctfd/Dockerfile` pins a specific upstream CTFd version; track CTFd's security releases and rebuild/redeploy (`./scripts/patch-secrets.sh`-style redeploy, or a version bump + `stack-up.sh`) when they land.
+5. **Minimize admin surface.** Don't expose `/admin` beyond what's needed; consider an additional Traefik BasicAuth or IP-allowlist middleware on admin routes for events open to the public internet.
+
+This is a baseline, not a complete WAF — for a large or high-profile public event, put a dedicated WAF (e.g. CrowdSec, ModSecurity) in front in addition to the above.
+
+---
+
 # Operating System Requirements
 
 ## Supported Linux Distributions

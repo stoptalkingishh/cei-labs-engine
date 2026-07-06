@@ -39,8 +39,51 @@ def test_create_or_get_sends_expected_payload_and_headers():
     args, kwargs = mock_post.call_args
     assert args[0] == "http://orchestrator:8080/instances"
     assert kwargs["headers"]["X-Orchestrator-Auth"] == "s3cr3t"
-    assert kwargs["json"] == {"type": "web-app", "owner_id": "team-1", "instance_key": "juice", "spec": {"image": "img"}}
+    assert kwargs["json"] == {
+        "type": "web-app", "owner_id": "team-1", "instance_key": "juice", "spec": {"image": "img"}, "relaunch": False,
+    }
     assert result["access"]["url"] == "https://x"
+
+
+def test_create_or_get_relaunch_flag_is_forwarded():
+    client = OrchestratorClient(base_url="http://orchestrator:8080", shared_secret="s3cr3t")
+    with patch("orchestrator_client.requests.post") as mock_post:
+        mock_post.return_value = make_response(201, {"status": "created", "access": {}})
+        client.create_or_get("web-app", "team-1", "juice", {"image": "img"}, relaunch=True)
+    assert mock_post.call_args.kwargs["json"]["relaunch"] is True
+
+
+def test_reboot_sends_expected_request():
+    client = OrchestratorClient(base_url="http://orchestrator:8080", shared_secret="s3cr3t")
+    with patch("orchestrator_client.requests.post") as mock_post:
+        mock_post.return_value = make_response(200, {"status": "rebooting"})
+        result = client.reboot("team-1", "juice")
+    assert mock_post.call_args[0][0] == "http://orchestrator:8080/instances/team-1/juice/reboot"
+    assert result["status"] == "rebooting"
+
+
+def test_schedule_shutdown_sends_delay():
+    client = OrchestratorClient(base_url="http://orchestrator:8080", shared_secret="s3cr3t")
+    with patch("orchestrator_client.requests.post") as mock_post:
+        mock_post.return_value = make_response(200, {"status": "scheduled", "shutdown_at": 123.0})
+        client.schedule_shutdown("team-1", "juice", delay_seconds=30)
+    assert mock_post.call_args.kwargs["json"] == {"delay_seconds": 30}
+
+
+def test_extend_shutdown_success():
+    client = OrchestratorClient(base_url="http://orchestrator:8080", shared_secret="s3cr3t")
+    with patch("orchestrator_client.requests.post") as mock_post:
+        mock_post.return_value = make_response(200, {"status": "extended", "shutdown_at": 456.0})
+        result = client.extend_shutdown("team-1", "juice", extend_seconds=300)
+    assert result["shutdown_at"] == 456.0
+
+
+def test_extend_shutdown_conflict_raises():
+    client = OrchestratorClient(base_url="http://orchestrator:8080", shared_secret="s3cr3t")
+    with patch("orchestrator_client.requests.post") as mock_post:
+        mock_post.return_value = make_response(409, {"error": "maximum of 3 extensions already used"})
+        with pytest.raises(OrchestratorError, match="maximum of 3 extensions"):
+            client.extend_shutdown("team-1", "juice")
 
 
 def test_create_or_get_raises_on_error_status():

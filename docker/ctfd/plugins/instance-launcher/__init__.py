@@ -17,6 +17,7 @@ CTFd/plugins/dynamic_challenges).
 """
 from CTFd.models import db
 
+from . import solve_hook
 from .models import InstanceChallengeConfig  # noqa: F401 (import registers the model with SQLAlchemy)
 from .routes import instance_launcher_bp
 
@@ -29,3 +30,4 @@ def load(app):
     # history to reconcile here.
     with app.app_context():
         InstanceChallengeConfig.__table__.create(bind=db.engine, checkfirst=True)
+    solve_hook.register(app)

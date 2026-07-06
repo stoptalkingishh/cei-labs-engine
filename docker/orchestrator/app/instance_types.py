@@ -1,20 +1,22 @@
 """docker/orchestrator/app/instance_types.py
 
-Pure planning logic: given a request body, decide what Docker services (and,
-for target-attacker, what throwaway network) are needed. No Docker API calls
-happen here, which is what makes this module unit-testable without a daemon.
+Pure planning logic: given a request body, decide what Docker services (and
+networks) are needed. No Docker API calls happen here, which is what makes
+this module unit-testable without a daemon.
 
 Three instance types, per the migration plan:
-  - web-app:          one container, HTTP-routed through Traefik.
-                       Covers Juice Shop today.
-  - single-target:    one container, HTTP-routed through Traefik.
-                       Same mechanics as web-app; kept distinct in the
-                       registry for standalone shell/service challenges that
-                       aren't paired with an attacker box.
-  - target-attacker:  two containers (target + attacker) on a fresh per-team
-                       overlay network. Only the attacker (browser noVNC) is
-                       reachable via Traefik; the target is never reachable
-                       from anything except its own paired attacker.
+  - web-app:          one container, HTTP-routed through Traefik on the
+                       shared `challenge-edge` network. Covers Juice Shop.
+  - single-target:    one container on its OWN dedicated, airgapped
+                       (Docker `internal: true`) network, reachable only via
+                       a directly published port (SSH or whatever the
+                       challenge needs) — no Traefik involved at all.
+  - target-attacker:  a per-team "range": one shared attacker (browser
+                       noVNC, Traefik-routed) plus N targets, all on one
+                       persistent, airgapped network scoped to the owner
+                       (not the individual challenge) — see RangePlan below.
+                       A target is only ever reachable from its range's own
+                       attacker, never from Traefik, other teams, or CTFd.
 """
 from dataclasses import dataclass, field
 
@@ -34,12 +36,25 @@ class InvalidInstanceRequestError(ValueError):
 
 @dataclass
 class InstancePlan:
+    """What one (owner_id, instance_key) launch actually owns. Tearing down
+    or rebooting an instance only ever affects `services` (and `network`, if
+    set) — never a range's shared attacker/network."""
     type: str
     owner_id: str
     instance_key: str
     services: list[ServiceSpec]
     access: dict[str, str]
-    team_network: "str | None" = field(default=None)
+    network: "str | None" = field(default=None)  # owned + airgapped; None for target-attacker (shared range network instead)
+    range_owner_id: "str | None" = field(default=None)  # set for target-attacker: which range this target belongs to
+
+
+@dataclass
+class RangePlan:
+    """The shared, persistent-per-team half of a target-attacker range."""
+    owner_id: str
+    network: str
+    attacker_service: ServiceSpec
+    access: dict[str, str]
 
 
 def _require_str(spec: dict, key: str) -> str:
@@ -60,9 +75,7 @@ def _traefik_labels(router_name: str, hostname: str, port: int, challenge_networ
     }
 
 
-def _plan_single_container(
-    instance_type: str, owner_id: str, instance_key: str, spec: dict, base_domain: str, challenge_network: str
-) -> InstancePlan:
+def plan_web_app(owner_id: str, instance_key: str, spec: dict, base_domain: str, challenge_network: str) -> InstancePlan:
     image = _require_str(spec, "image")
     port = int(spec.get("port", 3000))
     env = spec.get("env") or {}
@@ -80,7 +93,7 @@ def _plan_single_container(
         env={str(k): str(v) for k, v in env.items()},
     )
     return InstancePlan(
-        type=instance_type,
+        type=WEB_APP,
         owner_id=owner_id,
         instance_key=instance_key,
         services=[service],
@@ -88,50 +101,93 @@ def _plan_single_container(
     )
 
 
-def _plan_target_attacker(
-    owner_id: str, instance_key: str, spec: dict, base_domain: str, challenge_network: str
-) -> InstancePlan:
-    target_image = _require_str(spec, "target_image")
-    attacker_image = _require_str(spec, "attacker_image")
-    target_env = spec.get("target_env") or {}
-    attacker_env = spec.get("attacker_env") or {}
-    attacker_port = int(spec.get("attacker_port", 6080))
+def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_port: int, base_domain: str) -> InstancePlan:
+    """No Traefik involvement — a dedicated airgapped network plus a directly
+    published port (e.g. for SSH). `allocated_port` is acquired by the
+    caller (controller.py) from a PortAllocator, since that's inherently
+    stateful and doesn't belong in this otherwise-pure planning module."""
+    image = _require_str(spec, "image")
+    target_port = int(spec.get("target_port", 22))
+    protocol = spec.get("protocol", "ssh")
+    env = spec.get("env") or {}
+    if not isinstance(env, dict):
+        raise InvalidInstanceRequestError("'env' must be an object of string -> string")
 
-    team_network = naming.network_name(owner_id, instance_key)
-    target_name = naming.service_name(owner_id, instance_key, "target")
-    attacker_name = naming.service_name(owner_id, instance_key, "attacker")
-    hostname = naming.access_hostname(owner_id, instance_key, base_domain)
+    svc_name = naming.service_name(owner_id, instance_key)
+    net_name = naming.network_name(owner_id, instance_key)
 
-    # Target only ever joins the private per-team network — never
-    # challenge_network, so it is unreachable from Traefik, other teams, or
-    # anything besides its own paired attacker.
-    target_service = ServiceSpec(
-        name=target_name,
-        image=target_image,
-        networks=[team_network],
-        env={str(k): str(v) for k, v in target_env.items()},
+    service = ServiceSpec(
+        name=svc_name,
+        image=image,
+        networks=[net_name],
+        env={str(k): str(v) for k, v in env.items()},
+        published_port=(allocated_port, target_port),
     )
+    return InstancePlan(
+        type=SINGLE_TARGET,
+        owner_id=owner_id,
+        instance_key=instance_key,
+        services=[service],
+        network=net_name,
+        access={
+            "connect_host": base_domain,
+            "connect_port": allocated_port,
+            "protocol": protocol,
+            "note": "Connects via any swarm node — this hostname routes to whichever node the target actually landed on.",
+        },
+    )
+
+
+def plan_range_attacker(owner_id: str, spec: dict, base_domain: str, challenge_network: str) -> RangePlan:
+    """Called once per team, the first time they launch any target-attacker
+    challenge. Subsequent challenges reuse this range (see plan_range_target)."""
+    attacker_image = _require_str(spec, "attacker_image")
+    attacker_port = int(spec.get("attacker_port", 6080))
+    attacker_env = spec.get("attacker_env") or {}
+
+    range_network = naming.range_network_name(owner_id)
+    attacker_name = naming.range_attacker_service_name(owner_id)
+    hostname = naming.range_attacker_hostname(owner_id, base_domain)
+
     attacker_service = ServiceSpec(
         name=attacker_name,
         image=attacker_image,
-        networks=[team_network, challenge_network],
+        networks=[range_network, challenge_network],
         labels=_traefik_labels(attacker_name, hostname, attacker_port, challenge_network),
         env={str(k): str(v) for k, v in attacker_env.items()},
     )
+    return RangePlan(
+        owner_id=owner_id,
+        network=range_network,
+        attacker_service=attacker_service,
+        access={"attacker_url": f"https://{hostname}"},
+    )
 
+
+def plan_range_target(owner_id: str, instance_key: str, spec: dict, range_network: str, range_access: dict) -> InstancePlan:
+    """A single challenge's target within an existing (or about-to-exist)
+    range. Joins ONLY the range's network — never challenge_network, never
+    Traefik — so it is unreachable from anywhere except its range's own
+    attacker."""
+    target_image = _require_str(spec, "target_image")
+    target_env = spec.get("target_env") or {}
+
+    target_name = naming.range_target_service_name(owner_id, instance_key)
+    target_service = ServiceSpec(
+        name=target_name,
+        image=target_image,
+        networks=[range_network],
+        env={str(k): str(v) for k, v in target_env.items()},
+    )
     return InstancePlan(
         type=TARGET_ATTACKER,
         owner_id=owner_id,
         instance_key=instance_key,
-        services=[target_service, attacker_service],
-        access={"attacker_url": f"https://{hostname}"},
-        team_network=team_network,
+        services=[target_service],
+        range_owner_id=owner_id,
+        access={
+            **range_access,
+            "target_hostname": target_name,
+            "note": "Target is reachable only from your attacker workstation, at the hostname above.",
+        },
     )
-
-
-def plan(instance_type: str, owner_id: str, instance_key: str, spec: dict, base_domain: str, challenge_network: str) -> InstancePlan:
-    if instance_type in (WEB_APP, SINGLE_TARGET):
-        return _plan_single_container(instance_type, owner_id, instance_key, spec, base_domain, challenge_network)
-    if instance_type == TARGET_ATTACKER:
-        return _plan_target_attacker(owner_id, instance_key, spec, base_domain, challenge_network)
-    raise InvalidInstanceRequestError(f"unknown instance type {instance_type!r}, must be one of {VALID_TYPES}")

@@ -40,3 +40,15 @@ class Config:
     ADMIN_PASSWORD = _read_secret("orchestrator_admin_password", os.environ.get("ORCHESTRATOR_ADMIN_PASSWORD", ""))
 
     DOCKER_SOCKET = os.environ.get("DOCKER_SOCKET", "unix://var/run/docker.sock")
+
+    # Directly-published port range for `single-target` instances (SSH etc.).
+    # Deliberately disjoint from spawn-workspaces.sh's bulk-provisioning
+    # range (default starts at 30001) to avoid collisions between the two
+    # provisioning paths — see docker/.env.example.
+    SSH_PORT_RANGE_START = int(os.environ.get("ORCHESTRATOR_SSH_PORT_RANGE_START", "32000"))
+    SSH_PORT_RANGE_END = int(os.environ.get("ORCHESTRATOR_SSH_PORT_RANGE_END", "32767"))
+
+    # Post-solve auto-shutdown countdown (see controller.schedule_shutdown).
+    SHUTDOWN_DELAY_SECONDS = int(os.environ.get("ORCHESTRATOR_SHUTDOWN_DELAY_SECONDS", "30"))
+    SHUTDOWN_EXTEND_SECONDS = int(os.environ.get("ORCHESTRATOR_SHUTDOWN_EXTEND_SECONDS", "300"))
+    SHUTDOWN_MAX_EXTENSIONS = int(os.environ.get("ORCHESTRATOR_SHUTDOWN_MAX_EXTENSIONS", "3"))

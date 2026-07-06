@@ -5,12 +5,15 @@
   <title>Launch Environment — {{ challenge.name }}</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
-    .card { border: 1px solid #ddd; border-radius: 8px; padding: 1.5rem; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; }
     .error { background: #fde8e8; border: 1px solid #f5b5b5; color: #8a1f1f; padding: 1rem; border-radius: 6px; }
-    .btn { display: inline-block; padding: 0.6rem 1.2rem; border-radius: 6px; text-decoration: none; font-weight: 600; }
+    .warning { background: #fff6e0; border: 1px solid #f0d78c; color: #6b5300; padding: 0.75rem 1rem; border-radius: 6px; }
+    .btn { display: inline-block; padding: 0.6rem 1.2rem; border-radius: 6px; text-decoration: none; font-weight: 600; border: none; cursor: pointer; }
     .btn-primary { background: #1a56db; color: #fff; }
-    .btn-secondary { background: #eee; color: #1a1a1a; border: 1px solid #ccc; cursor: pointer; }
+    .btn-secondary { background: #eee; color: #1a1a1a; border: 1px solid #ccc; }
     form { display: inline; }
+    code, pre { background: #f2f2f2; padding: 0.15rem 0.4rem; border-radius: 4px; }
+    pre { padding: 0.75rem; overflow-x: auto; }
   </style>
 </head>
 <body>
@@ -18,26 +21,63 @@
 
   {% if error %}
     <p class="error">Could not reach your environment: {{ error }}</p>
-  {% elif result %}
+  {% elif status %}
+    {% set access = status.access %}
     <div class="card">
-      <p>Your environment is ready.</p>
-      {% if result.access.url %}
-        <p><a class="btn btn-primary" href="{{ result.access.url }}" target="_blank" rel="noopener">Open Environment</a></p>
+      {% if access.url %}
+        <p><a class="btn btn-primary" href="{{ access.url }}" target="_blank" rel="noopener">Open Environment</a></p>
       {% endif %}
-      {% if result.access.attacker_url %}
-        <p><a class="btn btn-primary" href="{{ result.access.attacker_url }}" target="_blank" rel="noopener">Open Attacker Workstation</a></p>
-        <p>Your target is only reachable from this workstation — it is not exposed anywhere else.</p>
+
+      {% if access.attacker_url %}
+        <p><a class="btn btn-primary" href="{{ access.attacker_url }}" target="_blank" rel="noopener">Open Attacker Workstation</a></p>
+        {% if access.target_hostname %}
+          <p>Your target is reachable only from inside that workstation, at hostname:<br><code>{{ access.target_hostname }}</code></p>
+        {% endif %}
+      {% endif %}
+
+      {% if access.connect_port %}
+        <p>Connect via {{ (access.protocol or "ssh")|upper }}:</p>
+        <pre>{{ access.protocol or "ssh" }} operator@{{ access.connect_host }} -p {{ access.connect_port }}</pre>
+        <p>{{ access.note }}</p>
+      {% endif %}
+
+      {% if status.shutdown_at %}
+        <p class="warning">
+          Environment shuts down in <span id="countdown">--</span>.
+          <form method="post" action="{{ url_for('instance_launcher.launch', challenge_id=challenge.id) }}">
+            <input type="hidden" name="action" value="extend">
+            <button class="btn btn-secondary" type="submit">+5 more minutes</button>
+          </form>
+        </p>
+        <script>
+          (function () {
+            var shutdownAtMs = {{ status.shutdown_at }} * 1000;
+            var el = document.getElementById("countdown");
+            function tick() {
+              var remaining = Math.max(0, Math.round((shutdownAtMs - Date.now()) / 1000));
+              el.textContent = remaining + "s";
+              if (remaining <= 0) { window.location.reload(); }
+            }
+            tick();
+            setInterval(tick, 1000);
+          })();
+        </script>
       {% endif %}
     </div>
   {% endif %}
 
   <p>
     <form method="post" action="{{ url_for('instance_launcher.launch', challenge_id=challenge.id) }}">
-      <button class="btn btn-secondary" type="submit">Reload / Refresh Access</button>
+      <button class="btn btn-secondary" type="submit">Launch / Refresh Access</button>
     </form>
     <form method="post" action="{{ url_for('instance_launcher.launch', challenge_id=challenge.id) }}">
-      <input type="hidden" name="action" value="reset">
-      <button class="btn btn-secondary" type="submit">Reset My Instance</button>
+      <input type="hidden" name="action" value="reboot">
+      <button class="btn btn-secondary" type="submit">Reboot Host</button>
+    </form>
+    <form method="post" action="{{ url_for('instance_launcher.launch', challenge_id=challenge.id) }}"
+          onsubmit="return confirm('This destroys and recreates your environment from scratch. Continue?');">
+      <input type="hidden" name="action" value="relaunch">
+      <button class="btn btn-secondary" type="submit">Relaunch Environment</button>
     </form>
   </p>
 
