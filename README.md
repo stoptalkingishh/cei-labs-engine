@@ -203,6 +203,12 @@ The instance-launcher plugin (baked into the CTFd image) calls the orchestrator 
 
 ---
 
+# Network Prerequisites
+
+This platform is network-agnostic — see [`docs/network-prerequisites.md`](docs/network-prerequisites.md) for the exact ports, DNS, and TLS expectations any front-end network needs to satisfy, and a pointer to [`cei-labs-net`](https://github.com/stoptalkingishh/cei-labs-net) as one worked reference implementation (not a dependency).
+
+---
+
 # Security & Anti-Automation Posture
 
 Automated tools (scripted or AI-driven) attacking CTFd itself to extract flags directly — rather than solving the intended challenge — are mitigated in layers. None of these are unique to "AI" specifically; they're the same controls that blunt any high-volume automated abuse, human-driven or not:
