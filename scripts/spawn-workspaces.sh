@@ -171,7 +171,15 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     continue
   fi
 
-  PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 14 || echo "C3iLabsSecret1!")
+  # `head -c 14` closing early SIGPIPEs the upstream `tr`, which pipefail
+  # treats as pipeline failure — the previous `|| echo "C3iLabsSecret1!"`
+  # fallback here did NOT replace the output on failure, it *appended* to
+  # it (command substitution captures stdout from both sides of `||`),
+  # so every generated password silently ended in the same publicly-known
+  # literal string regardless of the "random" prefix. Verified: 5/5 test
+  # runs produced "<14 random chars>C3iLabsSecret1!". The subshell + `||
+  # true` below absorbs the pipefail failure without emitting anything.
+  PASSWORD=$( (LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 14) || true )
 
   CREATE_ARGS=(
     docker service create --detach

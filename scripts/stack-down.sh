@@ -34,6 +34,17 @@ if [[ -x "$REPO_ROOT/scripts/spawn-workspaces.sh" ]]; then
   "$REPO_ROOT/scripts/spawn-workspaces.sh" --teardown --type kali || true
 fi
 
+# Self-service instances created by the orchestrator are NOT part of the
+# stack and stay attached to challenge-edge/orchestrator-internal — `docker
+# stack rm` cannot remove those networks while anything is still on them.
+# Verified: leaving even one running instance makes stack rm partially fail
+# with "network ... is in use by service ...".
+log_warn "Removing self-service challenge instances (orchestrator-managed)..."
+ids=$(docker service ls --filter "label=cei.orchestrator.managed=true" -q 2>/dev/null || true)
+[[ -n "$ids" ]] && echo "$ids" | xargs -r docker service rm
+nets=$(docker network ls --filter "label=cei.orchestrator.managed=true" -q 2>/dev/null || true)
+[[ -n "$nets" ]] && echo "$nets" | xargs -r docker network rm
+
 log_warn "Removing stack '${STACK_NAME}'..."
 docker stack rm "$STACK_NAME"
 

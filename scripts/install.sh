@@ -144,17 +144,37 @@ setup_ctfd() {
     print_header
     echo -e "${YELLOW}Automated CTFd Setup${NC}"
 
+    # BASE_DOMAIN isn't set as a shell variable anywhere in this script (only
+    # written into docker/.env by configure_docker_env, as $DOMAIN) — read it
+    # back explicitly instead of relying on cross-function variable leakage.
+    local BASE_DOMAIN
+    BASE_DOMAIN=$(grep '^BASE_DOMAIN=' "$DOCKER_DIR/.env" | cut -d= -f2)
+
+    # `docker run --network cei-labs_edge curlimages/curl` (the original
+    # approach here) can never work: `edge` is deliberately `attachable:
+    # false` in stack.yml, and Traefik's own published HTTPS port already
+    # gets us to CTFd without needing to join any Swarm-internal network at
+    # all — same approach as the previous host-side curl calls below, just
+    # extended to the whole flow so cookies persist naturally across calls
+    # (a fresh `docker run --rm` container for each step, as before, would
+    # have no continuity for CTFd's session-bound CSRF nonce anyway, even if
+    # the network attach issue were fixed separately).
     log_info "Waiting for the CTFd container to come up..."
     for _ in $(seq 1 30); do
-        docker run --rm --network cei-labs_edge curlimages/curl:latest -sf http://ctfd:8000/setup -o /dev/null 2>/dev/null && break
+        curl -sfk -o /dev/null -H "Host: ctfd.${BASE_DOMAIN}" "https://localhost/setup" && break
         sleep 5
     done
 
     local cookie_jar nonce
     cookie_jar=$(mktemp)
 
-    nonce=$(docker run --rm --network cei-labs_edge curlimages/curl:latest -s http://ctfd:8000/setup \
-        | grep -oE 'name="nonce" value="[a-f0-9]+"' | awk -F'"' '{print $4}' | head -n1)
+    # Attribute order in the <input> tag varies by CTFd version (this repo's
+    # CTFd 3.8.2 emits id/name/type/value, not name/value adjacent) — match
+    # the whole tag first, then pull value= out of it, instead of assuming a
+    # fixed order. Verified against a live instance: the old regex here
+    # silently returns an empty nonce and the setup POST 403s.
+    nonce=$(curl -sk -c "$cookie_jar" -H "Host: ctfd.${BASE_DOMAIN}" "https://localhost/setup" \
+        | grep -oE '<input[^>]*name="nonce"[^>]*>' | grep -oE 'value="[a-f0-9]+"' | head -n1 | cut -d'"' -f2)
 
     read -rp "CTF name (default: CEI Labs Cyber Range): " CTF_NAME
     CTF_NAME=${CTF_NAME:-CEI Labs Cyber Range}
@@ -163,8 +183,8 @@ setup_ctfd() {
     read -rsp "Admin password: " ADMIN_PASS
     echo
 
-    docker run --rm --network cei-labs_edge curlimages/curl:latest -s \
-        -X POST "http://ctfd:8000/setup" \
+    curl -sk -b "$cookie_jar" -c "$cookie_jar" -H "Host: ctfd.${BASE_DOMAIN}" \
+        -X POST "https://localhost/setup" \
         -F "nonce=${nonce}" \
         -F "ctf_name=${CTF_NAME}" \
         -F "name=admin" \
@@ -173,10 +193,10 @@ setup_ctfd() {
         -F "user_mode=teams" \
         -F "setup=true" > /dev/null
 
-    log_info "CTFd initialized. Log in at https://ctfd.\$BASE_DOMAIN to generate an admin API token,"
-    log_info "then: export CTFD_ADMIN_TOKEN=... and run ./scripts/challenges-load.sh"
-
     rm -f "$cookie_jar"
+
+    log_info "CTFd initialized. Log in at https://ctfd.${BASE_DOMAIN} to generate an admin API token,"
+    log_info "then: export CTFD_ADMIN_TOKEN=... and run ./scripts/challenges-load.sh"
 }
 
 main() {

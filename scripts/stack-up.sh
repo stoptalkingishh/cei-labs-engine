@@ -138,6 +138,18 @@ echo "════════════════════════�
 # run it from inside docker/ rather than passing -c docker/stack.yml from the
 # repo root.
 cd "$DOCKER_DIR"
+
+# `docker stack deploy` does NOT auto-read .env the way `docker compose up`
+# does — it only interpolates ${VAR} from variables already present in this
+# shell's environment. Without this, GITHUB_ORG/IMAGE_TAG/etc. all resolve
+# empty and the deploy fails with "invalid reference format".
+if [[ "$DRY_RUN" == "false" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$DOCKER_DIR/.env"
+  set +a
+fi
+
 run docker stack deploy --with-registry-auth -c stack.yml "$STACK_NAME"
 
 if [[ "$DRY_RUN" == "false" ]]; then
