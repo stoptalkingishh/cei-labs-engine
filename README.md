@@ -45,7 +45,7 @@ These capabilities are part of the long-term roadmap and are not required for th
 
 # Training Tracks
 
-The current curriculum is organized around progressive learning tracks designed to accommodate multiple experience levels.
+The current curriculum is organized around progressive learning tracks designed to accommodate multiple experience levels. **Challenge content itself is not bundled in this repo** — this platform hosts and orchestrates challenges, it doesn't author them. Content comes from dedicated wargames repos (e.g. [`CEI-Labs-Wargames`](https://github.com/stoptalkingishh/CEI-Labs-Wargames), which self-hosts Bandit/Krypton/Natas rather than pointing at OverTheWire's live infrastructure) via `scripts/challenges-load.sh` or that repo's own equivalent loader — see each track below for which repo/topic it maps to.
 
 ## Foundations Track
 
@@ -313,13 +313,17 @@ After deployment:
 1. Open `https://ctfd.<your-base-domain>`.
 2. Complete the initial setup wizard (or let `install.sh` do this non-interactively).
 3. Generate an API token, then: `export CTFD_ADMIN_TOKEN=...`
-4. Load challenge content:
+4. Load challenge content. This repo ships no bundled challenges — pull
+   content from a wargames repo first (e.g. clone
+   [`CEI-Labs-Wargames`](https://github.com/stoptalkingishh/CEI-Labs-Wargames)
+   and run its own `deploy.sh`), or drop challenge YAML under
+   `challenges/sprintN-*/` here and run:
 
 ```bash
 ./scripts/challenges-load.sh
 ```
 
-Any challenge whose YAML declares `instance_type` (see `docker/orchestrator/README.md`) automatically gets a "Launch Environment" link wired up via the instance-launcher plugin.
+Any challenge whose YAML declares `instance_type` (see `docker/orchestrator/README.md`) automatically gets a "Launch Environment" link wired up via the instance-launcher plugin — both loading paths populate the same CTFd instance/mapping tables.
 
 ---
 
@@ -344,8 +348,8 @@ Shows a live snapshot: swarm nodes, stack service health, bulk-spawned workspace
 
 ## Phase 2 — Training Delivery
 
-* Deploy Bandit curriculum
-* Deploy Natas curriculum
+* Deploy Bandit curriculum (self-hosted — see `CEI-Labs-Wargames`)
+* Deploy Natas curriculum (self-hosted — see `CEI-Labs-Wargames`)
 * Deploy Leviathan curriculum
 * Validate challenge progression
 
