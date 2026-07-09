@@ -24,20 +24,34 @@ that page at all. Every challenge description in `CEI-Labs-Wargames`
 **Confirmed real:** a user pointed at the live Bandit 0->1 challenge and
 could not find any way to start an instance.
 
-## 2. Feature request: a "Bandit: Start Here" onboarding challenge
+## 2. Feature request: a "Start Here" onboarding challenge, one per track (Bandit, Krypton, AND Natas)
 
-Proposed by the user: a zero'th challenge in the Bandit track, name like
-"Bandit: Start Here," whose entire job is teaching the launch UI itself —
-explain what Launch/Reboot/Relaunch/Extend each do, have the player click
-through the actual flow once, award points just for successfully reaching
-a running instance. Would need:
+Proposed by the user, scope confirmed as **all three tracks, not just
+Bandit**: a zero'th challenge in each of Bandit, Krypton, and Natas, name
+like "<Track>: Start Here," whose entire job is teaching the launch UI
+itself — explain what Launch/Reboot/Relaunch/Extend each do, have the
+player click through the actual flow once, award points just for
+successfully reaching a running instance. Same underlying mechanism
+("build out that same functionality") across all three, not three
+independently-designed challenges.
+
+Would need, per track:
 - New challenge content in `CEI-Labs-Wargames` (category, description,
   probably no real flag-based solve — or a trivial one, e.g. submit
   something the launch page itself displays once the instance is up).
-- Some way for this challenge to actually launch (or link to launching)
-  the same shared `bandit` instance_group, since a real "start here"
-  experience should visibly demonstrate the actual mechanism, not a fake
-  one.
+- Wired to that track's own shared `instance_group` (`bandit`, `krypton`,
+  `natas`) so it demonstrates the *actual* mechanism each track already
+  uses, not a fake/separate one — Bandit/Krypton are `single-target`,
+  Natas is `target-attacker` (range + attacker), so the Natas version of
+  this challenge needs to account for that difference (e.g. showing both
+  the attacker-workstation link and, once item 4 below is resolved, the
+  target reachability info) rather than being a copy-paste of Bandit's.
+
+This depends on item 1 (the launch flow becoming a real, linkable/
+embeddable part of the challenge experience) being solved first — a
+"Start Here" challenge that still points players at an undiscoverable
+standalone page doesn't actually fix the underlying problem, it just
+narrows where the problem is first encountered.
 
 ## 3. Challenge descriptions don't show connection info because there isn't any to show statically
 
