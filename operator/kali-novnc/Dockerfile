@@ -27,20 +27,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     binwalk \
     foremost \
     netcat-traditional \
+    ncat \
+    socat \
     tshark \
     tcpdump \
     python3 \
     python3-pip \
+    python3-requests \
     default-jdk \
     curl \
     wget \
     git \
     tmux \
     vim \
+    nano \
     dbus-x11 \
     unzip \
     ghidra \
     openssh-server \
+    ffuf \
+    mitmproxy \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
