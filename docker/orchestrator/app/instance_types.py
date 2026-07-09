@@ -29,6 +29,25 @@ TARGET_ATTACKER = "target-attacker"
 
 VALID_TYPES = (WEB_APP, SINGLE_TARGET, TARGET_ATTACKER)
 
+# Phase 6 hardening: cap_drop=["ALL"] plus back only what's actually
+# needed, confirmed by live-testing each image's real lessons rather than
+# guessed. Baseline (targets: Bandit/Krypton SSH boxes, the Natas LAMP
+# target) covers sshd/su/chpasswd-style per-connection privilege drops,
+# MPM-ITK's per-vhost setuid/setgid, and cron. SYS_CHROOT is required --
+# confirmed by testing, not assumed: without it, sshd's privilege-
+# separation preauth child fails outright with "chroot(\"/run/sshd\"):
+# Operation not permitted", breaking every SSH connection before
+# authentication even starts. NET_RAW/MKNOD from Docker's own default set
+# are still left out -- neither is needed by these lessons.
+_TARGET_CAPS = [
+    "CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL",
+    "SETGID", "SETUID", "SETFCAP", "SETPCAP",
+    "NET_BIND_SERVICE", "AUDIT_WRITE", "SYS_CHROOT",
+]
+# The Natas/analyst attacker workstation additionally needs raw-socket
+# access for nmap/tcpdump (NET_RAW, NET_ADMIN for promiscuous capture).
+_ATTACKER_CAPS = _TARGET_CAPS + ["NET_RAW", "NET_ADMIN"]
+
 
 class InvalidInstanceRequestError(ValueError):
     pass
@@ -122,6 +141,8 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
         networks=[net_name],
         env={str(k): str(v) for k, v in env.items()},
         published_port=(allocated_port, target_port),
+        cap_drop=["ALL"],
+        cap_add=list(_TARGET_CAPS),
     )
     return InstancePlan(
         type=SINGLE_TARGET,
@@ -166,6 +187,8 @@ def plan_range_attacker(owner_id: str, spec: dict, allocated_port: int, base_dom
         labels=_traefik_labels(attacker_name, hostname, attacker_port, challenge_network),
         env={str(k): str(v) for k, v in attacker_env.items()},
         published_port=(allocated_port, attacker_ssh_port),
+        cap_drop=["ALL"],
+        cap_add=list(_ATTACKER_CAPS),
     )
     return RangePlan(
         owner_id=owner_id,
@@ -195,6 +218,8 @@ def plan_range_target(owner_id: str, instance_key: str, spec: dict, range_networ
         image=target_image,
         networks=[range_network],
         env={str(k): str(v) for k, v in target_env.items()},
+        cap_drop=["ALL"],
+        cap_add=list(_TARGET_CAPS),
     )
     return InstancePlan(
         type=TARGET_ATTACKER,

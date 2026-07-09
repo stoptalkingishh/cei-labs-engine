@@ -93,7 +93,7 @@ RUN command -v vncpasswd && \
 
 USER root
 
-RUN printf '#!/bin/bash\nset -e\nsu operator -c "vncserver :1 -geometry 1280x800 -depth 24 -localhost no"\nwebsockify --web=/usr/share/novnc 6080 localhost:5901 &\n/usr/sbin/sshd\ntail -f /dev/null\n' > /start.sh \
+RUN printf '#!/bin/bash\nset -e\nsu operator -c "vncserver :1 -geometry 1280x800 -depth 24 -localhost no"\nsu operator -c "websockify --web=/usr/share/novnc 6080 localhost:5901" &\n/usr/sbin/sshd\ntail -f /dev/null\n' > /start.sh \
     && chmod +x /start.sh \
     && ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
