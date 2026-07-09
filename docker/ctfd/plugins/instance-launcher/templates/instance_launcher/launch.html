@@ -32,6 +32,7 @@
         <p><a class="btn btn-primary" href="{{ access.attacker_url }}" target="_blank" rel="noopener">Open Attacker Workstation</a></p>
         {% if access.target_hostname %}
           <p>Your target is reachable only from inside that workstation, at hostname:<br><code>{{ access.target_hostname }}</code></p>
+          {% if access.target_note %}<p>{{ access.target_note }}</p>{% endif %}
         {% endif %}
       {% endif %}
 
@@ -45,6 +46,7 @@
         <p class="warning">
           Environment shuts down in <span id="countdown">--</span>.
           <form method="post" action="{{ url_for('instance_launcher.launch', challenge_id=challenge.id) }}">
+            <input type="hidden" name="nonce" value="{{ session.nonce }}">
             <input type="hidden" name="action" value="extend">
             <button class="btn btn-secondary" type="submit">+5 more minutes</button>
           </form>
@@ -68,14 +70,17 @@
 
   <p>
     <form method="post" action="{{ url_for('instance_launcher.launch', challenge_id=challenge.id) }}">
+      <input type="hidden" name="nonce" value="{{ session.nonce }}">
       <button class="btn btn-secondary" type="submit">Launch / Refresh Access</button>
     </form>
     <form method="post" action="{{ url_for('instance_launcher.launch', challenge_id=challenge.id) }}">
+      <input type="hidden" name="nonce" value="{{ session.nonce }}">
       <input type="hidden" name="action" value="reboot">
       <button class="btn btn-secondary" type="submit">Reboot Host</button>
     </form>
     <form method="post" action="{{ url_for('instance_launcher.launch', challenge_id=challenge.id) }}"
           onsubmit="return confirm('This destroys and recreates your environment from scratch. Continue?');">
+      <input type="hidden" name="nonce" value="{{ session.nonce }}">
       <input type="hidden" name="action" value="relaunch">
       <button class="btn btn-secondary" type="submit">Relaunch Environment</button>
     </form>

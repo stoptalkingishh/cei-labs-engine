@@ -108,9 +108,14 @@ class InstanceController:
     def _create_range_target(self, owner_id: str, instance_key: str, spec: dict):
         range_record = self.range_store.get(owner_id)
         if range_record is None:
-            range_plan = instance_types.plan_range_attacker(owner_id, spec, self.base_domain, self.challenge_network)
-            self.docker.ensure_network(range_plan.network, internal=True)
-            self._create_services([range_plan.attacker_service])
+            port = self.port_allocator.allocate()
+            try:
+                range_plan = instance_types.plan_range_attacker(owner_id, spec, port, self.base_domain, self.challenge_network)
+                self.docker.ensure_network(range_plan.network, internal=True)
+                self._create_services([range_plan.attacker_service])
+            except Exception:
+                self.port_allocator.release(port)
+                raise
             range_record = RangeRecord(plan=range_plan, created_at=time.time())
             self.range_store.put(range_record)
         else:
@@ -152,6 +157,8 @@ class InstanceController:
         for instance_key in list(range_record.target_keys):
             self.teardown(owner_id, instance_key)
         self.docker.remove_service(range_record.plan.attacker_service.name)
+        if range_record.plan.attacker_service.published_port:
+            self.port_allocator.release(range_record.plan.attacker_service.published_port[0])
         self.docker.remove_network(range_record.plan.network)
         self.range_store.remove(owner_id)
         return True

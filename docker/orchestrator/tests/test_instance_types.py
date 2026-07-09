@@ -66,7 +66,7 @@ def test_single_target_requires_image():
 # ── target-attacker (range model) ─────────────────────────────────────────────
 
 def test_range_attacker_plan_joins_range_network_and_challenge_network():
-    plan = it.plan_range_attacker("team-1", {"attacker_image": "cei/kali-novnc:latest"}, BASE_DOMAIN, CHALLENGE_NET)
+    plan = it.plan_range_attacker("team-1", {"attacker_image": "cei/kali-novnc:latest"}, 32000, BASE_DOMAIN, CHALLENGE_NET)
 
     assert plan.owner_id == "team-1"
     assert set(plan.attacker_service.networks) == {plan.network, CHALLENGE_NET}
@@ -77,8 +77,8 @@ def test_range_attacker_plan_joins_range_network_and_challenge_network():
 def test_range_attacker_hostname_has_no_instance_key_component():
     # Two different challenges for the same team must resolve to the SAME
     # attacker hostname/network — that's the whole point of the range model.
-    plan_a = it.plan_range_attacker("team-1", {"attacker_image": "k"}, BASE_DOMAIN, CHALLENGE_NET)
-    plan_b = it.plan_range_attacker("team-1", {"attacker_image": "k"}, BASE_DOMAIN, CHALLENGE_NET)
+    plan_a = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, BASE_DOMAIN, CHALLENGE_NET)
+    plan_b = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, BASE_DOMAIN, CHALLENGE_NET)
     assert plan_a.network == plan_b.network
     assert plan_a.attacker_service.name == plan_b.attacker_service.name
     assert plan_a.access == plan_b.access
@@ -86,11 +86,11 @@ def test_range_attacker_hostname_has_no_instance_key_component():
 
 def test_range_attacker_requires_attacker_image():
     with pytest.raises(it.InvalidInstanceRequestError):
-        it.plan_range_attacker("team-1", {}, BASE_DOMAIN, CHALLENGE_NET)
+        it.plan_range_attacker("team-1", {}, 32000, BASE_DOMAIN, CHALLENGE_NET)
 
 
 def test_range_target_joins_only_the_range_network():
-    range_plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, BASE_DOMAIN, CHALLENGE_NET)
+    range_plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, BASE_DOMAIN, CHALLENGE_NET)
     target_plan = it.plan_range_target("team-1", "otw-1", {"target_image": "t"}, range_plan.network, range_plan.access)
 
     assert target_plan.type == it.TARGET_ATTACKER
@@ -105,7 +105,7 @@ def test_range_target_joins_only_the_range_network():
 
 
 def test_two_targets_same_team_share_network_but_have_distinct_services():
-    range_plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, BASE_DOMAIN, CHALLENGE_NET)
+    range_plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, BASE_DOMAIN, CHALLENGE_NET)
     target_a = it.plan_range_target("team-1", "challenge-a", {"target_image": "t"}, range_plan.network, range_plan.access)
     target_b = it.plan_range_target("team-1", "challenge-b", {"target_image": "t"}, range_plan.network, range_plan.access)
 
@@ -114,13 +114,13 @@ def test_two_targets_same_team_share_network_but_have_distinct_services():
 
 
 def test_two_teams_never_share_a_range_network_or_service_name():
-    plan_a = it.plan_range_attacker("team-a", {"attacker_image": "k"}, BASE_DOMAIN, CHALLENGE_NET)
-    plan_b = it.plan_range_attacker("team-b", {"attacker_image": "k"}, BASE_DOMAIN, CHALLENGE_NET)
+    plan_a = it.plan_range_attacker("team-a", {"attacker_image": "k"}, 32000, BASE_DOMAIN, CHALLENGE_NET)
+    plan_b = it.plan_range_attacker("team-b", {"attacker_image": "k"}, 32000, BASE_DOMAIN, CHALLENGE_NET)
     assert plan_a.network != plan_b.network
     assert plan_a.attacker_service.name != plan_b.attacker_service.name
 
 
 def test_range_target_requires_target_image():
-    range_plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, BASE_DOMAIN, CHALLENGE_NET)
+    range_plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, BASE_DOMAIN, CHALLENGE_NET)
     with pytest.raises(it.InvalidInstanceRequestError):
         it.plan_range_target("team-1", "otw", {}, range_plan.network, range_plan.access)

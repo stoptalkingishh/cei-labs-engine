@@ -138,11 +138,21 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
     )
 
 
-def plan_range_attacker(owner_id: str, spec: dict, base_domain: str, challenge_network: str) -> RangePlan:
+def plan_range_attacker(owner_id: str, spec: dict, allocated_port: int, base_domain: str, challenge_network: str) -> RangePlan:
     """Called once per team, the first time they launch any target-attacker
-    challenge. Subsequent challenges reuse this range (see plan_range_target)."""
+    challenge. Subsequent challenges reuse this range (see plan_range_target).
+
+    `allocated_port` publishes the attacker's SSH port directly (same
+    PortAllocator pool `single-target` already draws from — see
+    controller.py._create_range_target) alongside the existing Traefik/
+    noVNC label-based route; ServiceSpec/docker_client.create_service()
+    already support both `labels` and `published_port` on one service, so
+    this doesn't touch docker_client.py at all. Without this, the
+    attacker's SSH server (present in the image) was reachable from
+    nowhere outside the container — confirmed by testing, not assumed."""
     attacker_image = _require_str(spec, "attacker_image")
     attacker_port = int(spec.get("attacker_port", 6080))
+    attacker_ssh_port = int(spec.get("attacker_ssh_port", 22))
     attacker_env = spec.get("attacker_env") or {}
 
     range_network = naming.range_network_name(owner_id)
@@ -155,12 +165,19 @@ def plan_range_attacker(owner_id: str, spec: dict, base_domain: str, challenge_n
         networks=[range_network, challenge_network],
         labels=_traefik_labels(attacker_name, hostname, attacker_port, challenge_network),
         env={str(k): str(v) for k, v in attacker_env.items()},
+        published_port=(allocated_port, attacker_ssh_port),
     )
     return RangePlan(
         owner_id=owner_id,
         network=range_network,
         attacker_service=attacker_service,
-        access={"attacker_url": f"https://{hostname}"},
+        access={
+            "attacker_url": f"https://{hostname}",
+            "connect_host": base_domain,
+            "connect_port": allocated_port,
+            "protocol": "ssh",
+            "note": "SSH connects via any swarm node — this hostname routes to whichever node the attacker actually landed on.",
+        },
     )
 
 
@@ -188,6 +205,6 @@ def plan_range_target(owner_id: str, instance_key: str, spec: dict, range_networ
         access={
             **range_access,
             "target_hostname": target_name,
-            "note": "Target is reachable only from your attacker workstation, at the hostname above.",
+            "target_note": "Target is reachable only from your attacker workstation, at the hostname above.",
         },
     )
