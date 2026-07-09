@@ -15,6 +15,7 @@ import hmac
 from flask import Blueprint, abort, redirect, render_template, request, url_for
 
 from CTFd.models import Challenges, db
+from CTFd.plugins import bypass_csrf_protection
 from CTFd.utils.decorators import admins_only, authed_only
 from CTFd.utils.user import get_current_user
 
@@ -119,10 +120,15 @@ def admin_delete_mapping(challenge_id: int):
 
 
 @instance_launcher_bp.route("/admin/mappings/sync", methods=["POST"])
+@bypass_csrf_protection
 def sync_mapping():
     """Non-interactive upsert for scripts/challenges-load.sh — matches by
     challenge NAME (not id) since ctfcli, not this plugin, is what creates
-    challenges from YAML in the first place."""
+    challenges from YAML in the first place. Needs @bypass_csrf_protection
+    because this route is deliberately called without a CTFd session (the
+    whole point is to work headlessly from a script) -- without it, CTFd's
+    own global CSRF check rejects the request with 403 before this
+    function's own X-Sync-Auth check ever runs."""
     provided = request.headers.get("X-Sync-Auth", "")
     expected = read_secret("plugin_shared_secret")
     if not expected or not hmac.compare_digest(provided, expected):
