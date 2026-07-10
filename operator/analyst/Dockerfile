@@ -1,12 +1,17 @@
 FROM ubuntu:24.04
 
-ARG OPERATOR_PASSWORD
 ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Strict validation: Fail build if repository secrets were not supplied
-RUN test -n "$OPERATOR_PASSWORD"
+# Security: OPERATOR_PASSWORD is intentionally NOT an ARG here -- baking a
+# password into an image means every container ever run from it shares one
+# never-rotated credential, recoverable via `docker inspect`/`docker
+# history` by anyone who can pull the image (no shell access needed) --
+# `ghcr.io/stoptalkingishh/*` is public. The account below is created with
+# no usable password; the real password is applied fresh at container
+# START from the RUNTIME environment by /entrypoint.sh (see the end of
+# this file).
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
@@ -49,9 +54,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# Create operator user and set password using strictly validated runtime secret
+# Create operator user with NO usable password (locked account) -- the
+# real password is applied at container start, below, from the runtime
+# environment.
 RUN useradd -m -s /bin/bash --no-user-group operator && \
-    echo "operator:${OPERATOR_PASSWORD}" | chpasswd && \
     mkdir -p /etc/sudoers.d && \
     echo "operator ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/operator && \
     chmod 0440 /etc/sudoers.d/operator
@@ -114,7 +120,27 @@ RUN mkdir -p /var/run/sshd \
         '╚══════════════════════════════════════════════════════════╝' \
         > /etc/ssh/banner
 
+# Applies the account password fresh on every container start, from
+# whatever OPERATOR_PASSWORD is actually in this specific container's
+# runtime environment -- never baked into the image, never shared across
+# teams/instances. Fails loudly and refuses to start rather than silently
+# falling back to no password if the orchestrator/spawn script didn't set
+# one.
+RUN cat > /entrypoint.sh <<'SCRIPT'
+#!/bin/bash
+set -e
+
+if [ -z "${OPERATOR_PASSWORD:-}" ]; then
+    echo "FATAL: OPERATOR_PASSWORD is not set in the container environment -- refusing to start with no password." >&2
+    exit 1
+fi
+
+echo "operator:${OPERATOR_PASSWORD}" | chpasswd
+exec /usr/sbin/sshd -D
+SCRIPT
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 22
 HEALTHCHECK --interval=30s --timeout=5s \
   CMD nc -z localhost 22 || exit 1
-CMD ["/usr/sbin/sshd", "-D"]
+CMD ["/entrypoint.sh"]

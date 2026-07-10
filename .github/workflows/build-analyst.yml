@@ -56,5 +56,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           no-cache: true
-          build-args: |
-            OPERATOR_PASSWORD=${{ secrets.OPERATOR_PASSWORD }}
+          # No OPERATOR_PASSWORD build-arg -- the image no longer bakes in
+          # a password at all (see operator/analyst/Dockerfile). The
+          # orchestrator (or scripts/spawn-workspaces.sh for standalone
+          # provisioning) generates one per instance and sets it via the
+          # container's runtime environment instead.

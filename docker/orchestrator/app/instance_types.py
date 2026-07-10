@@ -18,6 +18,7 @@ Three instance types, per the migration plan:
                        A target is only ever reachable from its range's own
                        attacker, never from Traefik, other teams, or CTFd.
 """
+import secrets
 from dataclasses import dataclass, field
 
 from .docker_client import ServiceSpec
@@ -185,7 +186,21 @@ def plan_range_attacker(
     attacker_image = _require_str(spec, "attacker_image")
     attacker_port = int(spec.get("attacker_port", 6080))
     attacker_ssh_port = int(spec.get("attacker_ssh_port", 22))
-    attacker_env = spec.get("attacker_env") or {}
+    attacker_env = dict(spec.get("attacker_env") or {})
+
+    # Security: generate a random per-range credential here, at instance-
+    # creation time, rather than trusting anything baked into the image.
+    # operator/kali-novnc/Dockerfile and operator/analyst/Dockerfile both
+    # apply whichever of these two env vars they care about at container
+    # START (not build) time -- setting both is harmless since only one is
+    # ever read by a given image. Only generated the first time a team's
+    # range is created (this function isn't called again for that owner
+    # until a full teardown/relaunch — see controller.py._create_range_target
+    # and reboot_range_attacker), so the credential is stable across a
+    # team's whole session and only rotates on a real Relaunch.
+    attacker_password = secrets.token_urlsafe(18)
+    attacker_env["VNC_PASSWORD"] = attacker_password
+    attacker_env["OPERATOR_PASSWORD"] = attacker_password
 
     range_network = naming.range_network_name(owner_id)
     attacker_name = naming.range_attacker_service_name(owner_id)
@@ -207,6 +222,8 @@ def plan_range_attacker(
         attacker_service=attacker_service,
         access={
             "attacker_url": f"https://{hostname}",
+            "attacker_username": "operator",
+            "attacker_password": attacker_password,
             "connect_host": base_domain,
             "connect_port": allocated_port,
             "protocol": "ssh",
