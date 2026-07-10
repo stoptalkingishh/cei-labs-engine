@@ -172,6 +172,45 @@ resynced to the `ghcr.io/local-test/...` build via the plugin's own
 `/admin/mappings/sync` endpoint) — neither is new, both already known and
 documented above, not Stage 3 regressions.
 
+## Critical finding: the orchestrator's in-memory state isn't actually shared (multi-worker race)
+
+Found live while verifying Stage 5's "Start Here" challenges in
+`CEI-Labs-Wargames` (below) — this **supersedes and sharpens** the
+already-documented "in-memory store, no reconciliation" limitation above.
+That framing implied the desync only shows up after a restart or manual
+Docker surgery. It doesn't: `docker/orchestrator/Dockerfile` runs
+`gunicorn --workers 2`, meaning the orchestrator is **two separate OS
+processes**, each with its own independent `InstanceStore`/`RangeStore`/
+`PortAllocator` — no shared memory, no Redis, nothing. Every single
+request has a real chance of landing on whichever worker didn't handle
+the request before it.
+
+**Reproduced directly, repeatedly, in normal steady-state operation (no
+restart involved):**
+- Launching two different challenges seconds apart produced a genuine
+  port collision — `chinst-2-group-krypton` tried to bind the same port
+  `chinst-2-group-bandit` had just been given, because the request landed
+  on a worker that never saw the first allocation.
+- Immediately after a *successful* launch, `GET /api/status/<id>` returned
+  `status: null` for 3 of 4 consecutive polls in a row before finally
+  hitting the worker that actually created the instance — a real player
+  clicking Launch and watching Stage 2's injected panel would see it
+  flicker back to "not started" even though their environment is already
+  up.
+
+This is worse than a rare edge case: with 2 workers, a naive request
+distribution gives roughly 50% odds of any single request missing
+whatever the other worker just did, compounding across every create/
+status/reboot/relaunch/extend call. **Recommend treating this as
+higher-priority than the other known-open items below** — it's the kind
+of bug that looks like flakiness in testing but would be a constant,
+confusing background hum in real multi-team play. Not fixed in this
+pass (a real architectural decision — shared/Redis-backed state, or
+dropping to `--workers 1` with something else providing concurrency —
+deserves its own explicit call, not a drive-by fix buried in a content
+stage). Workaround used to keep verifying past it: retry the same request
+a few times.
+
 ## Known open items (found, not fixed — explicitly out of scope for this pass)
 
 - **The orchestrator's instance/range state is a pure in-memory dict, no
