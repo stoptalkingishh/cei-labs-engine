@@ -90,6 +90,25 @@ first (a level or two per track) for the user to sign off on before
 committing to all 56 is the plan — see status doc / commit history for
 what actually shipped.
 
+## Correction to earlier session notes: the repeated "403 on DELETE" was never a CTFd quirk
+
+Multiple points earlier in this session, a `DELETE /api/v1/challenges/<id>`
+or `DELETE /api/v1/hints/<id>` call returned 403 despite a valid admin
+session and a correct `CSRF-Token` header, and was written off each time
+as "not worth chasing" / minor test-hygiene noise. Root-caused for real
+while cleaning up duplicate hints during the 3-tier hint rollout: CTFd's
+global CSRF check (`CTFd/utils/initialization/__init__.py`) branches on
+`request.content_type` -- if it's exactly `application/json`, it checks
+the `CSRF-Token` header; for anything else (including a bodyless request
+with NO `Content-Type` at all, which is what a plain `curl -X DELETE` or
+a bare `requests.delete()` call sends by default), it instead checks for
+a form-encoded `nonce` field, which a header-only request never has, so
+it 403s. Adding `-H "Content-Type: application/json"` (even with an
+empty body) fixes it every time. Not a CTFd bug or a real permissions
+gap -- purely a client-side gap in how these one-off admin scripts were
+built. Worth remembering for any future direct-API scripting against
+this CTFd instance.
+
 ## Execution order
 
 1. Fix item 3 (launch panel verbosity) — small, unambiguous, no research
