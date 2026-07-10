@@ -93,6 +93,52 @@ already-documented in-memory-store-vs-real-Docker-state desync (a stray
 by removing the orphaned service/network and letting the real API recreate
 it in sync, not by working around the symptom.
 
+**Stage 2 (inject the launch control into CTFd's own challenge modal) is
+done, but only partially verified — see the caveat below.**
+`docker/ctfd/plugins/instance-launcher/assets/challenge-launch.js` (new)
+is registered site-wide via `register_plugin_script`/
+`register_plugin_assets_directory` in `__init__.py`. Real reconnaissance
+against the live theme (not memory/guessing) found: CTFd's core theme
+(Alpine.js-based) renders the *entire* challenge modal body via
+`x-html="$store.challenge.data.view"` on `#challenge-window`, replacing it
+wholesale on every single challenge open — including re-opening the same
+challenge — and the common "click a challenge on the board" path never
+dispatches the `load-challenge` window event some other paths use, so a
+`MutationObserver` on `#challenge-window` is the only hook that reliably
+fires on every render. The script anchors on `#challenge-id` (a hidden
+input CTFd itself always renders) and inserts its panel after
+`.challenge-desc`, and calls the two Stage-1 JSON routes via `CTFd.fetch()`
+(CTFd's own global fetch wrapper, confirmed via the live bundle to
+auto-attach the same `CSRF-Token` header CTFd's bundled frontend uses, so
+this doesn't scrape a nonce itself).
+
+Caught one real bug this way before it shipped: `register_plugin_script`
+takes only a URL (it reads Flask's `current_app` internally) — the first
+attempt passed `app` as well, which crashed the whole CTFd process on
+every worker (`TypeError: register_script() takes 1 positional argument
+but 2 were given`, visible in `docker service logs`). Fixed, rebuilt,
+confirmed the service is stable again.
+
+**What's verified:** the script is served with the right content-type,
+the challenges page's actual rendered HTML includes the
+`<script defer src=".../challenge-launch.js">` tag, `defer` execution
+timing is compatible with the script's own `DOMContentLoaded` listener
+(deferred scripts always run before that event fires, so the listener is
+guaranteed to still be pending when it does), `#challenge-window` is
+confirmed present in the live page at load time, and a real
+`GET /api/v1/challenges/<id>` response was checked directly to confirm its
+`view` HTML actually contains both anchors the script depends on
+(`.challenge-desc`, `#challenge-id`) — not just the static template
+source.
+
+**What's NOT verified, and can't be from this environment:** actually
+opening a challenge in a real browser and watching the panel appear,
+launch, poll, and show working connect info. No headless-browser tool is
+available here. Everything above is real evidence the wiring *should*
+work end to end, but it is not the same as having watched it work — this
+needs a real browser check (by the user, or a future session with browser
+tooling) before Stage 2 is called fully done.
+
 ## Known open items (found, not fixed — explicitly out of scope for this pass)
 
 - **The orchestrator's instance/range state is a pure in-memory dict, no
