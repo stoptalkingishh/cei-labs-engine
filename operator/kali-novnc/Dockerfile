@@ -1,4 +1,16 @@
-FROM kalilinux/kali-rolling:latest
+# Pinned to a real digest, not the floating :latest tag -- combined with
+# this image's CI build using `no-cache: true`, an unpinned :latest base
+# meant every rebuild could silently pull a different (potentially
+# compromised) upstream layer with no record of what changed. Pinning
+# the base layer doesn't freeze installed *package* versions below (the
+# apt-get install step still pulls current versions from Kali's rolling
+# repos, which is intentional here -- pentesting tools like nmap/sqlmap/
+# hashcat benefit from staying current), but it does mean the base OS
+# layer itself is reproducible and auditable rather than a moving
+# target. Bump this digest deliberately (not automatically) when a base
+# refresh is actually wanted -- `docker pull kalilinux/kali-rolling:latest`
+# and copy the reported digest.
+FROM kalilinux/kali-rolling@sha256:776d57c9d607faafef9957073b0b5a05b0d1115e5728777a8fc5588827cfd249
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG VNC_PASSWORD
