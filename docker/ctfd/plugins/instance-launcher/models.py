@@ -40,6 +40,21 @@ class InstanceChallengeConfig(db.Model):
     # solved by that team — see solve_hook.py.
     shutdown_on_solve = db.Column(db.Boolean, nullable=False, default=True)
 
+    # Whether challenge-launch.js should inject a launch control into THIS
+    # challenge's modal at all. Real playtesting showed that when many
+    # challenges share one instance_group (e.g. all 34 Bandit levels), a
+    # launch button repeated on every single one is redundant clutter once
+    # a player has already started the shared box from one of them — the
+    # remaining levels only need connection info they already have, not
+    # another "Launch" button. Default True (safe for any standalone
+    # challenge/future instance_type that doesn't explicitly opt out);
+    # the "start here" onboarding challenge in each shared group is the
+    # one that keeps this True, every other member explicitly sets it
+    # False. Purely a frontend-injection toggle — /launch/<id> and the
+    # JSON API still work normally regardless, this only controls whether
+    # challenge-launch.js shows anything unprompted.
+    show_launcher = db.Column(db.Boolean, nullable=False, default=True)
+
     challenge = db.relationship("Challenges", foreign_keys=[challenge_id])
 
     def resolved_instance_key(self) -> str:

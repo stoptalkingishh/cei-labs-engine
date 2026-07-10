@@ -129,12 +129,19 @@ def api_status(challenge_id: int):
     try:
         status = client.get(owner_id, instance_key)
     except OrchestratorError as exc:
-        return {"has_environment": True, "instance_type": config.instance_type, "instance_group": config.instance_group, "error": str(exc)}, 200
+        return {
+            "has_environment": True,
+            "instance_type": config.instance_type,
+            "instance_group": config.instance_group,
+            "show_launcher": config.show_launcher,
+            "error": str(exc),
+        }, 200
 
     return {
         "has_environment": True,
         "instance_type": config.instance_type,
         "instance_group": config.instance_group,
+        "show_launcher": config.show_launcher,
         "status": status,
     }, 200
 
@@ -183,6 +190,7 @@ def admin_mappings():
         config.attacker_port = int(request.form["attacker_port"]) if request.form.get("attacker_port") else None
         config.instance_group = request.form.get("instance_group") or None
         config.shutdown_on_solve = request.form.get("shutdown_on_solve") == "on"
+        config.show_launcher = request.form.get("show_launcher") == "on"
         db.session.commit()
         return redirect(url_for("instance_launcher.admin_mappings"))
 
@@ -239,5 +247,9 @@ def sync_mapping():
     # Default true: absent/omitted in YAML means "shut down on solve", the
     # historical/expected behavior — only explicit `false` opts out.
     config.shutdown_on_solve = body.get("shutdown_on_solve", True)
+    # Default true: absent/omitted in YAML means "show the launch control"
+    # (safe default for any challenge that doesn't explicitly opt out) —
+    # only levels sharing an already-covered group's box set this false.
+    config.show_launcher = body.get("show_launcher", True)
     db.session.commit()
     return {"status": "synced", "challenge_id": challenge.id}, 200

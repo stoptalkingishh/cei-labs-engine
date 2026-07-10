@@ -19,7 +19,7 @@
 
   <table>
     <thead>
-      <tr><th>ID</th><th>Challenge</th><th>Instance Type</th><th>Image(s)</th><th>Group</th><th>Shuts down on solve?</th><th></th></tr>
+      <tr><th>ID</th><th>Challenge</th><th>Instance Type</th><th>Image(s)</th><th>Group</th><th>Shuts down on solve?</th><th>Shows launcher?</th><th></th></tr>
     </thead>
     <tbody>
       {% for challenge in challenges %}
@@ -41,6 +41,7 @@
         </td>
         <td>{{ cfg.instance_group if cfg and cfg.instance_group else "—" }}</td>
         <td>{{ "yes" if cfg and cfg.shutdown_on_solve else "no" if cfg else "—" }}</td>
+        <td>{{ "yes" if cfg and cfg.show_launcher else "no" if cfg else "—" }}</td>
         <td>
           {% if cfg %}
           <form class="inline" method="post" action="{{ url_for('instance_launcher.admin_delete_mapping', challenge_id=challenge.id) }}">
@@ -78,6 +79,7 @@
     <input type="number" name="attacker_port" placeholder="attacker_port">
     <input type="text" name="instance_group" placeholder="group (optional — shared deployments)">
     <label><input type="checkbox" name="shutdown_on_solve" checked> Shuts down on solve</label>
+    <label><input type="checkbox" name="show_launcher" checked> Shows launcher (uncheck for levels sharing an already-covered group's box)</label>
     <button class="btn" type="submit">Save</button>
   </form>
 

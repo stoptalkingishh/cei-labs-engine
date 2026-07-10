@@ -104,7 +104,12 @@
   function renderPanel(panel, challengeId, data) {
     panel.dataset.challengeId = String(challengeId);
 
-    if (!data || !data.has_environment) {
+    // show_launcher defaults true when absent (e.g. the synthetic object
+    // runAction() builds after a successful action) -- only an explicit
+    // false hides it. Real levels sharing an already-covered shared box
+    // (e.g. every non-"start here" Bandit level) set this false server
+    // side so the launch control isn't repeated on every single challenge.
+    if (!data || !data.has_environment || data.show_launcher === false) {
       panel.style.display = "none";
       panel.innerHTML = "";
       return;
