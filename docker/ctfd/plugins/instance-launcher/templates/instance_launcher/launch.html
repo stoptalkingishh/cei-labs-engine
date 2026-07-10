@@ -33,6 +33,10 @@
         {% if access.novnc_url %}
           <p><a class="btn btn-secondary" href="{{ access.novnc_url }}" target="_blank" rel="noopener">Open Attacker Workstation (direct link)</a></p>
         {% endif %}
+        {% if access.attacker_username %}
+          <p>Login: <code>{{ access.attacker_username }}</code> / <code>{{ access.attacker_password }}</code>
+          <br><small>Unique to your team — needed for both noVNC and SSH.</small></p>
+        {% endif %}
         {% if access.target_hostname %}
           <p>Target (from inside the attacker only): <code>{{ access.target_hostname }}</code></p>
         {% endif %}

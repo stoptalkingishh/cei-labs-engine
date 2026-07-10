@@ -1,14 +1,20 @@
 FROM kalilinux/kali-rolling:latest
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG VNC_PASSWORD
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Validate that the argument is passed dynamically and fail build early if empty
-RUN test -n "$VNC_PASSWORD"
-
-ENV VNC_PASSWORD=${VNC_PASSWORD}
+# Security: VNC_PASSWORD is intentionally NOT an ARG/ENV here. Baking a
+# password into an image means every container ever run from it shares one
+# never-rotated credential, recoverable via `docker inspect`/`docker
+# history` by anyone who can pull the image (no shell access needed) --
+# `ghcr.io/stoptalkingishh/*` is public. The account is created with no
+# usable password below; the real password is applied fresh at container
+# START from the RUNTIME environment by /start.sh (see the end of this
+# file), which is what the orchestrator's plan_range_attacker() and
+# scripts/spawn-workspaces.sh both already generate per-instance --
+# neither ever wrote to a running container before this, since nothing
+# re-read the env var after build time.
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xfce4 \
@@ -65,10 +71,10 @@ RUN pip install --no-cache-dir --break-system-packages volatility3
 # Verify vncpasswd exists after installation
 RUN command -v vncpasswd
 
-# Create operator user
+# Create operator user with NO usable password (locked account) -- the
+# real password is applied at container start, below, from the runtime
+# environment.
 RUN useradd -m -s /bin/bash --no-log-init --no-user-group operator
-
-RUN echo "operator:${VNC_PASSWORD}" | chpasswd
 
 USER operator
 
@@ -85,16 +91,32 @@ RUN mkdir -p /home/operator/.config/tigervnc \
     && printf '#!/bin/bash\nexec xfce4-session\n' > /home/operator/.config/tigervnc/xstartup \
     && chmod +x /home/operator/.config/tigervnc/xstartup
 
-# Generate VNC password non-interactively using the filter flag (-f) and verify file creation
-RUN command -v vncpasswd && \
-    echo "${VNC_PASSWORD}" | vncpasswd -f > /home/operator/.config/tigervnc/passwd && \
-    chmod 600 /home/operator/.config/tigervnc/passwd && \
-    test -f /home/operator/.config/tigervnc/passwd
-
 USER root
 
-RUN printf '#!/bin/bash\nset -e\nsu operator -c "vncserver :1 -geometry 1280x800 -depth 24 -localhost no"\nsu operator -c "websockify --web=/usr/share/novnc 6080 localhost:5901" &\n/usr/sbin/sshd\ntail -f /dev/null\n' > /start.sh \
-    && chmod +x /start.sh \
+# Applies the Linux account password and the VNC-specific password file
+# fresh on every container start, from whatever VNC_PASSWORD is actually
+# in this specific container's runtime environment -- never baked into
+# the image, never shared across teams/instances. Fails loudly and
+# refuses to start rather than silently falling back to no password if
+# the orchestrator/spawn script didn't set one.
+RUN cat > /start.sh <<'SCRIPT'
+#!/bin/bash
+set -e
+
+if [ -z "${VNC_PASSWORD:-}" ]; then
+    echo "FATAL: VNC_PASSWORD is not set in the container environment -- refusing to start with no password." >&2
+    exit 1
+fi
+
+echo "operator:${VNC_PASSWORD}" | chpasswd
+su operator -c "mkdir -p ~/.config/tigervnc && echo \"${VNC_PASSWORD}\" | vncpasswd -f > ~/.config/tigervnc/passwd && chmod 600 ~/.config/tigervnc/passwd"
+
+su operator -c "vncserver :1 -geometry 1280x800 -depth 24 -localhost no"
+su operator -c "websockify --web=/usr/share/novnc 6080 localhost:5901" &
+/usr/sbin/sshd
+tail -f /dev/null
+SCRIPT
+RUN chmod +x /start.sh \
     && ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
 EXPOSE 6080 22

@@ -64,6 +64,14 @@
           escapeAttr(access.novnc_url) +
           '" target="_blank" rel="noopener">Open Attacker Workstation (direct link)</a></p>';
       }
+      if (access.attacker_username) {
+        html +=
+          '<p class="mb-1">Login: <code>' +
+          escapeHtml(access.attacker_username) +
+          "</code> / <code>" +
+          escapeHtml(access.attacker_password) +
+          '</code><br><small class="text-muted">Unique to your team — needed for both noVNC and SSH.</small></p>';
+      }
       if (access.target_hostname) {
         html += '<p class="mb-1">Target (from inside the attacker only): <code>' + escapeHtml(access.target_hostname) + "</code></p>";
       }

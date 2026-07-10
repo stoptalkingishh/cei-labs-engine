@@ -81,7 +81,37 @@ def test_range_attacker_hostname_has_no_instance_key_component():
     plan_b = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
     assert plan_a.network == plan_b.network
     assert plan_a.attacker_service.name == plan_b.attacker_service.name
-    assert plan_a.access == plan_b.access
+    assert plan_a.access["attacker_url"] == plan_b.access["attacker_url"]
+    assert plan_a.access["connect_host"] == plan_b.access["connect_host"]
+    # attacker_password is randomized per call by design (see
+    # test_range_attacker_password_is_random_and_never_baked_in below) --
+    # controller.py only calls this once per team per range lifetime, so
+    # this per-call randomness doesn't mean the credential changes on every
+    # challenge launch in practice.
+
+
+def test_range_attacker_password_is_random_and_never_baked_in():
+    # Security fix: the attacker workstation's login used to be a single
+    # value baked into the image at build time (recoverable via `docker
+    # inspect`/`docker history` by anyone who could pull the image) and
+    # shared by every team. Each range must now get its own random,
+    # server-generated credential, injected only into that specific
+    # service's runtime environment.
+    plan_a = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
+    plan_b = it.plan_range_attacker("team-2", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
+
+    assert plan_a.access["attacker_password"]
+    assert plan_a.access["attacker_password"] != plan_b.access["attacker_password"]
+    assert len(plan_a.access["attacker_password"]) >= 20  # secrets.token_urlsafe(18)
+
+    # Must reach the container via its runtime environment, not be assumed
+    # present in the image -- both env var names are set since either a
+    # kali-novnc (VNC_PASSWORD) or analyst (OPERATOR_PASSWORD) image could
+    # be configured as the attacker_image.
+    env = plan_a.attacker_service.env
+    assert env["VNC_PASSWORD"] == plan_a.access["attacker_password"]
+    assert env["OPERATOR_PASSWORD"] == plan_a.access["attacker_password"]
+    assert plan_a.access["attacker_username"] == "operator"
 
 
 def test_range_attacker_requires_attacker_image():
