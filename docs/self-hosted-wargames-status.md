@@ -67,6 +67,32 @@ sharing, `shutdown_on_solve` timing (confirmed via the reaper's own log
 showing a real scheduled shutdown actually completing), CTFd/orchestrator
 network isolation, and inbound-port discipline.
 
+## Player-experience follow-up work (in progress)
+
+A real playtest through the live CTFd UI (not scripted testing) surfaced 8
+player-experience gaps, captured in
+`docs/instance-launcher-ux-followups.md` and now being worked through a
+6-stage plan. **Stage 1 (JSON API for the launch UI) is done and
+live-verified:** `docker/ctfd/plugins/instance-launcher/routes.py` gained
+`GET /api/status/<challenge_id>` (pure read, safe to poll) and
+`POST /api/launch/<challenge_id>` (same default/reboot/relaunch/extend
+actions as the existing HTML form, JSON in/out instead), sharing logic with
+the original `/launch/<id>` route via two extracted helpers
+(`_resolve_config`, `_run_action`) rather than duplicating it. The original
+HTML route is untouched and still works as a fallback.
+
+Verified for real against the running stack, with a real session + CSRF
+token, not just written: status before any instance exists, launch,
+status reflecting the real instance immediately after, reboot, extend
+(both the success path and its real "nothing scheduled" error path),
+relaunch (see the flaky race noted below), and the 404/`has_environment:
+false` paths for a challenge with no environment mapping at all. While
+testing this, also hit and correctly diagnosed a live instance of the
+already-documented in-memory-store-vs-real-Docker-state desync (a stray
+`chinst-2-group-bandit` service with no matching store entry) — cleaned up
+by removing the orphaned service/network and letting the real API recreate
+it in sync, not by working around the symptom.
+
 ## Known open items (found, not fixed — explicitly out of scope for this pass)
 
 - **The orchestrator's instance/range state is a pure in-memory dict, no
@@ -95,6 +121,18 @@ network isolation, and inbound-port discipline.
   connect port/host are correct, just the example username in the display
   text is wrong for anything but the analyst/attacker images). Not fixed
   in this pass.
+- **`relaunch` can occasionally 500 with `network ... not found`.**
+  `InstanceController.create_or_get(..., force_relaunch=True)` tears down
+  the old service+network, then immediately recreates both in the same
+  request — a real Docker Swarm eventual-consistency race (network removal
+  isn't instant across the swarm's control plane; `ensure_network()` can
+  create a same-named network moments before Swarm finishes tearing down
+  the old one, and the following `services.create()` loses that race).
+  Confirmed via live testing during the Stage 1 JSON-API pass below: not
+  deterministic, an immediate retry of the same relaunch succeeds. Not
+  fixed in this pass — pre-existing in `controller.py`, unrelated to the
+  new JSON routes; worth a small delay/retry-on-`network not found` inside
+  `create_or_get`'s relaunch path someday.
 
 ## Not done at all
 
