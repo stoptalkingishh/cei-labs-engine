@@ -31,19 +31,15 @@
       {% if access.attacker_url %}
         <p><a class="btn btn-primary" href="{{ access.attacker_url }}" target="_blank" rel="noopener">Open Attacker Workstation</a></p>
         {% if access.novnc_url %}
-          <p><a class="btn btn-secondary" href="{{ access.novnc_url }}" target="_blank" rel="noopener">Open Attacker Workstation (direct, no DNS)</a></p>
-          {% if access.novnc_note %}<p>{{ access.novnc_note }}</p>{% endif %}
+          <p><a class="btn btn-secondary" href="{{ access.novnc_url }}" target="_blank" rel="noopener">Open Attacker Workstation (direct link)</a></p>
         {% endif %}
         {% if access.target_hostname %}
-          <p>Your target is reachable only from inside that workstation, at hostname:<br><code>{{ access.target_hostname }}</code></p>
-          {% if access.target_note %}<p>{{ access.target_note }}</p>{% endif %}
+          <p>Target (from inside the attacker only): <code>{{ access.target_hostname }}</code></p>
         {% endif %}
       {% endif %}
 
       {% if access.connect_port %}
-        <p>Connect via {{ (access.protocol or "ssh")|upper }}:</p>
-        <pre>{{ access.protocol or "ssh" }} operator@{{ access.connect_host }} -p {{ access.connect_port }}</pre>
-        <p>{{ access.note }}</p>
+        <p>Host: <code>{{ access.connect_host }}</code><br>Port: <code>{{ access.connect_port }}</code></p>
       {% endif %}
 
       {% if status.shutdown_at %}

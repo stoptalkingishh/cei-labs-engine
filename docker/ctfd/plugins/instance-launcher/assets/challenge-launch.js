@@ -62,37 +62,20 @@
         html +=
           '<p class="mb-2"><a class="btn btn-outline-primary btn-sm" href="' +
           escapeAttr(access.novnc_url) +
-          '" target="_blank" rel="noopener">Open Attacker Workstation (direct, no DNS)</a></p>';
-        if (access.novnc_note) {
-          html += '<p class="text-muted mb-1"><small>' + escapeHtml(access.novnc_note) + "</small></p>";
-        }
+          '" target="_blank" rel="noopener">Open Attacker Workstation (direct link)</a></p>';
       }
       if (access.target_hostname) {
-        html +=
-          '<p class="mb-1">Your target is reachable only from inside that workstation, at hostname:<br><code>' +
-          escapeHtml(access.target_hostname) +
-          "</code></p>";
-        if (access.target_note) {
-          html +=
-            '<p class="text-muted mb-1"><small>' + escapeHtml(access.target_note) + "</small></p>";
-        }
+        html += '<p class="mb-1">Target (from inside the attacker only): <code>' + escapeHtml(access.target_hostname) + "</code></p>";
       }
     }
 
     if (access.connect_port) {
-      var protocol = access.protocol || "ssh";
-      html += '<p class="mb-1">Connect via ' + escapeHtml(protocol.toUpperCase()) + ":</p>";
       html +=
-        '<pre class="mb-1">' +
-        escapeHtml(protocol) +
-        " operator@" +
+        '<p class="mb-1">Host: <code>' +
         escapeHtml(access.connect_host) +
-        " -p " +
+        "</code><br>Port: <code>" +
         escapeHtml(access.connect_port) +
-        "</pre>";
-      if (access.note) {
-        html += '<p class="text-muted mb-1"><small>' + escapeHtml(access.note) + "</small></p>";
-      }
+        "</code></p>";
     }
 
     return html;
@@ -139,13 +122,6 @@
 
     if (status && status.access) {
       html += renderAccess(status.access);
-
-      if (data.instance_group) {
-        html +=
-          '<p class="text-muted mb-2"><small>Shared environment: <code>' +
-          escapeHtml(data.instance_group) +
-          "</code> — launching from any level in this track reuses the same box.</small></p>";
-      }
 
       if (status.shutdown_at) {
         html +=
