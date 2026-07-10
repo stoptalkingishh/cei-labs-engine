@@ -140,7 +140,7 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
         image=image,
         networks=[net_name],
         env={str(k): str(v) for k, v in env.items()},
-        published_port=(allocated_port, target_port),
+        published_ports=[(allocated_port, target_port)],
         cap_drop=["ALL"],
         cap_add=list(_TARGET_CAPS),
     )
@@ -159,7 +159,9 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
     )
 
 
-def plan_range_attacker(owner_id: str, spec: dict, allocated_port: int, base_domain: str, challenge_network: str) -> RangePlan:
+def plan_range_attacker(
+    owner_id: str, spec: dict, allocated_port: int, allocated_novnc_port: int, base_domain: str, challenge_network: str
+) -> RangePlan:
     """Called once per team, the first time they launch any target-attacker
     challenge. Subsequent challenges reuse this range (see plan_range_target).
 
@@ -167,10 +169,19 @@ def plan_range_attacker(owner_id: str, spec: dict, allocated_port: int, base_dom
     PortAllocator pool `single-target` already draws from — see
     controller.py._create_range_target) alongside the existing Traefik/
     noVNC label-based route; ServiceSpec/docker_client.create_service()
-    already support both `labels` and `published_port` on one service, so
+    already support both `labels` and `published_ports` on one service, so
     this doesn't touch docker_client.py at all. Without this, the
     attacker's SSH server (present in the image) was reachable from
-    nowhere outside the container — confirmed by testing, not assumed."""
+    nowhere outside the container — confirmed by testing, not assumed.
+
+    `allocated_novnc_port` does the same for noVNC itself: a second directly
+    published port onto the attacker's existing noVNC listener, alongside
+    (not instead of) the Traefik/DNS route above. Traefik's route depends on
+    `*.apps.<base_domain>` actually resolving (cei-labs-net's DNS, or some
+    other wildcard DNS aimed at the swarm) — with no wildcard DNS available
+    at all, that route is simply unreachable, and unlike single-target
+    (which only ever used a bare published port to begin with) there was no
+    fallback. This mirrors the SSH fix exactly, for the same reason."""
     attacker_image = _require_str(spec, "attacker_image")
     attacker_port = int(spec.get("attacker_port", 6080))
     attacker_ssh_port = int(spec.get("attacker_ssh_port", 22))
@@ -186,7 +197,7 @@ def plan_range_attacker(owner_id: str, spec: dict, allocated_port: int, base_dom
         networks=[range_network, challenge_network],
         labels=_traefik_labels(attacker_name, hostname, attacker_port, challenge_network),
         env={str(k): str(v) for k, v in attacker_env.items()},
-        published_port=(allocated_port, attacker_ssh_port),
+        published_ports=[(allocated_port, attacker_ssh_port), (allocated_novnc_port, attacker_port)],
         cap_drop=["ALL"],
         cap_add=list(_ATTACKER_CAPS),
     )
@@ -200,6 +211,9 @@ def plan_range_attacker(owner_id: str, spec: dict, allocated_port: int, base_dom
             "connect_port": allocated_port,
             "protocol": "ssh",
             "note": "SSH connects via any swarm node — this hostname routes to whichever node the attacker actually landed on.",
+            "novnc_port": allocated_novnc_port,
+            "novnc_url": f"http://{base_domain}:{allocated_novnc_port}/vnc.html",
+            "novnc_note": "Direct noVNC access, no DNS required — use this if the link above doesn't resolve.",
         },
     )
 

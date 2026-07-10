@@ -25,7 +25,10 @@ class ServiceSpec:
     networks: list[str]
     labels: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
-    published_port: "tuple[int, int] | None" = None  # (published, target), rarely needed (SSH-style)
+    # (published, target) pairs, rarely needed (SSH-style, or the Natas
+    # attacker's SSH + direct-noVNC-fallback ports). Almost always empty or
+    # single-item; a list because target-attacker's range attacker needs two.
+    published_ports: "list[tuple[int, int]]" = field(default_factory=list)
     mem_limit_bytes: int = 512 * 1024 * 1024
     mem_reservation_bytes: int = 128 * 1024 * 1024
     # Empty cap_drop (the default) means "use Docker's own default
@@ -91,9 +94,8 @@ class DockerOrchestratorClient:
             return existing
 
         endpoint_spec = None
-        if spec.published_port:
-            published, target = spec.published_port
-            endpoint_spec = EndpointSpec(ports={published: target})
+        if spec.published_ports:
+            endpoint_spec = EndpointSpec(ports={published: target for published, target in spec.published_ports})
 
         logger.info("creating service %s (image=%s, networks=%s)", spec.name, spec.image, spec.networks)
         return self._client.services.create(

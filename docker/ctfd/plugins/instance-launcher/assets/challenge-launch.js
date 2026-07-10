@@ -58,6 +58,15 @@
         '<p class="mb-2"><a class="btn btn-primary btn-sm" href="' +
         escapeAttr(access.attacker_url) +
         '" target="_blank" rel="noopener">Open Attacker Workstation</a></p>';
+      if (access.novnc_url) {
+        html +=
+          '<p class="mb-2"><a class="btn btn-outline-primary btn-sm" href="' +
+          escapeAttr(access.novnc_url) +
+          '" target="_blank" rel="noopener">Open Attacker Workstation (direct, no DNS)</a></p>';
+        if (access.novnc_note) {
+          html += '<p class="text-muted mb-1"><small>' + escapeHtml(access.novnc_note) + "</small></p>";
+        }
+      }
       if (access.target_hostname) {
         html +=
           '<p class="mb-1">Your target is reachable only from inside that workstation, at hostname:<br><code>' +

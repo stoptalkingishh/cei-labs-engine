@@ -139,6 +139,39 @@ work end to end, but it is not the same as having watched it work — this
 needs a real browser check (by the user, or a future session with browser
 tooling) before Stage 2 is called fully done.
 
+**Stage 3 (Natas noVNC direct-port fallback, no DNS needed) is done and
+fully live-verified.** `ServiceSpec.published_port` (a single optional
+tuple) generalized to `published_ports: list[tuple[int, int]]` — needed
+since the range attacker now publishes two ports (SSH + noVNC) on one
+service, not just one. `docker_client.create_service()`,
+`controller.py`'s teardown/port-release paths (now release every
+published port, not just the first), and `plan_single_target`/
+`plan_range_attacker` in `instance_types.py` all updated; all 77
+orchestrator tests updated and passing. `plan_range_attacker()` now takes
+a second `allocated_novnc_port`, published to noVNC's existing 6080
+listener alongside the existing SSH port — mirrors the earlier SSH fix
+exactly, for the identical reason (the DNS-based Traefik route the
+attacker also gets is simply unreachable with no wildcard DNS available at
+all). New `access` fields: `novnc_port`, `novnc_url`, `novnc_note`,
+surfaced in both `launch.html` and `challenge-launch.js`.
+
+Live-verified for real, not just curled-and-assumed: launched a real Natas
+range, waited for the attacker container to actually reach Running state,
+then hit `http://localhost:<novnc_port>/vnc.html` directly with no DNS
+involved at all and got back real noVNC page HTML (confirmed by content,
+not just a 200), and independently confirmed the SSH port on the same
+service still returns a real `SSH-2.0-OpenSSH_10.3` banner via a raw TCP
+connect — both published ports work correctly on one service. Also hit,
+diagnosed, and worked around two more instances of already-documented
+environment quirks while verifying this: the in-memory-store-vs-Docker
+desync again (a stale `chinst-2-group-bandit` from earlier Stage 1/2
+testing collided with the natas range's fresh port allocation) and the
+Swarm image-tag-shadowing issue (the range attacker's `attacker_image`
+config still pointed at the real `ghcr.io/stoptalkingishh/...` path,
+resynced to the `ghcr.io/local-test/...` build via the plugin's own
+`/admin/mappings/sync` endpoint) — neither is new, both already known and
+documented above, not Stage 3 regressions.
+
 ## Known open items (found, not fixed — explicitly out of scope for this pass)
 
 - **The orchestrator's instance/range state is a pure in-memory dict, no
