@@ -24,3 +24,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.egg-info/
+
+# Local monitoring output, not repo-related (not referenced anywhere in this repo)
+status-history.csv
