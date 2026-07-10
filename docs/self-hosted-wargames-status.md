@@ -1,7 +1,8 @@
 # Self-Hosted Wargames: Status (cei-labs-engine)
 
-**Branch:** `feature/self-hosted-wargames-base-images` @ `2ffb619` (not merged
-to `main` @ `8ff9c7f`)
+**Status:** Merged to `main` (confirmed via `git merge-base --is-ancestor
+2ffb619 main`). Originally written from `feature/self-hosted-wargames-base-
+images` @ `2ffb619` before that branch landed.
 **Related:** [`CEI-Labs-Wargames` status](../../CEI-Labs-Wargames/docs/self-hosted-wargames-status.md) · [`cei-labs-net` status](../../cei-labs-net/docs/self-hosted-wargames-status.md)
 
 ## What this is
@@ -219,6 +220,12 @@ the table has been treated since it was introduced (see the docstring in
 
 ## Critical finding: the orchestrator's in-memory state isn't actually shared (multi-worker race)
 
+**Resolved** — the security audit's `fix/shared-vnc-password` branch
+(merged to `main`) pinned `docker/orchestrator/Dockerfile` to
+`--workers 1`, eliminating the multi-process race described below.
+Confirmed still in place on current `main`. Left the original writeup
+intact for the reasoning/repro steps.
+
 Found live while verifying Stage 5's "Start Here" challenges in
 `CEI-Labs-Wargames` (below) — this **supersedes and sharpens** the
 already-documented "in-memory store, no reconciliation" limitation above.
@@ -299,4 +306,5 @@ a few times.
 
 ## Not done at all
 
-No PRs opened, nothing merged to `main`.
+Nothing — this is all merged to `main` now (see the status note at the
+top). No PRs were opened; merged directly.
