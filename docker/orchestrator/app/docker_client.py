@@ -25,9 +25,23 @@ class ServiceSpec:
     networks: list[str]
     labels: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
-    published_port: "tuple[int, int] | None" = None  # (published, target), rarely needed (SSH-style)
+    # (published, target) pairs, rarely needed (SSH-style, or the Natas
+    # attacker's SSH + direct-noVNC-fallback ports). Almost always empty or
+    # single-item; a list because target-attacker's range attacker needs two.
+    published_ports: "list[tuple[int, int]]" = field(default_factory=list)
     mem_limit_bytes: int = 512 * 1024 * 1024
     mem_reservation_bytes: int = 128 * 1024 * 1024
+    # Empty cap_drop (the default) means "use Docker's own default
+    # capability set" -- explicit cap_drop=["ALL"] + a narrow cap_add is
+    # how a challenge type opts into the hardened, audited set instead.
+    # docker-py 7.1.0's Swarm services API has no no_new_privileges or
+    # pids_limit equivalent (checked docker.types.Privileges/Resources
+    # directly -- neither field exists), so those two aren't available
+    # through this client at all right now.
+    cap_drop: list[str] = field(default_factory=list)
+    cap_add: list[str] = field(default_factory=list)
+    read_only: bool = False
+    cpu_limit_nanos: "int | None" = None  # e.g. 1_000_000_000 == 1.0 CPU
 
 
 class DockerOrchestratorClient:
@@ -80,9 +94,8 @@ class DockerOrchestratorClient:
             return existing
 
         endpoint_spec = None
-        if spec.published_port:
-            published, target = spec.published_port
-            endpoint_spec = EndpointSpec(ports={published: target})
+        if spec.published_ports:
+            endpoint_spec = EndpointSpec(ports={published: target for published, target in spec.published_ports})
 
         logger.info("creating service %s (image=%s, networks=%s)", spec.name, spec.image, spec.networks)
         return self._client.services.create(
@@ -92,9 +105,13 @@ class DockerOrchestratorClient:
             networks=[NetworkAttachmentConfig(target=n) for n in spec.networks],
             labels={**spec.labels, ORCH_LABEL: "true"},
             endpoint_spec=endpoint_spec,
+            cap_drop=spec.cap_drop or None,
+            cap_add=spec.cap_add or None,
+            read_only=spec.read_only,
             resources=Resources(
                 mem_limit=spec.mem_limit_bytes,
                 mem_reservation=spec.mem_reservation_bytes,
+                cpu_limit=spec.cpu_limit_nanos,
             ),
             restart_policy=RestartPolicy(condition="on-failure"),
         )

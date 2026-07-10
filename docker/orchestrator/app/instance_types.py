@@ -29,6 +29,25 @@ TARGET_ATTACKER = "target-attacker"
 
 VALID_TYPES = (WEB_APP, SINGLE_TARGET, TARGET_ATTACKER)
 
+# Phase 6 hardening: cap_drop=["ALL"] plus back only what's actually
+# needed, confirmed by live-testing each image's real lessons rather than
+# guessed. Baseline (targets: Bandit/Krypton SSH boxes, the Natas LAMP
+# target) covers sshd/su/chpasswd-style per-connection privilege drops,
+# MPM-ITK's per-vhost setuid/setgid, and cron. SYS_CHROOT is required --
+# confirmed by testing, not assumed: without it, sshd's privilege-
+# separation preauth child fails outright with "chroot(\"/run/sshd\"):
+# Operation not permitted", breaking every SSH connection before
+# authentication even starts. NET_RAW/MKNOD from Docker's own default set
+# are still left out -- neither is needed by these lessons.
+_TARGET_CAPS = [
+    "CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL",
+    "SETGID", "SETUID", "SETFCAP", "SETPCAP",
+    "NET_BIND_SERVICE", "AUDIT_WRITE", "SYS_CHROOT",
+]
+# The Natas/analyst attacker workstation additionally needs raw-socket
+# access for nmap/tcpdump (NET_RAW, NET_ADMIN for promiscuous capture).
+_ATTACKER_CAPS = _TARGET_CAPS + ["NET_RAW", "NET_ADMIN"]
+
 
 class InvalidInstanceRequestError(ValueError):
     pass
@@ -121,7 +140,9 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
         image=image,
         networks=[net_name],
         env={str(k): str(v) for k, v in env.items()},
-        published_port=(allocated_port, target_port),
+        published_ports=[(allocated_port, target_port)],
+        cap_drop=["ALL"],
+        cap_add=list(_TARGET_CAPS),
     )
     return InstancePlan(
         type=SINGLE_TARGET,
@@ -138,11 +159,32 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
     )
 
 
-def plan_range_attacker(owner_id: str, spec: dict, base_domain: str, challenge_network: str) -> RangePlan:
+def plan_range_attacker(
+    owner_id: str, spec: dict, allocated_port: int, allocated_novnc_port: int, base_domain: str, challenge_network: str
+) -> RangePlan:
     """Called once per team, the first time they launch any target-attacker
-    challenge. Subsequent challenges reuse this range (see plan_range_target)."""
+    challenge. Subsequent challenges reuse this range (see plan_range_target).
+
+    `allocated_port` publishes the attacker's SSH port directly (same
+    PortAllocator pool `single-target` already draws from — see
+    controller.py._create_range_target) alongside the existing Traefik/
+    noVNC label-based route; ServiceSpec/docker_client.create_service()
+    already support both `labels` and `published_ports` on one service, so
+    this doesn't touch docker_client.py at all. Without this, the
+    attacker's SSH server (present in the image) was reachable from
+    nowhere outside the container — confirmed by testing, not assumed.
+
+    `allocated_novnc_port` does the same for noVNC itself: a second directly
+    published port onto the attacker's existing noVNC listener, alongside
+    (not instead of) the Traefik/DNS route above. Traefik's route depends on
+    `*.apps.<base_domain>` actually resolving (cei-labs-net's DNS, or some
+    other wildcard DNS aimed at the swarm) — with no wildcard DNS available
+    at all, that route is simply unreachable, and unlike single-target
+    (which only ever used a bare published port to begin with) there was no
+    fallback. This mirrors the SSH fix exactly, for the same reason."""
     attacker_image = _require_str(spec, "attacker_image")
     attacker_port = int(spec.get("attacker_port", 6080))
+    attacker_ssh_port = int(spec.get("attacker_ssh_port", 22))
     attacker_env = spec.get("attacker_env") or {}
 
     range_network = naming.range_network_name(owner_id)
@@ -155,12 +197,24 @@ def plan_range_attacker(owner_id: str, spec: dict, base_domain: str, challenge_n
         networks=[range_network, challenge_network],
         labels=_traefik_labels(attacker_name, hostname, attacker_port, challenge_network),
         env={str(k): str(v) for k, v in attacker_env.items()},
+        published_ports=[(allocated_port, attacker_ssh_port), (allocated_novnc_port, attacker_port)],
+        cap_drop=["ALL"],
+        cap_add=list(_ATTACKER_CAPS),
     )
     return RangePlan(
         owner_id=owner_id,
         network=range_network,
         attacker_service=attacker_service,
-        access={"attacker_url": f"https://{hostname}"},
+        access={
+            "attacker_url": f"https://{hostname}",
+            "connect_host": base_domain,
+            "connect_port": allocated_port,
+            "protocol": "ssh",
+            "note": "SSH connects via any swarm node — this hostname routes to whichever node the attacker actually landed on.",
+            "novnc_port": allocated_novnc_port,
+            "novnc_url": f"http://{base_domain}:{allocated_novnc_port}/vnc.html",
+            "novnc_note": "Direct noVNC access, no DNS required — use this if the link above doesn't resolve.",
+        },
     )
 
 
@@ -178,6 +232,8 @@ def plan_range_target(owner_id: str, instance_key: str, spec: dict, range_networ
         image=target_image,
         networks=[range_network],
         env={str(k): str(v) for k, v in target_env.items()},
+        cap_drop=["ALL"],
+        cap_add=list(_TARGET_CAPS),
     )
     return InstancePlan(
         type=TARGET_ATTACKER,
@@ -188,6 +244,6 @@ def plan_range_target(owner_id: str, instance_key: str, spec: dict, range_networ
         access={
             **range_access,
             "target_hostname": target_name,
-            "note": "Target is reachable only from your attacker workstation, at the hostname above.",
+            "target_note": "Target is reachable only from your attacker workstation, at the hostname above.",
         },
     )

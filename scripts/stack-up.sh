@@ -133,6 +133,14 @@ echo "════════════════════════�
 echo "  CEI Labs Engine — Docker Swarm Deployment"
 echo "═══════════════════════════════════════════════════"
 
+# `docker stack deploy` only interpolates ${VAR} references in stack.yml
+# from variables already exported in this shell -- unlike `docker compose`,
+# it does NOT read docker/.env itself. Source it (and keep it exported via
+# `set -a`) *before* the deploy call below, or every ${BASE_DOMAIN},
+# ${GITHUB_ORG}, ${IMAGE_TAG}, etc. silently resolves to an empty string.
+# shellcheck disable=SC1091
+set -a; source "$DOCKER_DIR/.env"; set +a
+
 # `docker stack deploy` resolves relative bind-mount paths (traefik/dynamic,
 # traefik/certs, secrets/*.txt) relative to the current working directory, so
 # run it from inside docker/ rather than passing -c docker/stack.yml from the
@@ -165,9 +173,6 @@ if [[ "$DRY_RUN" == "false" ]]; then
     log_info "All services converged."
   fi
 fi
-
-# shellcheck disable=SC1091
-set -a; source "$DOCKER_DIR/.env"; set +a
 
 echo ""
 echo "═══════════════════════════════════════════════════"
