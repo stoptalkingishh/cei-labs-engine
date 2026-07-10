@@ -1,6 +1,6 @@
 # Self-Hosted Wargames: Status (cei-labs-engine)
 
-**Branch:** `feature/self-hosted-wargames-base-images` @ `8e0ceb9` (not merged
+**Branch:** `feature/self-hosted-wargames-base-images` @ `2ffb619` (not merged
 to `main` @ `8ff9c7f`)
 **Related:** [`CEI-Labs-Wargames` status](../../CEI-Labs-Wargames/docs/self-hosted-wargames-status.md) · [`cei-labs-net` status](../../cei-labs-net/docs/self-hosted-wargames-status.md)
 
@@ -131,13 +131,11 @@ confirmed present in the live page at load time, and a real
 (`.challenge-desc`, `#challenge-id`) — not just the static template
 source.
 
-**What's NOT verified, and can't be from this environment:** actually
-opening a challenge in a real browser and watching the panel appear,
-launch, poll, and show working connect info. No headless-browser tool is
-available here. Everything above is real evidence the wiring *should*
-work end to end, but it is not the same as having watched it work — this
-needs a real browser check (by the user, or a future session with browser
-tooling) before Stage 2 is called fully done.
+**Update: confirmed live by the user in a real browser** (this
+environment still has no browser tooling of its own) — the panel
+renders and works, and that real usage is what surfaced the round-2
+feedback above (panel too verbose, launcher repeated on every level).
+Stage 2 is now fully done, not just evidenced.
 
 **Stage 3 (Natas noVNC direct-port fallback, no DNS needed) is done and
 fully live-verified.** `ServiceSpec.published_port` (a single optional
@@ -171,6 +169,53 @@ config still pointed at the real `ghcr.io/stoptalkingishh/...` path,
 resynced to the `ghcr.io/local-test/...` build via the plugin's own
 `/admin/mappings/sync` endpoint) — neither is new, both already known and
 documented above, not Stage 3 regressions.
+
+## Player-experience round 2: minimal launch panel, per-challenge launcher visibility, and a real CSRF finding
+
+More real playtest feedback landed after Stage 2's browser-verification
+gap above was closed by the user actually trying it live (confirmed
+working) — three further fixes, all shipped and live-verified:
+
+- **Launch panel cut down to bare connect info.** The injected panel
+  and `launch.html` both used to show a full explanatory paragraph on
+  every view (a swarm-routing note, a shared-environment note, a
+  pre-filled `ssh operator@...` command line with the wrong username for
+  most levels). Stripped to just Host/Port (and, for Natas, the attacker
+  links + target hostname), matching how OverTheWire's own site presents
+  connection info — no prose, and the always-wrong `operator@` example
+  is gone since there's no longer a pre-filled command at all.
+- **New `InstanceChallengeConfig.show_launcher` flag** (default `True`).
+  Real feedback: repeating a launch button on every level in a shared-box
+  track (e.g. all 34 Bandit levels reusing one persistent box) is
+  clutter once a player has launched it from any one of them. Only the
+  three "Start Here" challenges per track now keep this `True`; every
+  other level in a shared group sets it `False`. Exposed through
+  `/api/status/<id>`, settable via both the admin form and the
+  `/admin/mappings/sync` endpoint used by content sync scripts.
+  `challenge-launch.js` now skips injecting its panel entirely when a
+  challenge's status response says `show_launcher` is explicitly false —
+  `/launch/<id>` and the JSON launch API are untouched, this only
+  controls whether the frontend shows an unprompted control.
+- **Real finding, not a CTFd permissions quirk:** the "403 on DELETE"
+  pattern seen several times earlier in this project (challenge cleanup,
+  hint cleanup) was finally root-caused while cleaning up duplicate hints
+  during later content work — CTFd's global CSRF check
+  (`CTFd/utils/initialization/__init__.py`) only checks the
+  `CSRF-Token` header when `request.content_type` is exactly
+  `application/json`; a bodyless DELETE with no `Content-Type` at all
+  falls through to a form-nonce check that a header-only client never
+  satisfies, and 403s. Adding `Content-Type: application/json` (even
+  with an empty body) fixes it every time. Purely a client-side gap in
+  how one-off admin scripts were built, not a CTFd bug or a real
+  permissions gap — corrects the earlier record, which had written this
+  off as minor test-hygiene noise.
+
+Existing DB note still applies: `InstanceChallengeConfig` is
+create-if-missing only (no Alembic migration), so an already-running
+deployment needs a manual `ALTER TABLE ... ADD COLUMN show_launcher
+BOOLEAN NOT NULL DEFAULT TRUE` when picking up this change — matches how
+the table has been treated since it was introduced (see the docstring in
+`__init__.py`).
 
 ## Critical finding: the orchestrator's in-memory state isn't actually shared (multi-worker race)
 
