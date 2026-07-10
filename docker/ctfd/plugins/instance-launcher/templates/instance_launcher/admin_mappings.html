@@ -45,6 +45,7 @@
         <td>
           {% if cfg %}
           <form class="inline" method="post" action="{{ url_for('instance_launcher.admin_delete_mapping', challenge_id=challenge.id) }}">
+            <input type="hidden" name="nonce" value="{{ session.nonce }}">
             <button class="btn btn-danger" type="submit">Remove</button>
           </form>
           {% endif %}
@@ -62,6 +63,7 @@
     group is solved. Leave Group blank for a standalone challenge.
   </p>
   <form class="inline" method="post" action="{{ url_for('instance_launcher.admin_mappings') }}">
+    <input type="hidden" name="nonce" value="{{ session.nonce }}">
     <select name="challenge_id" required>
       {% for challenge in challenges %}
       <option value="{{ challenge.id }}">{{ challenge.id }} — {{ challenge.name }}</option>
