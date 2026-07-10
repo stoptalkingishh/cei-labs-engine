@@ -6,7 +6,9 @@ wargames migration were otherwise verified working. These are real gaps in
 the *player experience*, not caught by any of the automated/scripted
 verification in that work, because scripted testing drove the plugin's
 HTTP endpoints directly instead of navigating CTFd's UI the way a person
-actually would.
+actually would. Scope has grown beyond just the launcher plugin itself as
+more findings came in — includes challenge-content work in
+`CEI-Labs-Wargames` too (items 2, 6, 7).
 
 **Status: capturing findings only. Not planned, not executed, not verified.**
 Do not treat anything below as done.
@@ -104,10 +106,47 @@ session's own testing) sees nothing indicating progress. Should show
 something like: not started / starting / running / error, ideally without
 requiring a manual page refresh.
 
+## 6. Multi-VM challenges (Natas) need to be clearly cordoned off so players don't get confused about what they're working on
+
+Natas is `target-attacker`: one shared attacker workstation plus 15
+separate per-level target containers, all reached *through* that one
+attacker (never directly). Bandit/Krypton are `single-target`: one
+container, direct connection, no intermediate hop. A player used to
+Bandit/Krypton's direct-connect model could easily get confused on Natas —
+not realizing they need to go through the attacker first, or not
+understanding that solving natas-05 doesn't mean a new/different target
+VM appears, it's still the same attacker reaching a different target
+container. Exact mechanism for "blocked off" not yet decided (options
+include: distinct visual grouping/category treatment for multi-VM tracks,
+explicit prerequisite/sequencing so earlier levels must be launched before
+later ones are even visible, or just much clearer per-challenge wording
+about the two-hop model) — captured as a requirement, not yet designed.
+
+## 7. Challenge description wording needs a full cleanup pass
+
+General content-quality gap across all `CEI-Labs-Wargames` challenge
+descriptions (Bandit, Krypton, Natas) — accumulated through many rounds of
+incremental edits this session (fixing OTW hostname references, SSH
+availability claims, etc.) without a holistic editing pass for clarity,
+consistency, and tone. Needs a dedicated read-through and rewrite, not
+just more targeted fixes.
+
+## 8. Hints need to be built out so a stuck player can still finish
+
+CTFd has native hint support (per-challenge, optionally point-cost) that
+none of the Bandit/Krypton/Natas `challenge.yml`s currently populate.
+Right now a stuck player has no in-platform recourse at all. Needs, per
+level across all three tracks: at least one real hint that nudges toward
+the intended technique without just handing over the answer — a bigger
+content-authoring lift than it sounds given there are 34+7+15 = 56 levels,
+each needing its own hint(s) written with the same care the level's own
+description got. Open question: free hints vs. point-cost hints (CTFd
+supports both) — not yet decided.
+
 ## Suggested next step
 
 Ask the user whether to move straight into planning solutions for these
 (likely deserves its own `EnterPlanMode` pass, similar to the Phase 6-8
-work, given items 1 and 5 are real plugin/frontend changes and item 4
-needs a real architectural decision) or to keep collecting more findings
-first.
+work, given items 1 and 5 are real plugin/frontend changes, item 4 needs
+a real architectural decision, and items 2/6/7/8 are sizeable content work
+in `CEI-Labs-Wargames`) or to keep collecting more findings first.
