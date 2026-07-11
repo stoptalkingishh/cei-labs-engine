@@ -56,6 +56,19 @@ class PerTeamDynamicFlag(BaseFlag):
         return hmac.compare_digest(row.value.encode(), provided.encode())
 
 
+class PerTeamDynamicAlphaFlag(PerTeamDynamicFlag):
+    """Identical validation to PerTeamDynamicFlag -- the only difference is
+    the flag TYPE itself, which routes.py's _spec_with_secret_keys reads to
+    decide whether the orchestrator should generate this level's value with
+    generate_track_secrets() (any character) or generate_alpha_track_secrets()
+    (letters only). Needed for levels whose secret gets embedded inside a
+    classical-cipher passage (Caesar/substitution/Vigenere) -- those ciphers
+    only transform alphabetic characters, so a normal token's digits/-/_
+    would pass through unencrypted and visibly stand out against the rest
+    of the encrypted passage."""
+    name = "per_team_dynamic_alpha"
+
+
 def register(app) -> None:
     # Flags.data is a free-form db.Text column (confirmed against CTFd's
     # actual model), so reusing it for the level-key string (rather than
@@ -66,3 +79,4 @@ def register(app) -> None:
     from CTFd.plugins.flags import FLAG_CLASSES
 
     FLAG_CLASSES["per_team_dynamic"] = PerTeamDynamicFlag
+    FLAG_CLASSES["per_team_dynamic_alpha"] = PerTeamDynamicAlphaFlag

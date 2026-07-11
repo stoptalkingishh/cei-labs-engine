@@ -49,10 +49,13 @@ def _resolve_config(challenge_id: int) -> "InstanceChallengeConfig | None":
     return InstanceChallengeConfig.query.filter_by(challenge_id=challenge_id).first()
 
 
+DYNAMIC_FLAG_TYPES = ("per_team_dynamic", "per_team_dynamic_alpha")
+
+
 def _group_dynamic_flags(config: InstanceChallengeConfig) -> list:
-    """Every per_team_dynamic Flags row across this instance's group (or
-    just this one challenge, if it's not in a group) -- matches challenges
-    by instance_group, the same "siblings share one box" pattern
+    """Every per_team_dynamic(_alpha) Flags row across this instance's group
+    (or just this one challenge, if it's not in a group) -- matches
+    challenges by instance_group, the same "siblings share one box" pattern
     solve_hook.py already uses. This is BOTH the set of level keys the
     orchestrator needs to generate secrets for (see _spec_with_secret_keys)
     and the set _persist_and_scrub_secrets persists/scrubs after a launch —
@@ -64,7 +67,7 @@ def _group_dynamic_flags(config: InstanceChallengeConfig) -> list:
     sibling_challenge_ids = [c.challenge_id for c in siblings]
     return Flags.query.filter(
         Flags.challenge_id.in_(sibling_challenge_ids),
-        Flags.type == "per_team_dynamic",
+        Flags.type.in_(DYNAMIC_FLAG_TYPES),
     ).all()
 
 
@@ -73,12 +76,25 @@ def _spec_with_secret_keys(config: InstanceChallengeConfig) -> dict:
     (plan_single_target has no built-in idea of "Bandit" vs "Krypton") --
     which level keys to generate secrets for has to come from the request
     spec. Sourced from Flags.data (the level key an admin/content-sync
-    script set when authoring each per_team_dynamic flag), not a new
-    column on InstanceChallengeConfig."""
+    script set when authoring each per_team_dynamic(_alpha) flag), not a
+    new column on InstanceChallengeConfig. The flag's TYPE (not just its
+    data) decides which orchestrator field it goes in -- _alpha flags need
+    generate_alpha_track_secrets()'s letters-only values (see
+    flags.PerTeamDynamicAlphaFlag), everything else gets a normal token."""
     spec = config.to_orchestrator_spec()
-    secret_keys = sorted({flag.data for flag in _group_dynamic_flags(config) if flag.data})
+    secret_keys = set()
+    alpha_secret_keys = set()
+    for flag in _group_dynamic_flags(config):
+        if not flag.data:
+            continue
+        if flag.type == "per_team_dynamic_alpha":
+            alpha_secret_keys.add(flag.data)
+        else:
+            secret_keys.add(flag.data)
     if secret_keys:
-        spec["secret_keys"] = secret_keys
+        spec["secret_keys"] = sorted(secret_keys)
+    if alpha_secret_keys:
+        spec["alpha_secret_keys"] = sorted(alpha_secret_keys)
     return spec
 
 

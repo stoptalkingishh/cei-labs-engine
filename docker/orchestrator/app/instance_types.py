@@ -20,6 +20,7 @@ Three instance types, per the migration plan:
 """
 import json
 import secrets
+import string
 from dataclasses import dataclass, field
 
 from .docker_client import ServiceSpec
@@ -72,6 +73,22 @@ def generate_track_secrets(level_keys: list, nbytes: int = 18) -> dict:
     per_team_dynamic Flags row's `data` column (see routes.py's
     _spec_with_secret_keys)."""
     return {key: secrets.token_urlsafe(nbytes) for key in level_keys}
+
+
+def generate_alpha_track_secrets(level_keys: list, length: int = 10) -> dict:
+    """Same purpose as generate_track_secrets(), but restricted to
+    uppercase letters only -- for levels where the secret gets embedded
+    inside a classical-cipher passage (Caesar/substitution/Vigenere) that
+    only transforms alphabetic characters and passes everything else
+    through unchanged. A regular token_urlsafe() value contains digits/
+    -/_ that would pass through such a cipher UNENCRYPTED, visibly
+    standing out against the rest of the encrypted passage and giving
+    away the flag's location without needing the taught cryptanalysis
+    technique at all. Kept as a separate function (not a flag on
+    generate_track_secrets) so the two call sites stay obviously
+    distinct -- this one is the exception, not the default."""
+    alphabet = string.ascii_uppercase
+    return {key: "".join(secrets.choice(alphabet) for _ in range(length)) for key in level_keys}
 
 
 @dataclass
@@ -162,7 +179,11 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
     # these back out of `access` before a player ever sees it (access is
     # otherwise displayed verbatim as connect info).
     secret_keys = spec.get("secret_keys") or []
+    alpha_secret_keys = spec.get("alpha_secret_keys") or []
     track_secrets = generate_track_secrets(secret_keys) if secret_keys else {}
+    # See generate_alpha_track_secrets' docstring: levels whose secret gets
+    # embedded inside a classical-cipher passage need letters only.
+    track_secrets.update(generate_alpha_track_secrets(alpha_secret_keys) if alpha_secret_keys else {})
     if track_secrets:
         env = {**env, "LEVEL_SECRETS": json.dumps(track_secrets)}
 

@@ -96,6 +96,35 @@ def test_single_target_secrets_are_random_per_call():
     assert plan_a.access["krypton2"] != plan_b.access["krypton2"]
 
 
+def test_generate_alpha_track_secrets_is_letters_only():
+    result = it.generate_alpha_track_secrets(["krypton3", "krypton4"], length=12)
+    assert set(result.keys()) == {"krypton3", "krypton4"}
+    for value in result.values():
+        assert len(value) == 12
+        assert value.isalpha()
+        assert value.isupper()
+    assert result["krypton3"] != result["krypton4"]
+
+
+def test_single_target_alpha_secret_keys_produce_letters_only():
+    plan = it.plan_single_target(
+        "team-1", "otw", {"image": "some/target", "alpha_secret_keys": ["krypton3"]}, allocated_port=32000, base_domain=BASE_DOMAIN
+    )
+    assert plan.access["krypton3"].isalpha()
+    assert plan.access["krypton3"].isupper()
+
+
+def test_single_target_mixes_normal_and_alpha_secret_keys():
+    plan = it.plan_single_target(
+        "team-1", "otw",
+        {"image": "some/target", "secret_keys": ["krypton2"], "alpha_secret_keys": ["krypton3"]},
+        allocated_port=32000, base_domain=BASE_DOMAIN,
+    )
+    assert "krypton2" in plan.access
+    assert "krypton3" in plan.access
+    assert plan.access["krypton3"].isalpha()
+
+
 # ── target-attacker (range model) ─────────────────────────────────────────────
 
 def test_range_attacker_plan_joins_range_network_and_challenge_network():
