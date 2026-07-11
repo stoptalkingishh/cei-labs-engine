@@ -91,6 +91,23 @@ def generate_alpha_track_secrets(level_keys: list, length: int = 10) -> dict:
     return {key: "".join(secrets.choice(alphabet) for _ in range(length)) for key in level_keys}
 
 
+def generate_fixed_length_track_secrets(level_keys: list, length: int = 32) -> dict:
+    """Same purpose again, but a fixed-length alphanumeric string (default
+    32 characters, matching OverTheWire's own real flag format and this
+    project's original hardcoded flags exactly). Needed wherever a level's
+    own description/puzzle mechanics are calibrated to an EXACT byte count
+    or character length (e.g. "find the file that is exactly 1033 bytes",
+    a fixed insertion position in a large generated file) -- those
+    descriptions are static CTFd text, shared by every team, so the
+    per-team secret's length has to stay exactly what the description
+    already promises or the puzzle breaks. token_urlsafe()'s length
+    varies with its input byte count in a way that's awkward to pin
+    exactly; a direct fixed-length alphanumeric choice is simpler and
+    guaranteed exact."""
+    alphabet = string.ascii_letters + string.digits
+    return {key: "".join(secrets.choice(alphabet) for _ in range(length)) for key in level_keys}
+
+
 @dataclass
 class InstancePlan:
     """What one (owner_id, instance_key) launch actually owns. Tearing down
@@ -180,10 +197,14 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
     # otherwise displayed verbatim as connect info).
     secret_keys = spec.get("secret_keys") or []
     alpha_secret_keys = spec.get("alpha_secret_keys") or []
+    fixed_secret_keys = spec.get("fixed_secret_keys") or []
     track_secrets = generate_track_secrets(secret_keys) if secret_keys else {}
     # See generate_alpha_track_secrets' docstring: levels whose secret gets
     # embedded inside a classical-cipher passage need letters only.
     track_secrets.update(generate_alpha_track_secrets(alpha_secret_keys) if alpha_secret_keys else {})
+    # See generate_fixed_length_track_secrets' docstring: levels whose
+    # static description text is calibrated to an exact byte count/length.
+    track_secrets.update(generate_fixed_length_track_secrets(fixed_secret_keys) if fixed_secret_keys else {})
     if track_secrets:
         env = {**env, "LEVEL_SECRETS": json.dumps(track_secrets)}
 

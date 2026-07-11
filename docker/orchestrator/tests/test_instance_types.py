@@ -114,6 +114,23 @@ def test_single_target_alpha_secret_keys_produce_letters_only():
     assert plan.access["krypton3"].isupper()
 
 
+def test_generate_fixed_length_track_secrets_is_exact_length_alphanumeric():
+    result = it.generate_fixed_length_track_secrets(["bandit1", "bandit2"], length=32)
+    assert set(result.keys()) == {"bandit1", "bandit2"}
+    for value in result.values():
+        assert len(value) == 32
+        assert value.isalnum()
+    assert result["bandit1"] != result["bandit2"]
+
+
+def test_single_target_fixed_secret_keys_produce_exact_length():
+    plan = it.plan_single_target(
+        "team-1", "otw", {"image": "some/target", "fixed_secret_keys": ["bandit5"]}, allocated_port=32000, base_domain=BASE_DOMAIN
+    )
+    assert len(plan.access["bandit5"]) == 32
+    assert plan.access["bandit5"].isalnum()
+
+
 def test_single_target_mixes_normal_and_alpha_secret_keys():
     plan = it.plan_single_target(
         "team-1", "otw",

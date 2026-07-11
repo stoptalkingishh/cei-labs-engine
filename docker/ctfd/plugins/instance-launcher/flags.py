@@ -69,6 +69,17 @@ class PerTeamDynamicAlphaFlag(PerTeamDynamicFlag):
     name = "per_team_dynamic_alpha"
 
 
+class PerTeamDynamicFixedFlag(PerTeamDynamicFlag):
+    """Identical validation again -- distinguished only by type so
+    routes.py knows to route this level's key into the orchestrator's
+    "fixed_secret_keys" field (generate_fixed_length_track_secrets(), a
+    fixed-length alphanumeric string matching the original 32-char flag
+    format). Needed for levels whose static description text is
+    calibrated to an exact byte count or length (e.g. "find the file
+    that is exactly 1033 bytes")."""
+    name = "per_team_dynamic_fixed"
+
+
 def register(app) -> None:
     # Flags.data is a free-form db.Text column (confirmed against CTFd's
     # actual model), so reusing it for the level-key string (rather than
@@ -80,3 +91,4 @@ def register(app) -> None:
 
     FLAG_CLASSES["per_team_dynamic"] = PerTeamDynamicFlag
     FLAG_CLASSES["per_team_dynamic_alpha"] = PerTeamDynamicAlphaFlag
+    FLAG_CLASSES["per_team_dynamic_fixed"] = PerTeamDynamicFixedFlag
