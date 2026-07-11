@@ -27,12 +27,12 @@ import hmac
 
 from flask import Blueprint, abort, redirect, render_template, request, url_for
 
-from CTFd.models import Challenges, db
+from CTFd.models import Challenges, Flags, db
 from CTFd.plugins import bypass_csrf_protection
 from CTFd.utils.decorators import admins_only, authed_only
 from CTFd.utils.user import get_current_user
 
-from .models import InstanceChallengeConfig
+from .models import InstanceChallengeConfig, TeamChallengeSecret
 from .orchestrator_client import OrchestratorClient, OrchestratorError, read_secret
 
 instance_launcher_bp = Blueprint(
@@ -47,6 +47,81 @@ VALID_TYPES = ("web-app", "single-target", "target-attacker")
 
 def _resolve_config(challenge_id: int) -> "InstanceChallengeConfig | None":
     return InstanceChallengeConfig.query.filter_by(challenge_id=challenge_id).first()
+
+
+def _group_dynamic_flags(config: InstanceChallengeConfig) -> list:
+    """Every per_team_dynamic Flags row across this instance's group (or
+    just this one challenge, if it's not in a group) -- matches challenges
+    by instance_group, the same "siblings share one box" pattern
+    solve_hook.py already uses. This is BOTH the set of level keys the
+    orchestrator needs to generate secrets for (see _spec_with_secret_keys)
+    and the set _persist_and_scrub_secrets persists/scrubs after a launch —
+    single source of truth so the two can't drift apart."""
+    if config.instance_group:
+        siblings = InstanceChallengeConfig.query.filter_by(instance_group=config.instance_group).all()
+    else:
+        siblings = [config]
+    sibling_challenge_ids = [c.challenge_id for c in siblings]
+    return Flags.query.filter(
+        Flags.challenge_id.in_(sibling_challenge_ids),
+        Flags.type == "per_team_dynamic",
+    ).all()
+
+
+def _spec_with_secret_keys(config: InstanceChallengeConfig) -> dict:
+    """The orchestrator's plan_* functions are generic across every track
+    (plan_single_target has no built-in idea of "Bandit" vs "Krypton") --
+    which level keys to generate secrets for has to come from the request
+    spec. Sourced from Flags.data (the level key an admin/content-sync
+    script set when authoring each per_team_dynamic flag), not a new
+    column on InstanceChallengeConfig."""
+    spec = config.to_orchestrator_spec()
+    secret_keys = sorted({flag.data for flag in _group_dynamic_flags(config) if flag.data})
+    if secret_keys:
+        spec["secret_keys"] = secret_keys
+    return spec
+
+
+def _persist_and_scrub_secrets(status: "dict | None", config: InstanceChallengeConfig, owner_id: str) -> None:
+    """Per-team flag values ride the same orchestrator `access` dict as
+    ordinary connect info (see instance_types.py's generate_track_secrets
+    callers) -- and `access` is otherwise displayed VERBATIM to the player
+    as connect info (launch.html, the JSON APIs below). Any flag value left
+    in it would hand the player their own answer unearned. This extracts
+    every per-team secret this instance/instance_group actually carries,
+    upserts it into TeamChallengeSecret (what flags.PerTeamDynamicFlag.
+    compare() validates against), and pops it out of `status["access"]` in
+    place before returning -- callers must call this before rendering/
+    returning `status` to a player, not after.
+    """
+    access = (status or {}).get("access")
+    if not access:
+        return
+
+    changed = False
+    for flag in _group_dynamic_flags(config):
+        level_key = flag.data
+        if not level_key or level_key not in access:
+            continue
+        value = access.pop(level_key)
+        row = TeamChallengeSecret.query.filter_by(owner_id=owner_id, challenge_id=flag.challenge_id).first()
+        if row is None:
+            db.session.add(TeamChallengeSecret(owner_id=owner_id, challenge_id=flag.challenge_id, value=value))
+        else:
+            row.value = value
+        changed = True
+
+    if changed:
+        db.session.commit()
+
+
+def _fetch_and_scrub_status(config: InstanceChallengeConfig, owner_id: str, instance_key: str, client: "OrchestratorClient") -> dict:
+    """The one place both routes below should fetch instance status from —
+    ensures _persist_and_scrub_secrets always runs before a status dict
+    reaches a template or JSON response."""
+    status = client.get(owner_id, instance_key)
+    _persist_and_scrub_secrets(status, config, owner_id)
+    return status
 
 
 def _run_action(config: InstanceChallengeConfig, action: "str | None"):
@@ -66,18 +141,18 @@ def _run_action(config: InstanceChallengeConfig, action: "str | None"):
         if action == "reboot":
             client.reboot(owner_id, instance_key)
         elif action == "relaunch":
-            client.create_or_get(config.instance_type, owner_id, instance_key, config.to_orchestrator_spec(), relaunch=True)
+            client.create_or_get(config.instance_type, owner_id, instance_key, _spec_with_secret_keys(config), relaunch=True)
         elif action == "extend":
             client.extend_shutdown(owner_id, instance_key)
         else:
-            client.create_or_get(config.instance_type, owner_id, instance_key, config.to_orchestrator_spec())
+            client.create_or_get(config.instance_type, owner_id, instance_key, _spec_with_secret_keys(config))
     except OrchestratorError as exc:
         error = str(exc)
 
     status = None
     if error is None:
         try:
-            status = client.get(owner_id, instance_key)
+            status = _fetch_and_scrub_status(config, owner_id, instance_key, client)
         except OrchestratorError as exc:
             error = str(exc)
 
@@ -127,7 +202,7 @@ def api_status(challenge_id: int):
     client = OrchestratorClient.from_env()
 
     try:
-        status = client.get(owner_id, instance_key)
+        status = _fetch_and_scrub_status(config, owner_id, instance_key, client)
     except OrchestratorError as exc:
         return {
             "has_environment": True,

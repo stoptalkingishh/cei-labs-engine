@@ -8,6 +8,8 @@ losing those features. Keeping this as an independent table means every
 challenge stays a normal "standard" CTFd challenge; this plugin only adds
 metadata on the side plus its own admin page for editing it.
 """
+from datetime import datetime
+
 from CTFd.models import db
 
 
@@ -75,3 +77,33 @@ class InstanceChallengeConfig(db.Model):
         if self.port:
             spec["port"] = self.port
         return spec
+
+
+class TeamChallengeSecret(db.Model):
+    """Per-team expected value for a `per_team_dynamic` flag (see flags.py).
+
+    The orchestrator generates one random secret per team per level at
+    instance-creation time (mirroring the VNC_PASSWORD pattern from the
+    security audit) and returns it embedded in the launch response's
+    `access` dict. routes.py extracts and upserts it here -- and MUST strip
+    it back out of `access` before that response is ever rendered/returned
+    to the player, since `access` is otherwise displayed verbatim as
+    connect info (see _run_action/_fetch_and_scrub_status in routes.py).
+    Validation (flags.py's PerTeamDynamicFlag.compare()) reads this table
+    directly, with no orchestrator round-trip, so a flag submission never
+    depends on the orchestrator being reachable at submission time.
+
+    A brand-new table (not a column added to InstanceChallengeConfig,
+    which already has live rows and no ALTER TABLE pathway in this
+    project) -- created the same create-if-missing way in __init__.py.
+    """
+
+    __tablename__ = "instance_launcher_team_secrets"
+
+    id = db.Column(db.Integer, primary_key=True)
+    owner_id = db.Column(db.String(64), nullable=False, index=True)
+    challenge_id = db.Column(db.Integer, db.ForeignKey("challenges.id", ondelete="CASCADE"), nullable=False, index=True)
+    value = db.Column(db.String(256), nullable=False)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (db.UniqueConstraint("owner_id", "challenge_id", name="uq_team_challenge_secret"),)

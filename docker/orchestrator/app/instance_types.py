@@ -18,6 +18,7 @@ Three instance types, per the migration plan:
                        A target is only ever reachable from its range's own
                        attacker, never from Traefik, other teams, or CTFd.
 """
+import json
 import secrets
 from dataclasses import dataclass, field
 
@@ -52,6 +53,25 @@ _ATTACKER_CAPS = _TARGET_CAPS + ["NET_RAW", "NET_ADMIN"]
 
 class InvalidInstanceRequestError(ValueError):
     pass
+
+
+def generate_track_secrets(level_keys: list, nbytes: int = 18) -> dict:
+    """One random per-team value per level key -- the fix for every wargame
+    level's flag/password previously being an identical string baked into
+    the shared image at build time (see docs/security-audit-status.md).
+    Mirrors the VNC_PASSWORD pattern below exactly: generated fresh only
+    when an instance is first created, since plan_* functions are only
+    ever called from controller.py's create_or_get on that "existing is
+    None" path (a plain reuse returns the cached InstancePlan without
+    calling back into this module at all) -- so this never regenerates
+    values out from under an already-running team.
+
+    `level_keys` is generic across every track (this module has no
+    built-in notion of "Bandit" vs "Krypton") -- it comes from the
+    request spec's "secret_keys", itself sourced CTFd-side from each
+    per_team_dynamic Flags row's `data` column (see routes.py's
+    _spec_with_secret_keys)."""
+    return {key: secrets.token_urlsafe(nbytes) for key in level_keys}
 
 
 @dataclass
@@ -133,6 +153,19 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
     if not isinstance(env, dict):
         raise InvalidInstanceRequestError("'env' must be an object of string -> string")
 
+    # Per-team level secrets (see generate_track_secrets docstring): the
+    # image's entrypoint reads LEVEL_SECRETS (one JSON blob covering every
+    # level this box hosts), applies each level's own value at container
+    # START, and never anything baked in at build time. Surfaced in
+    # `access` too, under each level's own key, purely as the transport
+    # back to CTFd -- routes.py's _persist_and_scrub_secrets MUST strip
+    # these back out of `access` before a player ever sees it (access is
+    # otherwise displayed verbatim as connect info).
+    secret_keys = spec.get("secret_keys") or []
+    track_secrets = generate_track_secrets(secret_keys) if secret_keys else {}
+    if track_secrets:
+        env = {**env, "LEVEL_SECRETS": json.dumps(track_secrets)}
+
     svc_name = naming.service_name(owner_id, instance_key)
     net_name = naming.network_name(owner_id, instance_key)
 
@@ -156,6 +189,7 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
             "connect_port": allocated_port,
             "protocol": protocol,
             "note": "Connects via any swarm node — this hostname routes to whichever node the target actually landed on.",
+            **track_secrets,
         },
     )
 

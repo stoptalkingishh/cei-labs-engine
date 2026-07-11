@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app import instance_types as it
@@ -61,6 +63,37 @@ def test_single_target_custom_target_port():
 def test_single_target_requires_image():
     with pytest.raises(it.InvalidInstanceRequestError):
         it.plan_single_target("team-1", "otw", {}, allocated_port=32000, base_domain=BASE_DOMAIN)
+
+
+def test_single_target_no_secret_keys_means_no_level_secrets_env():
+    plan = it.plan_single_target("team-1", "otw", {"image": "some/target"}, allocated_port=32000, base_domain=BASE_DOMAIN)
+    assert "LEVEL_SECRETS" not in plan.services[0].env
+
+
+def test_single_target_generates_per_team_level_secrets():
+    plan = it.plan_single_target(
+        "team-1", "otw", {"image": "some/target", "secret_keys": ["krypton1", "krypton2"]},
+        allocated_port=32000, base_domain=BASE_DOMAIN,
+    )
+    svc = plan.services[0]
+    assert "LEVEL_SECRETS" in svc.env
+    secrets_blob = json.loads(svc.env["LEVEL_SECRETS"])
+    assert set(secrets_blob.keys()) == {"krypton1", "krypton2"}
+    assert secrets_blob["krypton1"] != secrets_blob["krypton2"]
+    # Also surfaced in access (transport back to CTFd -- routes.py is
+    # responsible for scrubbing these before a player ever sees them).
+    assert plan.access["krypton1"] == secrets_blob["krypton1"]
+    assert plan.access["krypton2"] == secrets_blob["krypton2"]
+
+
+def test_single_target_secrets_are_random_per_call():
+    plan_a = it.plan_single_target(
+        "team-1", "otw", {"image": "some/target", "secret_keys": ["krypton2"]}, allocated_port=32000, base_domain=BASE_DOMAIN
+    )
+    plan_b = it.plan_single_target(
+        "team-2", "otw", {"image": "some/target", "secret_keys": ["krypton2"]}, allocated_port=32001, base_domain=BASE_DOMAIN
+    )
+    assert plan_a.access["krypton2"] != plan_b.access["krypton2"]
 
 
 # ── target-attacker (range model) ─────────────────────────────────────────────

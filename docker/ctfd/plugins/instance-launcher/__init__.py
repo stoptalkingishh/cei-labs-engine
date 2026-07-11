@@ -22,20 +22,23 @@ CTFd/plugins/dynamic_challenges).
 from CTFd.models import db
 from CTFd.plugins import register_plugin_assets_directory, register_plugin_script
 
-from . import solve_hook
-from .models import InstanceChallengeConfig  # noqa: F401 (import registers the model with SQLAlchemy)
+from . import flags, solve_hook
+from .models import InstanceChallengeConfig, TeamChallengeSecret  # noqa: F401 (import registers the models with SQLAlchemy)
 from .routes import instance_launcher_bp
 
 
 def load(app):
     app.register_blueprint(instance_launcher_bp)
-    # InstanceChallengeConfig is a brand-new table with no prior schema to
-    # migrate from, so create-if-missing is sufficient — unlike a real Alembic
-    # migration (needed when altering an existing CTFd table), there's no
-    # history to reconcile here.
+    # Both are brand-new tables with no prior schema to migrate from, so
+    # create-if-missing is sufficient — unlike a real Alembic migration
+    # (needed when altering an existing CTFd table), there's no history to
+    # reconcile here. checkfirst=True makes this a no-op once either table
+    # already exists.
     with app.app_context():
         InstanceChallengeConfig.__table__.create(bind=db.engine, checkfirst=True)
+        TeamChallengeSecret.__table__.create(bind=db.engine, checkfirst=True)
     solve_hook.register(app)
+    flags.register(app)
 
     register_plugin_assets_directory(app, base_path="/plugins/instance-launcher/assets/")
     register_plugin_script("/plugins/instance-launcher/assets/challenge-launch.js")
