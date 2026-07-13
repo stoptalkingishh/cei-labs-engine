@@ -195,7 +195,13 @@ class DockerOrchestratorClient:
 
         deadline = time.monotonic() + _TASK_DRAIN_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
-            tasks = self._client.api.tasks(filters={"service": service_id})
+            try:
+                tasks = self._client.api.tasks(filters={"service": service_id})
+            except docker.errors.NotFound:
+                # The Engine API 404s (rather than returning []) once the
+                # removed service has zero matching tasks left -- that's
+                # the actual "fully drained" success case, not an error.
+                return
             if not tasks or all(
                 t.get("Status", {}).get("State") in _TASK_TERMINAL_STATES for t in tasks
             ):
