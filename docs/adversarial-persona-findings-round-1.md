@@ -33,7 +33,7 @@ reaches a terminal state, bounded at 15s. `remove_network()` now retries
 removal for the same window instead of a single attempt. See
 `docker_client.py`'s updated docstrings for full detail.
 
-## Finding 2 (CRITICAL, fixed): broken network airgap — real egress + real cross-instance reachability
+## Finding 2 (CRITICAL, confirmed — fix attempted and reverted, still open): broken network airgap — real egress + real cross-instance reachability
 
 Two personas independently found different symptoms of the **same root
 cause**:
@@ -73,11 +73,26 @@ channel, not a live breach of a currently-active other team's instance. This
 is the leading hypothesis, not confirmed with certainty — round 2 (post-fix)
 re-testing should specifically try to reproduce it.
 
-**Fix**: published ports now use `PublishMode="host"` instead of the
-default `vip` mode — binds directly on the node without joining
-`ingress`/`docker_gwbridge` at all. Combined with Finding 1's fix (so stale
-containers actually get cleaned up before a network name gets reused),
-both known contributing mechanisms are addressed.
+**Fix attempted, then reverted**: published ports were switched to
+`PublishMode="host"` instead of the default `vip` mode, which should bind
+directly on the node without joining `ingress`/`docker_gwbridge` at all.
+Live-verified this does correctly stop the leak in principle, but also
+**confirmed live that Swarm host-mode publishing silently binds nothing at
+all on this specific deployment** — the Engine API accepts and reports back
+the host-mode endpoint spec, but no listener ever appears on the host
+(`ss -tlnp` empty). Reproduced independently of this codebase with a bare
+`docker service create --publish mode=host` against a stock `nginx` image,
+ruling out anything orchestrator-specific. This made every single-target/
+range-attacker instance completely unreachable — a worse regression than
+the leak itself — so the change was reverted back to `vip` mode with the
+operator's explicit sign-off. **Finding 2 remains open.** Root cause of the
+leak itself is still believed correct (see above); root cause of *why host
+mode doesn't bind on this box* is not yet identified and needs isolated
+investigation (Docker Engine version quirk vs. daemon config gap) before
+host mode is viable here. Finding 1's fix (stale containers now actually
+get cleaned up before a network name is reused) is unaffected by this
+revert and remains in place — 8/8 back-to-back relaunches verified working
+both before and after the Finding 2 revert.
 
 ## Finding 3 (documentation gap, not yet fixed): SSH `connect_host` doesn't resolve
 
@@ -160,11 +175,22 @@ container (no Docker socket mounted either).
 
 ## Next steps
 
-1. Fixes for Findings 1 and 2 are deployed and unit-tested
-   (`cei-labs-engine@65317ce`) — needs live re-verification against the
-   real deployment (relaunch a real active instance repeatedly; re-run the
-   Account & Answer Cheater / Infrastructure Breaker network checks).
-2. Round 2: rerun with 10 personas (two of each type) per
-   `adversarial-persona-testing.md`'s escalation plan, once round 1's fixes
-   are confirmed live.
-3. Findings 3 and 5 (doc gaps) still need resolution — not blocking round 2.
+1. **Finding 1 is fixed and live-verified** (`cei-labs-engine@c111fbd`, after
+   a same-day follow-up fix to the fix itself — see the docker_client.py
+   history around that commit): 8/8 back-to-back relaunches against a real
+   active instance succeeded, confirmed twice (once immediately after the
+   fix, again after Finding 2's revert below).
+2. **Finding 2 is still open** — the host-mode fix was reverted
+   (`cei-labs-engine@2fe010e`) after confirming it breaks all instance
+   connectivity on this deployment. Needs a different fix approach:
+   isolate why Swarm host-mode publishing doesn't bind here, or find an
+   alternative to routing-mesh publishing entirely for challenge
+   containers that need a strict airgap (e.g. Traefik TCP routing instead
+   of a direct published port, if that turns out more reliable). Not
+   blocking round 2 as long as round 2's personas are briefed that this
+   specific leak is a known, accepted-for-now gap rather than something
+   to keep re-discovering.
+3. Round 2: rerun with 10 personas (two of each type) per
+   `adversarial-persona-testing.md`'s escalation plan — Finding 1 being
+   fixed is enough to proceed; Finding 2 doesn't need to block it.
+4. Findings 3 and 5 (doc gaps) still need resolution — not blocking round 2.
