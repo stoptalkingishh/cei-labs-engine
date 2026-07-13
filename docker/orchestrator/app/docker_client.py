@@ -7,6 +7,7 @@ Docker-API specifics stay in one place and instance planning logic can be
 unit-tested without a Docker daemon.
 """
 import logging
+import time
 from dataclasses import dataclass, field
 
 import docker
@@ -16,6 +17,16 @@ from docker.types import EndpointSpec, NetworkAttachmentConfig, Resources, Resta
 logger = logging.getLogger(__name__)
 
 ORCH_LABEL = "cei.orchestrator.managed"
+
+# How long remove_service() waits for a removed service's last task to
+# actually finish draining (stop, detach from its networks) before giving
+# up -- see remove_service's docstring for why this matters.
+_TASK_DRAIN_TIMEOUT_SECONDS = 15.0
+_TASK_DRAIN_POLL_INTERVAL = 0.5
+
+# Terminal task states per the Swarm API -- a task in any other state might
+# still hold its network attachment/port.
+_TASK_TERMINAL_STATES = {"shutdown", "complete", "failed", "rejected", "orphaned", "remove"}
 
 
 @dataclass
@@ -70,16 +81,33 @@ class DockerOrchestratorClient:
         )
 
     def remove_network(self, name: str) -> None:
+        """Retries briefly rather than giving up on the first attempt --
+        immediately after remove_service() a network can still show a
+        lingering endpoint for a moment even though remove_service() itself
+        already waited for the task to reach a terminal state (draining an
+        endpoint is a separate, slightly-later step from the task stopping).
+        This used to log a warning and defer entirely to the reaper's next
+        sweep (up to REAP_INTERVAL_SECONDS later), which is what let an
+        immediate relaunch race a same-named network that hadn't actually
+        been removed yet -- see docs/adversarial-persona-findings-round-1.md."""
         try:
             net = self._client.networks.get(name)
         except NotFound:
             return
-        try:
-            net.remove()
-        except docker.errors.APIError as exc:
-            # Network may still be draining a just-removed service's endpoint;
-            # the reaper/caller is expected to retry on next sweep.
-            logger.warning("could not remove network %s yet: %s", name, exc)
+
+        deadline = time.monotonic() + _TASK_DRAIN_TIMEOUT_SECONDS
+        last_exc = None
+        while time.monotonic() < deadline:
+            try:
+                net.remove()
+                return
+            except docker.errors.APIError as exc:
+                last_exc = exc
+                time.sleep(_TASK_DRAIN_POLL_INTERVAL)
+        # Still couldn't remove it after waiting -- log and let the reaper's
+        # next sweep keep trying, same as before, but now only as a genuine
+        # fallback rather than the normal path.
+        logger.warning("could not remove network %s after %ss: %s", name, _TASK_DRAIN_TIMEOUT_SECONDS, last_exc)
 
     # ── Services ─────────────────────────────────────────────────────────────
     def get_service(self, name: str):
@@ -95,7 +123,29 @@ class DockerOrchestratorClient:
 
         endpoint_spec = None
         if spec.published_ports:
-            endpoint_spec = EndpointSpec(ports={published: target for published, target in spec.published_ports})
+            # PublishMode="host": binds the port directly on whichever node
+            # the task lands on, instead of Docker's default "vip"/routing-
+            # mesh mode. The routing mesh implicitly attaches every such
+            # service to the shared `ingress` network (and NATs through
+            # docker_gwbridge) regardless of what other networks the
+            # service explicitly requests -- which silently broke every
+            # single-target/range-attacker container's claimed airgap in
+            # two ways, both live-verified against a real deployment
+            # (see TRACKER.md and docs/adversarial-persona-findings-
+            # round-1.md): real internet egress despite `internal: true`
+            # on the container's own network, and real reachability into
+            # OTHER teams' separate airgapped networks (their subnet is
+            # just another route the single Swarm node's host stack
+            # already knows, and ingress-mode traffic transits that host
+            # stack instead of staying confined to the container's
+            # explicitly-attached networks). Host mode is fine for this
+            # deployment's current single-node topology; a future
+            # multi-node swarm would need to revisit this (host mode
+            # doesn't move the bound port if the task reschedules to a
+            # different node).
+            endpoint_spec = EndpointSpec(
+                ports={published: (target, "tcp", "host") for published, target in spec.published_ports}
+            )
 
         logger.info("creating service %s (image=%s, networks=%s)", spec.name, spec.image, spec.networks)
         return self._client.services.create(
@@ -117,11 +167,41 @@ class DockerOrchestratorClient:
         )
 
     def remove_service(self, name: str) -> None:
+        """Waits for the removed service's last task(s) to actually reach a
+        terminal state before returning, instead of returning the instant
+        the Swarm API accepts the removal request.
+
+        Removing a Swarm service deletes its record from the raft store
+        essentially immediately, but the underlying container/task keeps
+        running for a bit longer while it actually stops and detaches from
+        its network(s) -- an async drain, not part of the removal call
+        itself. A caller that immediately tries to create a *new* service
+        with the same name (teardown-then-relaunch, or a fresh instance
+        landing on a just-freed port) can race that drain: Docker rejects
+        the new service/network/port as still in use by the old one's
+        lingering task. Verified live: 100% of "relaunch" attempts against
+        an active instance failed with a 500 before this fix (see
+        docs/adversarial-persona-findings-round-1.md), and a concurrent
+        burst left an orphaned container still reachable -- serving a
+        *different* team's data -- on a port CTFd's own API already
+        reported as free.
+        """
         svc = self.get_service(name)
         if svc is None:
             return
+        service_id = svc.id
         logger.info("removing service %s", name)
         svc.remove()
+
+        deadline = time.monotonic() + _TASK_DRAIN_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            tasks = self._client.api.tasks(filters={"service": service_id})
+            if not tasks or all(
+                t.get("Status", {}).get("State") in _TASK_TERMINAL_STATES for t in tasks
+            ):
+                return
+            time.sleep(_TASK_DRAIN_POLL_INTERVAL)
+        logger.warning("service %s's task(s) still draining after %ss, proceeding anyway", name, _TASK_DRAIN_TIMEOUT_SECONDS)
 
     def restart_service(self, name: str) -> bool:
         """"Reboot Host": restarts the container(s) in place — same service,
