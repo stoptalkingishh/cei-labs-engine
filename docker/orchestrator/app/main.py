@@ -16,6 +16,7 @@ from .controller import (
     CapacityError,
     ExtensionsExhaustedError,
     InstanceController,
+    InstanceInitializingError,
     NotFoundError,
     ShutdownNotPendingError,
 )
@@ -55,8 +56,8 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
     app = Flask(__name__)
 
     docker_client = docker_client or DockerOrchestratorClient(cfg.DOCKER_SOCKET)
-    store = InstanceStore()
-    range_store = RangeStore()
+    store = InstanceStore(db_path=cfg.STORE_DB_PATH)
+    range_store = RangeStore(db_path=cfg.STORE_DB_PATH)
     port_allocator = PortAllocator(cfg.SSH_PORT_RANGE_START, cfg.SSH_PORT_RANGE_END)
     controller = InstanceController(
         docker_client=docker_client,
@@ -111,7 +112,7 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             plan, created = controller.create_or_get(instance_type, owner_id, instance_key, spec, force_relaunch)
         except (InvalidInstanceRequestError, InvalidIdentifierError) as exc:
             return jsonify(error=str(exc)), 400
-        except (CapacityError, PortsExhaustedError) as exc:
+        except (CapacityError, PortsExhaustedError, InstanceInitializingError) as exc:
             return jsonify(error=str(exc)), 503
         except Exception:
             logger.exception("failed to create instance owner=%s key=%s", owner_id, instance_key)
@@ -126,6 +127,7 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
         if record is None:
             return jsonify(error="not found"), 404
         record.touch()
+        store.touch(owner_id, instance_key)
         return jsonify(**_instance_response(record))
 
     @app.delete("/instances/<owner_id>/<instance_key>")

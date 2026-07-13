@@ -19,6 +19,7 @@ class FakeConfig(Config):
     SHUTDOWN_DELAY_SECONDS = 30
     SHUTDOWN_EXTEND_SECONDS = 300
     SHUTDOWN_MAX_EXTENSIONS = 3
+    STORE_DB_PATH = ":memory:"
 
 
 @pytest.fixture

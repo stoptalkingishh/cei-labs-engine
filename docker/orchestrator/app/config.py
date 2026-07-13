@@ -41,6 +41,14 @@ class Config:
 
     DOCKER_SOCKET = os.environ.get("DOCKER_SOCKET", "unix://var/run/docker.sock")
 
+    # SQLite-backed store path. Must be a real file (not ":memory:") in
+    # production so multiple gunicorn worker processes share one store --
+    # see store.py's module docstring for why this matters. Ephemeral by
+    # design, same as the in-memory dict it replaced: a fresh file each
+    # container start is correct, since `last_accessed`/`shutdown_at` are
+    # allowed to reset on restart (only affects idle-reap/countdown timing).
+    STORE_DB_PATH = os.environ.get("ORCHESTRATOR_STORE_DB_PATH", "/tmp/orchestrator-store.db")
+
     # Directly-published port range for `single-target` instances (SSH etc.).
     # Deliberately disjoint from spawn-workspaces.sh's bulk-provisioning
     # range (default starts at 30001) to avoid collisions between the two

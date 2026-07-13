@@ -30,7 +30,9 @@ def test_sweep_leaves_fresh_instances_alone():
 def test_sweep_removes_idle_instance_past_grace_period():
     reaper, controller, docker, store, _ = make_reaper(grace_minutes=1)
     controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
-    store.get("team-1", "juice").last_accessed -= 120  # 2 minutes idle, grace is 1
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 120  # 2 minutes idle, grace is 1
+    store.update(record)
 
     reaped = reaper.sweep()
 
@@ -43,7 +45,9 @@ def test_sweep_only_reaps_the_idle_one():
     reaper, controller, docker, store, _ = make_reaper(grace_minutes=1)
     controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
     controller.create_or_get(it.WEB_APP, "team-2", "juice", {"image": "img"})
-    store.get("team-1", "juice").last_accessed -= 120
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 120
+    store.update(record)
 
     reaped = reaper.sweep()
 
@@ -55,8 +59,12 @@ def test_sweep_only_reaps_the_idle_one():
 def test_sweep_tears_down_range_target_and_its_shared_network():
     reaper, controller, docker, store, range_store = make_reaper(grace_minutes=1)
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"})
-    store.get("team-1", "otw").last_accessed -= 120
-    range_store.get("team-1").last_accessed -= 120  # range itself also idle
+    record = store.get("team-1", "otw")
+    record.last_accessed -= 120
+    store.update(record)
+    range_record = range_store.get("team-1")
+    range_record.last_accessed -= 120  # range itself also idle
+    range_store.update(range_record)
 
     reaper.sweep()
 
@@ -69,7 +77,9 @@ def test_sweep_reaps_idle_range_even_with_no_remaining_targets():
     reaper, controller, docker, store, range_store = make_reaper(grace_minutes=1)
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"})
     controller.teardown("team-1", "otw")  # target gone, attacker/network remain
-    range_store.get("team-1").last_accessed -= 120
+    range_record = range_store.get("team-1")
+    range_record.last_accessed -= 120
+    range_store.update(range_record)
 
     reaper.sweep()
 
@@ -82,7 +92,9 @@ def test_sweep_leaves_active_range_alone_even_if_a_target_was_reaped():
     reaper, controller, docker, store, range_store = make_reaper(grace_minutes=1)
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw-1", {"target_image": "t", "attacker_image": "k"})
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw-2", {"target_image": "t", "attacker_image": "k"})
-    store.get("team-1", "otw-1").last_accessed -= 120  # only this target is idle
+    record = store.get("team-1", "otw-1")
+    record.last_accessed -= 120  # only this target is idle
+    store.update(record)
     # range_store last_accessed stays fresh (touched by otw-2's creation)
 
     reaper.sweep()
@@ -98,7 +110,9 @@ def test_sweep_tears_down_instance_whose_shutdown_deadline_passed():
     reaper, controller, docker, store, _ = make_reaper(grace_minutes=120)
     controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
     controller.schedule_shutdown("team-1", "juice", delay_seconds=30)
-    store.get("team-1", "juice").shutdown_at -= 60  # force it into the past
+    record = store.get("team-1", "juice")
+    record.shutdown_at -= 60  # force it into the past
+    store.update(record)
 
     reaped = reaper.sweep()
 
@@ -124,6 +138,7 @@ def test_pending_shutdown_instance_is_not_also_idle_reaped():
     controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
     record = store.get("team-1", "juice")
     record.last_accessed -= 120  # looks idle
+    store.update(record)
     controller.schedule_shutdown("team-1", "juice", delay_seconds=9999)  # but shutdown isn't due yet
 
     reaped = reaper.sweep()
