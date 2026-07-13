@@ -123,29 +123,29 @@ class DockerOrchestratorClient:
 
         endpoint_spec = None
         if spec.published_ports:
-            # PublishMode="host": binds the port directly on whichever node
-            # the task lands on, instead of Docker's default "vip"/routing-
-            # mesh mode. The routing mesh implicitly attaches every such
-            # service to the shared `ingress` network (and NATs through
-            # docker_gwbridge) regardless of what other networks the
-            # service explicitly requests -- which silently broke every
-            # single-target/range-attacker container's claimed airgap in
-            # two ways, both live-verified against a real deployment
-            # (see TRACKER.md and docs/adversarial-persona-findings-
-            # round-1.md): real internet egress despite `internal: true`
-            # on the container's own network, and real reachability into
-            # OTHER teams' separate airgapped networks (their subnet is
-            # just another route the single Swarm node's host stack
-            # already knows, and ingress-mode traffic transits that host
-            # stack instead of staying confined to the container's
-            # explicitly-attached networks). Host mode is fine for this
-            # deployment's current single-node topology; a future
-            # multi-node swarm would need to revisit this (host mode
-            # doesn't move the bound port if the task reschedules to a
-            # different node).
-            endpoint_spec = EndpointSpec(
-                ports={published: (target, "tcp", "host") for published, target in spec.published_ports}
-            )
+            # KNOWN ISSUE, not yet fixed: this uses Docker's default "vip"
+            # (routing-mesh) publish mode, which implicitly attaches every
+            # such service to the shared `ingress` network regardless of
+            # what other networks it explicitly requests -- confirmed live
+            # to break the claimed per-instance airgap two ways (real
+            # internet egress despite `internal: true`, and real
+            # reachability into OTHER instances' separate networks). See
+            # docs/adversarial-persona-findings-round-1.md, Finding 2.
+            #
+            # PublishMode="host" (binding the port directly on the node
+            # instead of through the routing mesh) was tried and REVERTED:
+            # confirmed live on this deployment that Swarm host-mode
+            # publishing silently does not bind the port at all -- verified
+            # both through this client and with a bare `docker service
+            # create --publish mode=host` against a stock nginx image, ruling
+            # out a docker-py-specific cause. Root cause not yet identified;
+            # needs isolated investigation (possibly a Docker Engine version
+            # quirk or a daemon-level config gap) before host mode is usable
+            # here. Do not re-attempt host mode without confirming a
+            # listener actually appears in `ss -tlnp` on the host first --
+            # the Swarm API happily accepts and reports back a host-mode
+            # endpoint spec even when nothing actually binds.
+            endpoint_spec = EndpointSpec(ports={published: target for published, target in spec.published_ports})
 
         logger.info("creating service %s (image=%s, networks=%s)", spec.name, spec.image, spec.networks)
         return self._client.services.create(
