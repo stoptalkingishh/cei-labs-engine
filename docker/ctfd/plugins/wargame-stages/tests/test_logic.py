@@ -61,6 +61,10 @@ class ScoreTests(unittest.TestCase):
     def test_no_start_means_no_score(self):
         self.assertEqual(logic.rank_solves([self.event(1, "A", 10, 0)], None), [])
 
+    def test_csv_cells_neutralize_spreadsheet_formulas(self):
+        self.assertEqual(logic.safe_csv_cell("=HYPERLINK('bad')"), "'=HYPERLINK('bad')")
+        self.assertEqual(logic.safe_csv_cell("ordinary-team"), "ordinary-team")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ python -m compileall -q docker/ctfd/plugins/wargame-stages
 ```
 
 The unit suite covers timestamp immutability, idempotent start and lock actions, invalid transitions, inclusive start/lock boundaries, deterministic ties, overlapping active games, and exclusion of all solves before a game starts.
+It also verifies that spreadsheet-formula prefixes in participant/team names are neutralized in CSV exports.
 
 ## Deployment smoke test
 

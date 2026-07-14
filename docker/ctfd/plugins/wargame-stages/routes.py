@@ -10,7 +10,7 @@ from CTFd.utils import get_config
 from CTFd.utils.decorators import admins_only, authed_only
 from CTFd.utils.user import get_current_user, is_admin
 
-from .logic import InvalidTransition, SolveEvent, close_stage, lock_stage, rank_solves, start_stage
+from .logic import InvalidTransition, SolveEvent, close_stage, lock_stage, rank_solves, safe_csv_cell, start_stage
 from .models import GameStage, GameStageAudit, GameStageChallenge
 
 wargame_stages_bp = Blueprint("wargame_stages", __name__, template_folder="templates", url_prefix="/plugins/wargame-stages")
@@ -101,6 +101,7 @@ def export(slug, format):
         item.update({"stage_slug": stage.slug, "stage_state": stage.state, "started_at": metadata["started_at"], "score_cutoff": metadata["score_cutoff"], "exported_at": metadata["exported_at"]})
         if item.get("last_solve_at"):
             item["last_solve_at"] = item["last_solve_at"].isoformat()
+        item = {key: safe_csv_cell(value) for key, value in item.items()}
         writer.writerow(item)
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={stage.slug}-standings.csv"})
 

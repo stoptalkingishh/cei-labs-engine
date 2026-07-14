@@ -34,6 +34,13 @@ def solve_is_scoring(solved_at, started_at, cutoff=None):
     return started_at is not None and solved_at >= started_at and (cutoff is None or solved_at <= cutoff)
 
 
+def safe_csv_cell(value):
+    """Prevent spreadsheet programs from treating untrusted names as formulas."""
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + value
+    return value
+
+
 @dataclass(frozen=True)
 class SolveEvent:
     account_id: int
