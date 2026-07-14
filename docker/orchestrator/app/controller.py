@@ -83,37 +83,46 @@ class InstanceController:
         workers both pass the "does this exist yet" check and both create
         real containers -- verified live in TRACKER.md.
         """
+        owns_reservation = False
+        replacement_record = None
         existing = self.store.get(owner_id, instance_key)
-        if existing is not None:
-            if force_relaunch:
-                self.teardown(owner_id, instance_key)
-            else:
-                existing.touch()
-                self.store.touch(owner_id, instance_key)
-                if existing.plan.range_owner_id:
-                    self.range_store.touch(existing.plan.range_owner_id)
-                return existing.plan, False
+        if force_relaunch:
+            # Atomically claim the finalized row before touching Docker. Only
+            # one worker gets the old plan; concurrent relaunch callers see a
+            # pending reservation and wait for this replacement to finish.
+            replacement_record = self.store.claim_for_replacement(owner_id, instance_key)
+            owns_reservation = replacement_record is not None
+        elif existing is not None:
+            existing.touch()
+            self.store.touch(owner_id, instance_key)
+            if existing.plan.range_owner_id:
+                self.range_store.touch(existing.plan.range_owner_id)
+            return existing.plan, False
 
-        deadline = time.time() + _RESERVATION_WAIT_SECONDS
-        while True:
-            if self.store.reserve(owner_id, instance_key):
-                break  # we won -- fall through and actually create it
-            record = self.store.get(owner_id, instance_key)
-            if record is not None:
-                record.touch()
-                self.store.touch(owner_id, instance_key)
-                return record.plan, False
-            if time.time() >= deadline:
-                raise InstanceInitializingError(
-                    f"instance for {owner_id}/{instance_key} is still being created by another request, retry shortly"
-                )
-            time.sleep(_RESERVATION_POLL_INTERVAL)
+        if not owns_reservation:
+            deadline = time.time() + _RESERVATION_WAIT_SECONDS
+            while True:
+                if self.store.reserve(owner_id, instance_key):
+                    owns_reservation = True
+                    break  # we won -- fall through and actually create it
+                record = self.store.get(owner_id, instance_key)
+                if record is not None:
+                    record.touch()
+                    self.store.touch(owner_id, instance_key)
+                    return record.plan, False
+                if time.time() >= deadline:
+                    raise InstanceInitializingError(
+                        f"instance for {owner_id}/{instance_key} is still being created by another request, retry shortly"
+                    )
+                time.sleep(_RESERVATION_POLL_INTERVAL)
 
         if self.store.count() > self.max_instances:
             self.store.release_reservation(owner_id, instance_key)
             raise CapacityError(f"at capacity ({self.max_instances} concurrent instances)")
 
         try:
+            if replacement_record is not None:
+                self._teardown_record(replacement_record)
             if instance_type == TARGET_ATTACKER:
                 plan = self._create_range_target(owner_id, instance_key, spec)
             elif instance_type == SINGLE_TARGET:
@@ -199,10 +208,17 @@ class InstanceController:
         return target_plan
 
     # ── Teardown ──────────────────────────────────────────────────────────────
-    def teardown(self, owner_id: str, instance_key: str) -> bool:
-        record = self.store.get(owner_id, instance_key)
+    def _teardown_record(self, record: InstanceRecord) -> None:
+        """Remove Docker resources described by an already-claimed record.
+
+        Store state is deliberately not changed here. The caller owns the
+        pending reservation and must either finalize a replacement or release
+        it. This prevents a late teardown from deleting a newer lifecycle
+        operation's state.
+        """
+        instance_key = record.instance_key
         if record is None:
-            return False
+            return
 
         for svc_spec in record.plan.services:
             self.docker.remove_service(svc_spec.name)
@@ -218,7 +234,14 @@ class InstanceController:
                 range_record.target_keys.discard(instance_key)
                 self.range_store.update(range_record)
 
-        self.store.remove(owner_id, instance_key)
+    def teardown(self, owner_id: str, instance_key: str) -> bool:
+        record = self.store.claim_for_replacement(owner_id, instance_key)
+        if record is None:
+            return False
+        try:
+            self._teardown_record(record)
+        finally:
+            self.store.release_reservation(owner_id, instance_key)
         return True
 
     def teardown_range(self, owner_id: str) -> bool:

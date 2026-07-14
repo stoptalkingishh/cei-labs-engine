@@ -16,6 +16,7 @@ import os
 import tempfile
 import threading
 
+from app import instance_types as it
 from app.store import InstanceStore, RangeStore
 
 N_WORKERS = 20
@@ -71,3 +72,29 @@ def test_range_reserve_is_also_atomic_across_independent_store_objects():
 
         assert results.count(True) == 1, f"expected exactly 1 winner, got {results.count(True)}: {results}"
         assert results.count(False) == N_WORKERS - 1
+
+
+def test_relaunch_claim_is_atomic_across_independent_store_objects():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "relaunch.db")
+        stores = [InstanceStore(db_path=db_path) for _ in range(N_WORKERS)]
+        plan = it.plan_web_app("race-team", "juice", {"image": "img"}, "ctf.local", "challenge-net")
+        assert stores[0].reserve("race-team", "juice") is True
+        stores[0].finalize("race-team", "juice", plan)
+        results = [None] * N_WORKERS
+        barrier = threading.Barrier(N_WORKERS)
+
+        def race(i):
+            barrier.wait()
+            results[i] = stores[i].claim_for_replacement("race-team", "juice")
+
+        threads = [threading.Thread(target=race, args=(i,)) for i in range(N_WORKERS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert sum(result is not None for result in results) == 1
+        assert stores[0].reservation_pending("race-team", "juice") is True
+        for store in stores:
+            store.close()

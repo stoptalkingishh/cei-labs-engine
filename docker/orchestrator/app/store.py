@@ -234,6 +234,53 @@ class InstanceStore:
         except sqlite3.IntegrityError:
             return False
 
+    def claim_for_replacement(self, owner_id: str, instance_key: str) -> "InstanceRecord | None":
+        """Atomically turn a finalized row into an in-flight reservation.
+
+        Relaunch and teardown used to do a separate ``get()`` followed much
+        later by an unconditional ``remove()``. Under concurrent relaunches,
+        several workers could all read the same plan and a late teardown
+        could delete a newer worker's reservation/finalized row. The Docker
+        service then remained live while the API reported no instance.
+
+        ``BEGIN IMMEDIATE`` serializes this read-and-transition across every
+        gunicorn process sharing the database. Exactly one caller receives
+        the old plan and owns the destructive lifecycle operation; everyone
+        else sees the NULL ``plan_json`` reservation and waits for that owner
+        to finalize or release it.
+        """
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT plan_json, created_at, last_accessed, shutdown_at, extensions_used "
+                "FROM instances WHERE owner_id = ? AND instance_key = ?",
+                (owner_id, instance_key),
+            ).fetchone()
+            if row is None or row[0] is None:
+                conn.execute("COMMIT")
+                return None
+            plan_json, created_at, last_accessed, shutdown_at, extensions_used = row
+            now = time.time()
+            conn.execute(
+                "UPDATE instances SET plan_json = NULL, created_at = ?, last_accessed = ?, "
+                "shutdown_at = NULL, extensions_used = 0 "
+                "WHERE owner_id = ? AND instance_key = ?",
+                (now, now, owner_id, instance_key),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+        return InstanceRecord(
+            plan=_plan_from_json(plan_json),
+            created_at=created_at,
+            last_accessed=last_accessed,
+            shutdown_at=shutdown_at,
+            extensions_used=extensions_used,
+        )
+
     def finalize(self, owner_id: str, instance_key: str, plan: InstancePlan) -> None:
         """Fill in the real plan after a won reservation's Docker resources
         actually got created."""

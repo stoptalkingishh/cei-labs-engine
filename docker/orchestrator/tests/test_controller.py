@@ -1,3 +1,6 @@
+import os
+import tempfile
+import threading
 import time
 
 import pytest
@@ -173,6 +176,72 @@ def test_relaunch_tears_down_and_recreates():
     assert created is True
     assert len(docker.create_calls) == 2
     assert docker.create_calls[1].name == first_service_name  # same identity, fresh container
+
+
+def test_parallel_relaunches_converge_on_one_replacement():
+    class BlockingRemovalDocker(FakeDockerOrchestratorClient):
+        def __init__(self):
+            super().__init__()
+            self.removal_started = threading.Event()
+            self.allow_removal = threading.Event()
+
+        def remove_service(self, name: str) -> None:
+            self.removal_started.set()
+            assert self.allow_removal.wait(timeout=5)
+            super().remove_service(name)
+
+    worker_count = 20
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "controller-race.db")
+        docker = BlockingRemovalDocker()
+        stores = [InstanceStore(db_path=db_path) for _ in range(worker_count)]
+        range_stores = [RangeStore(db_path=db_path) for _ in range(worker_count)]
+        allocators = [PortAllocator(32000, 32767, db_path=db_path) for _ in range(worker_count)]
+        controllers = [
+            InstanceController(
+                docker,
+                stores[i],
+                range_stores[i],
+                allocators[i],
+                BASE_DOMAIN,
+                CHALLENGE_NET,
+                30,
+                3,
+            )
+            for i in range(worker_count)
+        ]
+        controllers[0].create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+
+        barrier = threading.Barrier(worker_count)
+        results = [None] * worker_count
+
+        def race(i):
+            barrier.wait()
+            results[i] = controllers[i].create_or_get(
+                it.WEB_APP,
+                "team-1",
+                "juice",
+                {"image": "img"},
+                force_relaunch=True,
+            )
+
+        threads = [threading.Thread(target=race, args=(i,)) for i in range(worker_count)]
+        for thread in threads:
+            thread.start()
+        assert docker.removal_started.wait(timeout=5)
+        # Keep the winning request inside teardown long enough for every
+        # sibling to observe the pending SQLite reservation.
+        time.sleep(0.25)
+        docker.allow_removal.set()
+        for thread in threads:
+            thread.join(timeout=12)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert len(docker.create_calls) == 2  # initial + exactly one replacement
+        assert sum(created for _plan, created in results) == 1
+        assert stores[0].get("team-1", "juice") is not None
+        for resource in [*stores, *range_stores, *allocators]:
+            resource.close()
 
 
 # ── post-solve shutdown countdown ────────────────────────────────────────────

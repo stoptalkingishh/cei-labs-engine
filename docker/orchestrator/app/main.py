@@ -58,7 +58,11 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
     docker_client = docker_client or DockerOrchestratorClient(cfg.DOCKER_SOCKET)
     store = InstanceStore(db_path=cfg.STORE_DB_PATH)
     range_store = RangeStore(db_path=cfg.STORE_DB_PATH)
-    port_allocator = PortAllocator(cfg.SSH_PORT_RANGE_START, cfg.SSH_PORT_RANGE_END)
+    port_allocator = PortAllocator(
+        cfg.SSH_PORT_RANGE_START,
+        cfg.SSH_PORT_RANGE_END,
+        db_path=cfg.STORE_DB_PATH,
+    )
     controller = InstanceController(
         docker_client=docker_client,
         store=store,

@@ -24,8 +24,12 @@ Four audiences, four route groups:
                             that secret.
 """
 import hmac
+import logging
+from datetime import datetime
 
 from flask import Blueprint, abort, redirect, render_template, request, url_for
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from CTFd.models import Challenges, Flags, db
 from CTFd.plugins import bypass_csrf_protection
@@ -34,6 +38,8 @@ from CTFd.utils.user import get_current_user
 
 from .models import InstanceChallengeConfig, TeamChallengeSecret
 from .orchestrator_client import OrchestratorClient, OrchestratorError, read_secret
+
+logger = logging.getLogger(__name__)
 
 instance_launcher_bp = Blueprint(
     "instance_launcher",
@@ -128,11 +134,29 @@ def _persist_and_scrub_secrets(status: "dict | None", config: InstanceChallengeC
         if not level_key or level_key not in access:
             continue
         value = access.pop(level_key)
-        row = TeamChallengeSecret.query.filter_by(owner_id=owner_id, challenge_id=flag.challenge_id).first()
-        if row is None:
-            db.session.add(TeamChallengeSecret(owner_id=owner_id, challenge_id=flag.challenge_id, value=value))
+        values = {"owner_id": owner_id, "challenge_id": flag.challenge_id, "value": value}
+        dialect = db.session.get_bind().dialect.name
+        if dialect == "mysql":
+            statement = mysql_insert(TeamChallengeSecret.__table__).values(**values)
+            statement = statement.on_duplicate_key_update(value=statement.inserted.value, updated_at=datetime.utcnow())
+            db.session.execute(statement)
+        elif dialect == "sqlite":
+            statement = sqlite_insert(TeamChallengeSecret.__table__).values(**values)
+            statement = statement.on_conflict_do_update(
+                index_elements=["owner_id", "challenge_id"],
+                set_={"value": value, "updated_at": datetime.utcnow()},
+            )
+            db.session.execute(statement)
         else:
-            row.value = value
+            # Development fallback for an unsupported SQLAlchemy dialect.
+            # Production is MariaDB; local CTFd evaluation commonly uses
+            # SQLite. The outer action boundary still converts any database
+            # error into a safe JSON response.
+            row = TeamChallengeSecret.query.filter_by(owner_id=owner_id, challenge_id=flag.challenge_id).first()
+            if row is None:
+                db.session.add(TeamChallengeSecret(**values))
+            else:
+                row.value = value
         changed = True
 
     if changed:
@@ -179,6 +203,10 @@ def _run_action(config: InstanceChallengeConfig, action: "str | None"):
             status = _fetch_and_scrub_status(config, owner_id, instance_key, client)
         except OrchestratorError as exc:
             error = str(exc)
+        except Exception:
+            db.session.rollback()
+            logger.exception("failed to persist instance status for owner=%s key=%s", owner_id, instance_key)
+            error = "internal error finalizing instance state; retry shortly"
 
     return status, error
 
