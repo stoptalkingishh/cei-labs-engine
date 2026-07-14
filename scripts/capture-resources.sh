@@ -18,13 +18,18 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
+TAB=$'\t'
 
 printf 'run_id\t%s\nstarted_utc\t%s\nhostname\t%s\ninterval_seconds\t%s\n' \
   "$RUN_ID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname)" "$INTERVAL_SECONDS" \
   > "$OUTPUT_DIR/manifest.tsv"
-docker version --format 'docker_server_version\t{{.Server.Version}}' >> "$OUTPUT_DIR/manifest.tsv" 2>/dev/null || true
-docker info --format 'swarm_state\t{{.Swarm.LocalNodeState}}\nswarm_nodes\t{{.Swarm.Nodes}}\nswarm_managers\t{{.Swarm.Managers}}' \
-  >> "$OUTPUT_DIR/manifest.tsv" 2>/dev/null || true
+docker_server_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)
+swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)
+swarm_nodes=$(docker info --format '{{.Swarm.Nodes}}' 2>/dev/null || true)
+swarm_managers=$(docker info --format '{{.Swarm.Managers}}' 2>/dev/null || true)
+printf 'docker_server_version\t%s\nswarm_state\t%s\nswarm_nodes\t%s\nswarm_managers\t%s\n' \
+  "$docker_server_version" "$swarm_state" "$swarm_nodes" "$swarm_managers" \
+  >> "$OUTPUT_DIR/manifest.tsv"
 
 printf 'timestamp_utc\tload_1m\tload_5m\tload_15m\tmem_total_bytes\tmem_used_bytes\tmem_available_bytes\tswap_total_bytes\tswap_used_bytes\troot_total_bytes\troot_used_bytes\n' \
   > "$OUTPUT_DIR/host.tsv"
@@ -69,9 +74,9 @@ while true; do
     /proc/net/dev >> "$OUTPUT_DIR/network.tsv"
 
   docker stats --no-stream \
-    --format "${timestamp}\t{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.PIDs}}" \
+    --format "${timestamp}${TAB}{{.ID}}${TAB}{{.Name}}${TAB}{{.CPUPerc}}${TAB}{{.MemUsage}}${TAB}{{.MemPerc}}${TAB}{{.NetIO}}${TAB}{{.BlockIO}}${TAB}{{.PIDs}}" \
     >> "$OUTPUT_DIR/containers.tsv" 2>&1 || true
-  docker service ls --format "${timestamp}\t{{.Name}}\t{{.Mode}}\t{{.Replicas}}\t{{.Image}}\t{{.Ports}}" \
+  docker service ls --format "${timestamp}${TAB}{{.Name}}${TAB}{{.Mode}}${TAB}{{.Replicas}}${TAB}{{.Image}}${TAB}{{.Ports}}" \
     >> "$OUTPUT_DIR/services.tsv" 2>&1 || true
 
   sleep "$INTERVAL_SECONDS"
