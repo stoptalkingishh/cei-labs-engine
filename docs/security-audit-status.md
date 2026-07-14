@@ -1,6 +1,6 @@
 # Security Audit: Status (cei-labs-engine)
 
-**Related:** [`cei-labs-net` status](../../cei-labs-net/docs/security-audit-status.md) · [`CEI-Labs-Wargames` status](../../CEI-Labs-Wargames/docs/security-audit-status.md)
+**Related:** [`cei-labs-net` status](https://github.com/stoptalkingishh/cei-labs-net/blob/main/docs/security-audit-status.md) · [`CEI-Labs-Wargames` status](https://github.com/stoptalkingishh/CEI-Labs-Wargames/blob/main/docs/security-audit-status.md)
 
 ## What this is
 

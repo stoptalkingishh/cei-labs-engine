@@ -3,7 +3,7 @@
 **Status:** Merged to `main` (confirmed via `git merge-base --is-ancestor
 2ffb619 main`). Originally written from `feature/self-hosted-wargames-base-
 images` @ `2ffb619` before that branch landed.
-**Related:** [`CEI-Labs-Wargames` status](../../CEI-Labs-Wargames/docs/self-hosted-wargames-status.md) · [`cei-labs-net` status](../../cei-labs-net/docs/self-hosted-wargames-status.md)
+**Related:** [`CEI-Labs-Wargames` status](https://github.com/stoptalkingishh/CEI-Labs-Wargames/blob/main/docs/self-hosted-wargames-status.md) · [`cei-labs-net` status](https://github.com/stoptalkingishh/cei-labs-net/blob/main/docs/self-hosted-wargames-status.md)
 
 ## What this is
 
