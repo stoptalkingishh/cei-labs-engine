@@ -1,7 +1,9 @@
 import json
+import csv
+import io
 from datetime import datetime
 
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, url_for
 
 from CTFd.models import Challenges, Solves, Teams, Users, db
 from CTFd.utils import get_config
@@ -68,6 +70,39 @@ def scoreboard(slug):
 def admin():
     stages = GameStage.query.order_by(GameStage.display_order).all()
     return render_template("wargame_stages/admin.html", stages=stages, mapped_counts={s.id: _mapped_count(s) for s in stages})
+
+
+@wargame_stages_bp.route("/admin/<slug>/export.<format>")
+@admins_only
+def export(slug, format):
+    stage = GameStage.query.filter_by(slug=slug).first_or_404()
+    rows = _scoreboard(stage)
+    metadata = {
+        "slug": stage.slug, "name": stage.name, "state": stage.state,
+        "started_at": stage.started_at.isoformat() if stage.started_at else None,
+        "score_cutoff": (stage.locked_at or stage.closed_at).isoformat() if (stage.locked_at or stage.closed_at) else None,
+        "exported_at": datetime.utcnow().isoformat(),
+    }
+    if format == "json":
+        serializable = []
+        for row in rows:
+            item = dict(row)
+            item["last_solve_at"] = item["last_solve_at"].isoformat()
+            serializable.append(item)
+        return jsonify({"stage": metadata, "standings": serializable})
+    if format != "csv":
+        abort(404)
+    output = io.StringIO()
+    fields = ("stage_slug", "stage_state", "started_at", "score_cutoff", "exported_at", "place", "account_id", "name", "score", "solve_count", "last_solve_at", "elapsed_seconds")
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows or [{}]:
+        item = dict(row)
+        item.update({"stage_slug": stage.slug, "stage_state": stage.state, "started_at": metadata["started_at"], "score_cutoff": metadata["score_cutoff"], "exported_at": metadata["exported_at"]})
+        if item.get("last_solve_at"):
+            item["last_solve_at"] = item["last_solve_at"].isoformat()
+        writer.writerow(item)
+    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={stage.slug}-standings.csv"})
 
 
 @wargame_stages_bp.route("/admin/<slug>/sync", methods=["POST"])
