@@ -23,6 +23,8 @@ ORCH_LABEL = "cei.orchestrator.managed"
 # up -- see remove_service's docstring for why this matters.
 _TASK_DRAIN_TIMEOUT_SECONDS = 15.0
 _TASK_DRAIN_POLL_INTERVAL = 0.5
+_NETWORK_READY_TIMEOUT_SECONDS = 5.0
+_NETWORK_READY_POLL_INTERVAL = 0.05
 
 # Terminal task states per the Swarm API -- a task in any other state might
 # still hold its network attachment/port.
@@ -72,12 +74,29 @@ class DockerOrchestratorClient:
         except NotFound:
             pass
         logger.info("creating overlay network %s (internal=%s)", name, internal)
-        self._client.networks.create(
+        # docker-py's high-level networks.create() immediately calls get()
+        # on the returned ID. Under a 20-way Swarm network burst the daemon
+        # has returned an ID before inspect_network can see it, producing a
+        # transient 404 and leaving an orphan network. Use the low-level API
+        # and explicitly wait for inspect visibility instead.
+        response = self._client.api.create_network(
             name,
             driver="overlay",
             attachable=True,
             internal=internal,
             labels={ORCH_LABEL: "true"},
+        )
+        network_id = response["Id"]
+        deadline = time.monotonic() + _NETWORK_READY_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                self._client.api.inspect_network(network_id)
+                return
+            except NotFound:
+                time.sleep(_NETWORK_READY_POLL_INTERVAL)
+        raise RuntimeError(
+            f"network {name} was created as {network_id} but did not become inspectable "
+            f"within {_NETWORK_READY_TIMEOUT_SECONDS}s"
         )
 
     def remove_network(self, name: str) -> None:

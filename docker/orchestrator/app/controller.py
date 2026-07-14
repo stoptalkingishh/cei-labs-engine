@@ -150,11 +150,14 @@ class InstanceController:
 
     def _create_single_target(self, owner_id: str, instance_key: str, spec: dict):
         port = self.port_allocator.allocate()
+        plan = None
         try:
             plan = instance_types.plan_single_target(owner_id, instance_key, spec, port, self.base_domain)
             self.docker.ensure_network(plan.network, internal=True)
             self._create_services(plan.services)
         except Exception:
+            if plan is not None and plan.network:
+                self.docker.remove_network(plan.network)
             self.port_allocator.release(port)
             raise
         return plan
@@ -182,6 +185,7 @@ class InstanceController:
             if range_record is None:  # we won the reservation -- create it for real
                 ssh_port = self.port_allocator.allocate()
                 novnc_port = self.port_allocator.allocate()
+                range_plan = None
                 try:
                     range_plan = instance_types.plan_range_attacker(
                         owner_id, spec, ssh_port, novnc_port, self.base_domain, self.challenge_network
@@ -189,6 +193,8 @@ class InstanceController:
                     self.docker.ensure_network(range_plan.network, internal=True)
                     self._create_services([range_plan.attacker_service])
                 except Exception:
+                    if range_plan is not None:
+                        self.docker.remove_network(range_plan.network)
                     self.port_allocator.release(ssh_port)
                     self.port_allocator.release(novnc_port)
                     self.range_store.release_reservation(owner_id)

@@ -81,6 +81,27 @@ def test_single_target_teardown_releases_its_port():
     assert plan2.access["connect_port"] == port
 
 
+def test_single_target_create_failure_removes_network_and_releases_port():
+    class FailingCreateDocker(FakeDockerOrchestratorClient):
+        def create_service(self, spec):
+            raise RuntimeError("synthetic Docker failure")
+
+    docker = FailingCreateDocker()
+    store = InstanceStore()
+    range_store = RangeStore()
+    ports = PortAllocator(32000, 32767)
+    controller = InstanceController(
+        docker, store, range_store, ports, BASE_DOMAIN, CHALLENGE_NET, 30, 3
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic Docker failure"):
+        controller.create_or_get(it.SINGLE_TARGET, "team-1", "otw", {"image": "img"})
+
+    assert docker.networks == {}
+    assert len(docker.remove_network_calls) == 1
+    assert ports.allocate() == 32000
+
+
 # ── target-attacker (range) ───────────────────────────────────────────────────
 
 def test_first_range_target_creates_attacker_and_network():
