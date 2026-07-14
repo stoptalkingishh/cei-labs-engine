@@ -325,6 +325,15 @@ After deployment:
 
 Any challenge whose YAML declares `instance_type` (see `docker/orchestrator/README.md`) automatically gets a "Launch Environment" link wired up via the instance-launcher plugin — both loading paths populate the same CTFd instance/mapping tables.
 
+For a staggered Bandit/Krypton/Natas event, follow
+[`docs/staggered-wargame-stages.md`](docs/staggered-wargame-stages.md). The
+custom CTFd image includes an administrator **Wargame stages** page for exact
+category sync, independent game starts, per-game scoreboards, lock cutoffs,
+hide/show controls, and CSV/JSON result exports. Run the automated and manual
+checks in
+[`docs/staggered-wargame-stage-verification.md`](docs/staggered-wargame-stage-verification.md)
+before production use.
+
 ---
 
 # Monitoring
