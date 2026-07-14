@@ -241,6 +241,11 @@ Kernel Version:
 
 Anything that can run a current Docker Engine works.
 
+The current Ansible provisioning role uses Debian's `apt` modules and is
+automated/tested for Ubuntu and Debian. Other distributions can run the
+Docker stack, but their host packages and firewall must currently be
+installed manually.
+
 ---
 
 ## Non-Linux Hosts
@@ -334,6 +339,30 @@ Any challenge whose YAML declares `instance_type` (see `docker/orchestrator/READ
 ```
 
 Shows a live snapshot: swarm nodes, stack service health, bulk-spawned workspaces, and active self-service challenge instances.
+
+For an interactive host view, the common Ansible role installs `btop` and
+`tmux` on every Ubuntu/Debian Swarm node:
+
+```bash
+ssh <node>
+tmux new -As cei-monitor btop
+```
+
+Detach with `Ctrl-b d`; reconnect with the same command. `btop` opens no
+network port and runs only while an operator's terminal session is active.
+
+`btop` is a live view, not retained test evidence. During load or persona
+tests, run the timestamped collector in a second terminal:
+
+```bash
+./scripts/capture-resources.sh evidence/run-YYYYMMDD-HHMMSS
+```
+
+Stop it with `Ctrl-C`. The output contains host CPU/load, memory, swap, disk,
+network counters, Docker container stats, service state, and Docker events;
+it does not collect secrets or challenge flags. Keep any Glances web view
+bound to loopback and reach it through an SSH tunnel rather than exposing a
+monitoring port to the participant LAN.
 
 ---
 

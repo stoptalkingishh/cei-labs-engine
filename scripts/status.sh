@@ -84,6 +84,17 @@ show_reachability() {
   echo ""
 }
 
+show_monitoring_tools() {
+  echo -e "${BLUE}=== 7. Resource Monitoring ===${NC}"
+  if command -v btop >/dev/null 2>&1; then
+    echo -e "  ${GREEN}✓ btop installed:${NC} tmux new -As cei-monitor btop"
+  else
+    echo -e "  ${YELLOW}! btop is not installed. Re-run the common Ansible role.${NC}"
+  fi
+  echo "  Evidence collector: ./scripts/capture-resources.sh [output-directory]"
+  echo ""
+}
+
 print_header
 show_nodes
 show_services
@@ -91,3 +102,4 @@ show_service_health
 show_workspaces
 show_orchestrator_instances
 show_reachability
+show_monitoring_tools

@@ -16,6 +16,7 @@
       - git
       - ufw
       - fail2ban
+      - btop
       - htop
       - tmux
       - unzip
