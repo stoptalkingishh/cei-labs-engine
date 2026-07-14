@@ -37,6 +37,9 @@ from dataclasses import dataclass, field
 from .docker_client import ServiceSpec
 from .instance_types import InstancePlan, RangePlan
 
+_SQLITE_INIT_RETRIES = 100
+_SQLITE_INIT_RETRY_SECONDS = 0.05
+
 
 @dataclass
 class InstanceRecord:
@@ -185,8 +188,20 @@ class InstanceStore:
             # restriction on which thread may *close* it, so close() can run
             # from whichever thread happens to tear the store down.
             conn = sqlite3.connect(self._db_path, timeout=30, isolation_level=None, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=30000")
+            # Gunicorn imports the application independently in every worker.
+            # Concurrent workers can request WAL mode at the same instant;
+            # SQLite may report "database is locked" for this PRAGMA even
+            # with a busy timeout. Retry only that bounded startup contention.
+            for attempt in range(_SQLITE_INIT_RETRIES):
+                try:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or attempt == _SQLITE_INIT_RETRIES - 1:
+                        conn.close()
+                        raise
+                    time.sleep(_SQLITE_INIT_RETRY_SECONDS)
             self._local.conn = conn
             with self._open_conns_lock:
                 self._open_conns.append(conn)

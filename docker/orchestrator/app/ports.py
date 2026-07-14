@@ -10,6 +10,10 @@ which made otherwise-unrelated cold creates collide in Docker Swarm.
 """
 import sqlite3
 import threading
+import time
+
+_SQLITE_INIT_RETRIES = 100
+_SQLITE_INIT_RETRY_SECONDS = 0.05
 
 
 class PortsExhaustedError(Exception):
@@ -41,8 +45,16 @@ class PortAllocator:
         conn = getattr(self._local, "conn", None)
         if conn is None:
             conn = sqlite3.connect(self._db_path, timeout=30, isolation_level=None, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=30000")
+            for attempt in range(_SQLITE_INIT_RETRIES):
+                try:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or attempt == _SQLITE_INIT_RETRIES - 1:
+                        conn.close()
+                        raise
+                    time.sleep(_SQLITE_INIT_RETRY_SECONDS)
             self._local.conn = conn
             with self._open_conns_lock:
                 self._open_conns.append(conn)

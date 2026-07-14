@@ -12,14 +12,27 @@ against a barrier so they call reserve() for the identical
 that's the property store.py's module docstring claims and
 controller.create_or_get relies on to only ever let one caller touch Docker.
 """
+import multiprocessing
 import os
 import tempfile
 import threading
 
 from app import instance_types as it
+from app.ports import PortAllocator
 from app.store import InstanceStore, RangeStore
 
 N_WORKERS = 20
+
+
+def _open_all_sqlite_components(db_path, barrier):
+    """Process target: reproduce Gunicorn workers importing together."""
+    barrier.wait()
+    store = InstanceStore(db_path=db_path)
+    range_store = RangeStore(db_path=db_path)
+    ports = PortAllocator(30000, 30020, db_path=db_path)
+    store.close()
+    range_store.close()
+    ports.close()
 
 
 def test_reserve_is_atomic_across_independent_store_objects_sharing_one_file():
@@ -98,3 +111,22 @@ def test_relaunch_claim_is_atomic_across_independent_store_objects():
         assert stores[0].reservation_pending("race-team", "juice") is True
         for store in stores:
             store.close()
+
+
+def test_components_initialize_cleanly_in_parallel_processes():
+    worker_count = 12
+    context = multiprocessing.get_context("spawn")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "parallel-startup.db")
+        barrier = context.Barrier(worker_count)
+        processes = [
+            context.Process(target=_open_all_sqlite_components, args=(db_path, barrier))
+            for _ in range(worker_count)
+        ]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=20)
+
+        assert all(not process.is_alive() for process in processes)
+        assert [process.exitcode for process in processes] == [0] * worker_count
