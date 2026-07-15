@@ -143,29 +143,21 @@ class DockerOrchestratorClient:
 
         endpoint_spec = None
         if spec.published_ports:
-            # KNOWN ISSUE, not yet fixed: this uses Docker's default "vip"
-            # (routing-mesh) publish mode, which implicitly attaches every
-            # such service to the shared `ingress` network regardless of
-            # what other networks it explicitly requests -- confirmed live
-            # to break the claimed per-instance airgap two ways (real
-            # internet egress despite `internal: true`, and real
-            # reachability into OTHER instances' separate networks). See
-            # docs/adversarial-persona-findings-round-1.md, Finding 2.
-            #
-            # PublishMode="host" (binding the port directly on the node
-            # instead of through the routing mesh) was tried and REVERTED:
-            # confirmed live on this deployment that Swarm host-mode
-            # publishing silently does not bind the port at all -- verified
-            # both through this client and with a bare `docker service
-            # create --publish mode=host` against a stock nginx image, ruling
-            # out a docker-py-specific cause. Root cause not yet identified;
-            # needs isolated investigation (possibly a Docker Engine version
-            # quirk or a daemon-level config gap) before host mode is usable
-            # here. Do not re-attempt host mode without confirming a
-            # listener actually appears in `ss -tlnp` on the host first --
-            # the Swarm API happily accepts and reports back a host-mode
-            # endpoint spec even when nothing actually binds.
-            endpoint_spec = EndpointSpec(ports={published: target for published, target in spec.published_ports})
+            # Publish directly on the node. The routing mesh implicitly joins
+            # every published service to the shared ingress overlay, which
+            # defeats per-instance isolation and can exhaust Swarm's ingress
+            # IPAM pool after repeated launch/delete cycles. Host mode keeps
+            # the trusted gateway on only its declared networks. PortAllocator
+            # guarantees that these node-local published ports are unique.
+            endpoint_spec = EndpointSpec(ports=[
+                {
+                    "Protocol": "tcp",
+                    "PublishedPort": published,
+                    "TargetPort": target,
+                    "PublishMode": "host",
+                }
+                for published, target in spec.published_ports
+            ])
 
         logger.info("creating service %s (image=%s, networks=%s)", spec.name, spec.image, spec.networks)
         return self._client.services.create(

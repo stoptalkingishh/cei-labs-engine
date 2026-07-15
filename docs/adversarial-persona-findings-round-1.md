@@ -94,6 +94,18 @@ get cleaned up before a network name is reused) is unaffected by this
 revert and remains in place — 8/8 back-to-back relaunches verified working
 both before and after the Finding 2 revert.
 
+> **Resolution update for Finding 2 (2026-07-14):** the trusted-gateway
+> redesign removes all published ports and shared overlays from untrusted
+> workloads. A fresh bare Swarm smoke test on the current station successfully
+> scheduled `nginx:alpine` with `mode=host`, bound node port 32999, and returned
+> HTTP 200. Engine therefore now uses host publish mode only on its hardened
+> TCP gateway. This also avoids a newly observed failure mode in the old
+> routing-mesh path: the `/24` ingress allocator reported no available IPs
+> after repeated launch/delete testing even though network inspection showed
+> only two visible endpoints. The gateway live isolation suite is the release
+> gate for this fix; the historical failed attempt above is retained as
+> context.
+
 ## Finding 3 (documentation gap, not yet fixed): SSH `connect_host` doesn't resolve
 
 Baseline Participant found that `single-target`'s `connect_host` field
