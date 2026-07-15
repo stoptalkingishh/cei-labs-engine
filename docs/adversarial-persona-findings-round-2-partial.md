@@ -1,5 +1,12 @@
 # Adversarial Persona Round 2 — Interrupted Run and Concurrency Investigation
 
+> Historical partial report. The deterministic station gate and a new
+> ten-persona diagnostic were completed on 2026-07-14/15. See
+> [`validation-session-2026-07-14-15.md`](validation-session-2026-07-14-15.md)
+> for the deployed results, fixes, and remaining acceptance gaps. Statements
+> below that say live verification is required describe this earlier
+> checkpoint and are retained as incident history.
+
 **Run date:** 2026-07-13  
 **Investigation/update date:** 2026-07-14  
 **Deployment tested:** `192.168.1.98`, Docker Swarm, orchestrator image `cei-labs-orchestrator:race-fix`  

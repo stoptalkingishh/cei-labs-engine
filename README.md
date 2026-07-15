@@ -339,6 +339,10 @@ checks in
 [`docs/staggered-wargame-stage-verification.md`](docs/staggered-wargame-stage-verification.md)
 before production use.
 
+The complete 2026-07-14/15 real-station lifecycle, isolation, persistence,
+backup/restore, monitoring, and ten-persona diagnostic is recorded in
+[`docs/validation-session-2026-07-14-15.md`](docs/validation-session-2026-07-14-15.md).
+
 ---
 
 # Monitoring
