@@ -36,6 +36,7 @@ from CTFd.plugins import bypass_csrf_protection
 from CTFd.utils.decorators import admins_only, authed_only
 from CTFd.utils.user import get_current_user
 
+from .actions import is_valid_action
 from .models import InstanceChallengeConfig, TeamChallengeSecret
 from .orchestrator_client import OrchestratorClient, OrchestratorError, read_secret
 
@@ -179,6 +180,9 @@ def _run_action(config: InstanceChallengeConfig, action: "str | None"):
 
     Returns (status: dict|None, error: str|None).
     """
+    if not is_valid_action(action):
+        return None, "invalid launcher action"
+
     user = get_current_user()
     owner_id = str(user.account_id)
     instance_key = config.resolved_instance_key()
@@ -287,7 +291,9 @@ def api_launch(challenge_id: int):
     if config is None:
         abort(404, description="This challenge has no environment configured.")
 
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return {"success": False, "error": "request body must be a JSON object"}, 400
     status, error = _run_action(config, body.get("action"))
 
     if error is not None:
