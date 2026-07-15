@@ -294,6 +294,8 @@ def api_launch(challenge_id: int):
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return {"success": False, "error": "request body must be a JSON object"}, 400
+    if "action" not in body:
+        return {"success": False, "error": "request body must include action"}, 400
     status, error = _run_action(config, body.get("action"))
 
     if error is not None:
