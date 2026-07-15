@@ -19,6 +19,7 @@ Three instance types, per the migration plan:
                        attacker, never from Traefik, other teams, or CTFd.
 """
 import json
+import os
 import secrets
 import string
 from dataclasses import dataclass, field
@@ -31,6 +32,14 @@ SINGLE_TARGET = "single-target"
 TARGET_ATTACKER = "target-attacker"
 
 VALID_TYPES = (WEB_APP, SINGLE_TARGET, TARGET_ATTACKER)
+
+GATEWAY_IMAGE = os.environ.get(
+    "ORCHESTRATOR_GATEWAY_IMAGE",
+    "ghcr.io/stoptalkingishh/cei-labs-engine/tcp-gateway:latest",
+)
+GATEWAY_HTTP_PORT = 18080
+GATEWAY_SSH_PORT = 10022
+GATEWAY_NOVNC_PORT = 16080
 
 # Phase 6 hardening: cap_drop=["ALL"] plus back only what's actually
 # needed, confirmed by live-testing each image's real lessons rather than
@@ -129,6 +138,7 @@ class RangePlan:
     network: str
     attacker_service: ServiceSpec
     access: dict[str, str]
+    gateway_service: "ServiceSpec | None" = None
 
 
 def _require_str(spec: dict, key: str) -> str:
@@ -149,6 +159,25 @@ def _traefik_labels(router_name: str, hostname: str, port: int, challenge_networ
     }
 
 
+def _gateway_service(name: str, networks: list[str], forwards: list[dict], **kwargs) -> ServiceSpec:
+    return ServiceSpec(
+        name=name,
+        image=GATEWAY_IMAGE,
+        networks=networks,
+        env={"TCP_FORWARDS": json.dumps(forwards, separators=(",", ":"))},
+        cap_drop=["ALL"],
+        read_only=True,
+        mem_limit_bytes=64 * 1024 * 1024,
+        mem_reservation_bytes=16 * 1024 * 1024,
+        cpu_limit_nanos=250_000_000,
+        sysctls={
+            "net.ipv4.ip_forward": "0",
+            "net.ipv6.conf.all.forwarding": "0",
+        },
+        **kwargs,
+    )
+
+
 def plan_web_app(owner_id: str, instance_key: str, spec: dict, base_domain: str, challenge_network: str) -> InstancePlan:
     image = _require_str(spec, "image")
     port = int(spec.get("port", 3000))
@@ -159,19 +188,27 @@ def plan_web_app(owner_id: str, instance_key: str, spec: dict, base_domain: str,
     svc_name = naming.service_name(owner_id, instance_key)
     hostname = naming.access_hostname(owner_id, instance_key, base_domain)
 
+    net_name = naming.network_name(owner_id, instance_key)
     service = ServiceSpec(
         name=svc_name,
         image=image,
-        networks=[challenge_network],
-        labels=_traefik_labels(svc_name, hostname, port, challenge_network),
+        networks=[net_name],
         env={str(k): str(v) for k, v in env.items()},
+    )
+    gateway_name = naming.gateway_service_name(owner_id, instance_key)
+    gateway = _gateway_service(
+        gateway_name,
+        [net_name, challenge_network],
+        [{"listen": GATEWAY_HTTP_PORT, "host": svc_name, "port": port}],
+        labels=_traefik_labels(gateway_name, hostname, GATEWAY_HTTP_PORT, challenge_network),
     )
     return InstancePlan(
         type=WEB_APP,
         owner_id=owner_id,
         instance_key=instance_key,
-        services=[service],
+        services=[service, gateway],
         access={"url": f"https://{hostname}"},
+        network=net_name,
     )
 
 
@@ -216,15 +253,20 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
         image=image,
         networks=[net_name],
         env={str(k): str(v) for k, v in env.items()},
-        published_ports=[(allocated_port, target_port)],
         cap_drop=["ALL"],
         cap_add=list(_TARGET_CAPS),
+    )
+    gateway = _gateway_service(
+        naming.gateway_service_name(owner_id, instance_key),
+        [net_name],
+        [{"listen": GATEWAY_SSH_PORT, "host": svc_name, "port": target_port}],
+        published_ports=[(allocated_port, GATEWAY_SSH_PORT)],
     )
     return InstancePlan(
         type=SINGLE_TARGET,
         owner_id=owner_id,
         instance_key=instance_key,
-        services=[service],
+        services=[service, gateway],
         network=net_name,
         access={
             "connect_host": base_domain,
@@ -285,17 +327,28 @@ def plan_range_attacker(
     attacker_service = ServiceSpec(
         name=attacker_name,
         image=attacker_image,
-        networks=[range_network, challenge_network],
-        labels=_traefik_labels(attacker_name, hostname, attacker_port, challenge_network),
+        networks=[range_network],
         env={str(k): str(v) for k, v in attacker_env.items()},
-        published_ports=[(allocated_port, attacker_ssh_port), (allocated_novnc_port, attacker_port)],
         cap_drop=["ALL"],
         cap_add=list(_ATTACKER_CAPS),
+    )
+    gateway_name = naming.range_gateway_service_name(owner_id)
+    gateway_service = _gateway_service(
+        gateway_name,
+        [range_network, challenge_network],
+        [
+            {"listen": GATEWAY_SSH_PORT, "host": attacker_name, "port": attacker_ssh_port},
+            {"listen": GATEWAY_NOVNC_PORT, "host": attacker_name, "port": attacker_port},
+            {"listen": GATEWAY_HTTP_PORT, "host": attacker_name, "port": attacker_port},
+        ],
+        labels=_traefik_labels(gateway_name, hostname, GATEWAY_HTTP_PORT, challenge_network),
+        published_ports=[(allocated_port, GATEWAY_SSH_PORT), (allocated_novnc_port, GATEWAY_NOVNC_PORT)],
     )
     return RangePlan(
         owner_id=owner_id,
         network=range_network,
         attacker_service=attacker_service,
+        gateway_service=gateway_service,
         access={
             "attacker_url": f"https://{hostname}",
             "attacker_username": "operator",

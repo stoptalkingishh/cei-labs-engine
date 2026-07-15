@@ -129,7 +129,12 @@ class InstanceController:
                 plan = self._create_single_target(owner_id, instance_key, spec)
             else:
                 plan = instance_types.plan_web_app(owner_id, instance_key, spec, self.base_domain, self.challenge_network)
-                self._create_services(plan.services)
+                try:
+                    self.docker.ensure_network(plan.network, internal=True)
+                    self._create_services(plan.services)
+                except Exception:
+                    self.docker.remove_network(plan.network)
+                    raise
         except Exception:
             self.store.release_reservation(owner_id, instance_key)
             raise
@@ -191,7 +196,7 @@ class InstanceController:
                         owner_id, spec, ssh_port, novnc_port, self.base_domain, self.challenge_network
                     )
                     self.docker.ensure_network(range_plan.network, internal=True)
-                    self._create_services([range_plan.attacker_service])
+                    self._create_services([range_plan.attacker_service, range_plan.gateway_service])
                 except Exception:
                     if range_plan is not None:
                         self.docker.remove_network(range_plan.network)
@@ -257,8 +262,13 @@ class InstanceController:
         for instance_key in list(range_record.target_keys):
             self.teardown(owner_id, instance_key)
         self.docker.remove_service(range_record.plan.attacker_service.name)
-        for published, _target in range_record.plan.attacker_service.published_ports:
-            self.port_allocator.release(published)
+        if range_record.plan.gateway_service:
+            self.docker.remove_service(range_record.plan.gateway_service.name)
+            for published, _target in range_record.plan.gateway_service.published_ports:
+                self.port_allocator.release(published)
+        else:  # backward-compatible teardown of pre-gateway persisted plans
+            for published, _target in range_record.plan.attacker_service.published_ports:
+                self.port_allocator.release(published)
         self.docker.remove_network(range_record.plan.network)
         self.range_store.remove(owner_id)
         return True

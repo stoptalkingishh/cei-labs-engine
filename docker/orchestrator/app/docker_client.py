@@ -55,6 +55,7 @@ class ServiceSpec:
     cap_add: list[str] = field(default_factory=list)
     read_only: bool = False
     cpu_limit_nanos: "int | None" = None  # e.g. 1_000_000_000 == 1.0 CPU
+    sysctls: dict[str, str] = field(default_factory=dict)
 
 
 class DockerOrchestratorClient:
@@ -177,6 +178,7 @@ class DockerOrchestratorClient:
             cap_drop=spec.cap_drop or None,
             cap_add=spec.cap_add or None,
             read_only=spec.read_only,
+            sysctls=spec.sysctls or None,
             resources=Resources(
                 mem_limit=spec.mem_limit_bytes,
                 mem_reservation=spec.mem_reservation_bytes,

@@ -31,15 +31,10 @@ networks:
   orchestrator-internal:
     driver: overlay
     internal: true
-  # Traefik <-> whatever public-facing containers the orchestrator creates
-  # (Juice Shop, attacker noVNC). Isolated from `edge`/CTFd. `internal: true`
-  # — no challenge container gets outbound internet access via this network
-  # (a real airgap, not just access control). This does NOT block Traefik's
-  # published-port routing mesh, which operates independently of this flag;
-  # Traefik keeps its internet route for ACME via `edge` instead. Team-vs-team
-  # isolation for target-attacker ranges is handled separately: each team's
-  # range gets its own airgapped network created by the orchestrator, so a
-  # target is only ever reachable from its own team's attacker.
+  # Traefik <-> trusted per-instance gateways only. No participant-controlled
+  # target, attacker, or vulnerable web app joins this shared overlay. Each
+  # untrusted workload stays on its dedicated internal network; the hardened
+  # gateway proxies only fixed destinations and owns any published ports.
   challenge-edge:
     driver: overlay
     attachable: false
@@ -48,6 +43,7 @@ networks:
 volumes:
   ctfd_db_data:
   ctfd_uploads:
+  orchestrator_data:
 
 secrets:
   ctfd_secret_key:
@@ -231,6 +227,7 @@ services:
     image: ghcr.io/${GITHUB_ORG}/cei-labs-engine/orchestrator:${IMAGE_TAG}
     environment:
       CHALLENGE_NETWORK: "cei-labs_challenge-edge"
+      ORCHESTRATOR_GATEWAY_IMAGE: "ghcr.io/${GITHUB_ORG}/cei-labs-engine/tcp-gateway:${IMAGE_TAG}"
       BASE_DOMAIN: "${BASE_DOMAIN}"
       ORCHESTRATOR_MAX_INSTANCES: "${ORCHESTRATOR_MAX_INSTANCES}"
       ORCHESTRATOR_IDLE_GRACE_MINUTES: "${ORCHESTRATOR_IDLE_GRACE_MINUTES}"
@@ -239,12 +236,14 @@ services:
       ORCHESTRATOR_SHUTDOWN_DELAY_SECONDS: "${ORCHESTRATOR_SHUTDOWN_DELAY_SECONDS}"
       ORCHESTRATOR_SHUTDOWN_EXTEND_SECONDS: "${ORCHESTRATOR_SHUTDOWN_EXTEND_SECONDS}"
       ORCHESTRATOR_SHUTDOWN_MAX_EXTENSIONS: "${ORCHESTRATOR_SHUTDOWN_MAX_EXTENSIONS}"
+      ORCHESTRATOR_STORE_DB_PATH: "/var/lib/cei-orchestrator/state.db"
     secrets:
       - plugin_shared_secret
       - orchestrator_admin_password
       - ctf_key
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - orchestrator_data:/var/lib/cei-orchestrator
     networks:
       - orchestrator-internal
     deploy:

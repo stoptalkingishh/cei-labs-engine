@@ -27,3 +27,6 @@ __pycache__/
 
 # Local monitoring output, not repo-related (not referenced anywhere in this repo)
 status-history.csv
+
+# Local encrypted backup bundles (retain in protected operator storage)
+backups/

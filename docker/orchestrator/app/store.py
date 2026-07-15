@@ -23,10 +23,9 @@ of a check-then-act two-step. `reserve()` is the load-bearing method -- it's
 called *before* any real Docker API call, so only the process that wins the
 INSERT ever creates containers; a loser never touches Docker at all.
 
-Still ephemeral by design, same as the dict it replaced: a fresh file each
-container start is correct, since `last_accessed`/`shutdown_at` are allowed
-to reset on restart (only affects idle-reap/countdown timing, never
-correctness of what's actually deployed in Docker).
+The stack stores this file on the `orchestrator_data` volume so routine service
+restarts keep the authoritative instance/range/port/timer registry aligned
+with live Swarm resources. Tests may still use `:memory:` or temporary files.
 """
 import json
 import sqlite3
@@ -102,6 +101,7 @@ def _service_to_dict(svc: ServiceSpec) -> dict:
         "cap_add": list(svc.cap_add),
         "read_only": svc.read_only,
         "cpu_limit_nanos": svc.cpu_limit_nanos,
+        "sysctls": dict(svc.sysctls),
     }
 
 
@@ -119,6 +119,7 @@ def _service_from_dict(d: dict) -> ServiceSpec:
         cap_add=d.get("cap_add", []),
         read_only=d.get("read_only", False),
         cpu_limit_nanos=d.get("cpu_limit_nanos"),
+        sysctls=d.get("sysctls", {}),
     )
 
 
@@ -152,6 +153,7 @@ def _range_plan_to_json(plan: RangePlan) -> str:
         "owner_id": plan.owner_id,
         "network": plan.network,
         "attacker_service": _service_to_dict(plan.attacker_service),
+        "gateway_service": _service_to_dict(plan.gateway_service) if plan.gateway_service else None,
         "access": plan.access,
     })
 
@@ -162,6 +164,7 @@ def _range_plan_from_json(raw: str) -> RangePlan:
         owner_id=d["owner_id"],
         network=d["network"],
         attacker_service=_service_from_dict(d["attacker_service"]),
+        gateway_service=_service_from_dict(d["gateway_service"]) if d.get("gateway_service") else None,
         access=d["access"],
     )
 

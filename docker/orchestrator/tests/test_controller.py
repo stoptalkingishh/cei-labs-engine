@@ -35,11 +35,11 @@ def make_controller(max_instances=30, max_extensions=3):
 
 # ── web-app ───────────────────────────────────────────────────────────────────
 
-def test_create_web_app_creates_one_service():
+def test_create_web_app_creates_target_and_gateway():
     controller, docker, store, _ = make_controller()
     plan, created = controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
     assert created is True
-    assert len(docker.create_calls) == 1
+    assert len(docker.create_calls) == 2
     assert store.count() == 1
 
 
@@ -48,7 +48,7 @@ def test_create_is_idempotent_for_same_owner_and_key():
     controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
     plan, created = controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
     assert created is False
-    assert len(docker.create_calls) == 1
+    assert len(docker.create_calls) == 2
     assert store.count() == 1
 
 
@@ -109,7 +109,7 @@ def test_first_range_target_creates_attacker_and_network():
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw-1", {"target_image": "t", "attacker_image": "k"})
 
     assert range_store.get("team-1") is not None
-    assert len(docker.create_calls) == 2  # attacker + target
+    assert len(docker.create_calls) == 3  # attacker + gateway + target
     assert range_store.get("team-1").target_keys == {"otw-1"}
 
 
@@ -118,8 +118,8 @@ def test_second_challenge_same_team_reuses_attacker_and_network():
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw-1", {"target_image": "t", "attacker_image": "k"})
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw-2", {"target_image": "t", "attacker_image": "k"})
 
-    # 1 attacker + 2 targets = 3 services total, not 4 (no second attacker created)
-    assert len(docker.create_calls) == 3
+    # 1 attacker + 1 gateway + 2 targets = 4; no second shared pair.
+    assert len(docker.create_calls) == 4
     assert range_store.get("team-1").target_keys == {"otw-1", "otw-2"}
 
 
@@ -169,7 +169,7 @@ def test_reboot_restarts_the_instance_service():
     controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
     ok = controller.reboot("team-1", "juice")
     assert ok is True
-    assert len(docker.restart_calls) == 1
+    assert len(docker.restart_calls) == 2
 
 
 def test_reboot_missing_instance_returns_false():
@@ -195,8 +195,8 @@ def test_relaunch_tears_down_and_recreates():
     plan, created = controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"}, force_relaunch=True)
 
     assert created is True
-    assert len(docker.create_calls) == 2
-    assert docker.create_calls[1].name == first_service_name  # same identity, fresh container
+    assert len(docker.create_calls) == 4
+    assert docker.create_calls[2].name == first_service_name  # same identity, fresh container
 
 
 def test_parallel_relaunches_converge_on_one_replacement():
@@ -258,7 +258,7 @@ def test_parallel_relaunches_converge_on_one_replacement():
             thread.join(timeout=12)
 
         assert all(not thread.is_alive() for thread in threads)
-        assert len(docker.create_calls) == 2  # initial + exactly one replacement
+        assert len(docker.create_calls) == 4  # target+gateway initial and exactly one replacement pair
         assert sum(created for _plan, created in results) == 1
         assert stores[0].get("team-1", "juice") is not None
         for resource in [*stores, *range_stores, *allocators]:

@@ -10,26 +10,35 @@ CHALLENGE_NET = "cei-labs_challenge-edge"
 
 # ── web-app ───────────────────────────────────────────────────────────────────
 
-def test_web_app_plan_single_service_on_challenge_network():
+def test_web_app_plan_isolates_target_behind_gateway():
     plan = it.plan_web_app("team-1", "juice-shop", {"image": "bkimminich/juice-shop:v17.1.1"}, BASE_DOMAIN, CHALLENGE_NET)
 
     assert plan.type == it.WEB_APP
-    assert len(plan.services) == 1
-    svc = plan.services[0]
+    assert len(plan.services) == 2
+    svc, gateway = plan.services
     assert svc.image == "bkimminich/juice-shop:v17.1.1"
-    assert svc.networks == [CHALLENGE_NET]
-    assert plan.network is None
+    assert svc.networks == [plan.network]
+    assert not svc.labels
+    assert not svc.published_ports
+    assert set(gateway.networks) == {plan.network, CHALLENGE_NET}
+    assert gateway.read_only is True
+    assert gateway.cap_drop == ["ALL"]
+    assert gateway.sysctls["net.ipv4.ip_forward"] == "0"
+    assert plan.network is not None
     assert plan.range_owner_id is None
     assert plan.access["url"] == "https://team-1-juice-shop.apps.ctf.local"
 
 
 def test_web_app_plan_sets_traefik_labels_for_custom_port():
     plan = it.plan_web_app("team-1", "app", {"image": "some/app", "port": 8080}, BASE_DOMAIN, CHALLENGE_NET)
-    svc = plan.services[0]
-    router = svc.name
-    assert svc.labels["traefik.enable"] == "true"
-    assert svc.labels[f"traefik.http.services.{router}.loadbalancer.server.port"] == "8080"
-    assert svc.labels["traefik.docker.network"] == CHALLENGE_NET
+    svc, gateway = plan.services
+    router = gateway.name
+    assert gateway.labels["traefik.enable"] == "true"
+    assert gateway.labels[f"traefik.http.services.{router}.loadbalancer.server.port"] == str(it.GATEWAY_HTTP_PORT)
+    assert gateway.labels["traefik.docker.network"] == CHALLENGE_NET
+    assert json.loads(gateway.env["TCP_FORWARDS"]) == [
+        {"listen": it.GATEWAY_HTTP_PORT, "host": svc.name, "port": 8080}
+    ]
 
 
 def test_web_app_plan_requires_image():
@@ -39,15 +48,20 @@ def test_web_app_plan_requires_image():
 
 # ── single-target ─────────────────────────────────────────────────────────────
 
-def test_single_target_gets_its_own_airgapped_network_and_published_port():
+def test_single_target_isolated_behind_published_gateway():
     plan = it.plan_single_target("team-1", "otw", {"image": "some/target"}, allocated_port=32000, base_domain=BASE_DOMAIN)
 
     assert plan.type == it.SINGLE_TARGET
-    assert len(plan.services) == 1
-    svc = plan.services[0]
+    assert len(plan.services) == 2
+    svc, gateway = plan.services
     assert plan.network is not None
     assert svc.networks == [plan.network]
-    assert svc.published_ports == [(32000, 22)]
+    assert svc.published_ports == []
+    assert gateway.networks == [plan.network]
+    assert gateway.published_ports == [(32000, it.GATEWAY_SSH_PORT)]
+    assert json.loads(gateway.env["TCP_FORWARDS"]) == [
+        {"listen": it.GATEWAY_SSH_PORT, "host": svc.name, "port": 22}
+    ]
     assert plan.access["connect_port"] == 32000
     assert plan.access["connect_host"] == BASE_DOMAIN
     assert plan.access["protocol"] == "ssh"
@@ -57,7 +71,10 @@ def test_single_target_custom_target_port():
     plan = it.plan_single_target(
         "team-1", "otw", {"image": "some/target", "target_port": 2222}, allocated_port=32001, base_domain=BASE_DOMAIN
     )
-    assert plan.services[0].published_ports == [(32001, 2222)]
+    target, gateway = plan.services
+    assert target.published_ports == []
+    assert gateway.published_ports == [(32001, it.GATEWAY_SSH_PORT)]
+    assert json.loads(gateway.env["TCP_FORWARDS"])[0]["port"] == 2222
 
 
 def test_single_target_requires_image():
@@ -144,12 +161,19 @@ def test_single_target_mixes_normal_and_alpha_secret_keys():
 
 # ── target-attacker (range model) ─────────────────────────────────────────────
 
-def test_range_attacker_plan_joins_range_network_and_challenge_network():
+def test_range_attacker_isolated_behind_gateway():
     plan = it.plan_range_attacker("team-1", {"attacker_image": "cei/kali-novnc:latest"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
 
     assert plan.owner_id == "team-1"
-    assert set(plan.attacker_service.networks) == {plan.network, CHALLENGE_NET}
-    assert plan.attacker_service.labels["traefik.enable"] == "true"
+    assert plan.attacker_service.networks == [plan.network]
+    assert not plan.attacker_service.labels
+    assert not plan.attacker_service.published_ports
+    assert set(plan.gateway_service.networks) == {plan.network, CHALLENGE_NET}
+    assert plan.gateway_service.labels["traefik.enable"] == "true"
+    assert plan.gateway_service.published_ports == [
+        (32000, it.GATEWAY_SSH_PORT),
+        (32100, it.GATEWAY_NOVNC_PORT),
+    ]
     assert plan.access["attacker_url"] == "https://team-1-attacker.apps.ctf.local"
 
 

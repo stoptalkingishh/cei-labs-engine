@@ -26,15 +26,20 @@ X-Admin-Auth: <contents of the orchestrator_admin_password Docker secret>
 
 ## Instance types
 
-- **web-app** — one container, HTTP-routed through Traefik on the shared
-  `challenge-edge` network. Used for Juice Shop.
+- **web-app** — one vulnerable container on a dedicated internal network.
+  A capability-free, read-only TCP gateway joins that network and
+  `challenge-edge`; Traefik routes to the gateway, never to the vulnerable
+  workload. Used for Juice Shop.
 - **single-target** — one container on its own dedicated, airgapped
-  (`internal: true`) network, reachable only via a directly published port
-  (SSH by default). No Traefik involvement.
+  (`internal: true`) network. A trusted gateway owns the published port and
+  forwards only the configured protocol/port to the target. No Traefik
+  involvement.
 - **target-attacker** — a per-team **range**: one shared attacker (browser
   noVNC, Traefik-routed) plus any number of targets, all sharing one
   persistent, airgapped network scoped to the *team* (`owner_id`), not the
-  individual challenge. The first target-attacker challenge a team launches
+  individual challenge. The participant-owned attacker remains only on that
+  network; a trusted gateway owns its SSH, noVNC, and Traefik exposure. The
+  first target-attacker challenge a team launches
   creates the range; every subsequent one just adds another target to it.
   A target is only ever reachable from its own range's attacker — never
   Traefik, other teams, or CTFd.
@@ -152,20 +157,26 @@ Same shapes as above, admin-authenticated, for an ops dashboard.
 
 ## Isolation model (airgapping)
 
-- `web-app` containers join only the shared `challenge-edge` network, which
-  is itself `internal: true` (Docker-level: no outbound route to the
-  internet at all) — Traefik still reaches them because routing-mesh/published
-  ports operate independently of a network's `internal` flag.
+- Every untrusted `web-app` joins only its own dedicated `internal: true`
+  network. Traefik reaches a hardened gateway on `challenge-edge`; the app
+  never joins a shared overlay or Swarm ingress network.
 - `single-target` containers get their own dedicated `internal: true`
-  network, existing solely for that one instance, plus a directly published
-  port. No other container — including other teams' targets — is ever on
-  that network.
+  network, existing solely for that one instance. A hardened gateway, not the
+  target, owns the directly published port. No other untrusted container —
+  including other teams' targets — is ever on that network.
 - `target-attacker` ranges get one dedicated `internal: true` network per
-  **team** (not per challenge). The attacker joins that network plus
-  `challenge-edge` (for Traefik); every target in that range joins **only**
-  the range's network. Nothing outside a team's own range can ever reach
-  that team's targets, and the targets themselves have no path to the
-  internet or to CTFd.
+  **team** (not per challenge). The attacker and every target join **only**
+  that range network. A non-root, read-only, capability-free gateway joins
+  the range plus `challenge-edge`, disables IPv4/IPv6 forwarding, and proxies
+  only fixed listener/destination pairs. Nothing outside a team's own range
+  can directly reach its workloads.
+
+The gateway design removes participant-controlled workloads from shared
+overlays and Swarm ingress. Its isolation claims still require the documented
+live checks on the release platform: external access succeeds through the
+gateway; target egress, cross-team reach, management-plane reach, and route
+abuse through the gateway all fail; and the gateway runs non-root with a
+read-only root filesystem, zero capabilities, and forwarding sysctls disabled.
 
 ## Configuring multi-challenge deployments (for the wargames repo)
 
@@ -251,9 +262,12 @@ A background thread sweeps every `ORCHESTRATOR_REAP_INTERVAL_SECONDS`
    exempt from idle-reaping (it's already scheduled to go).
 2. Tears down any instance whose `schedule-shutdown` deadline has passed.
 
-State is in-memory only (single replica, pinned to a manager node); a
-restart resets idle timers and cancels pending countdowns for whatever's
-still running in Docker — it never loses or orphans a real instance.
+State is stored in SQLite and the Swarm stack mounts it from the persistent
+`orchestrator_data` volume. Routine service restarts therefore retain instance,
+range, port, idle-timer, and shutdown-countdown state. Disaster recovery onto a
+clean cluster may intentionally discard active labs, but must remove all
+label-managed resources and require clean participant relaunches; see
+`docs/backup-and-recovery.md`.
 
 ## Local development
 

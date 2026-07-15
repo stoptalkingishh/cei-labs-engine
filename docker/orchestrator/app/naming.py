@@ -36,6 +36,10 @@ def service_name(owner_id: str, instance_key: str, role: str | None = None) -> s
     return f"{base}-{role}" if role else base
 
 
+def gateway_service_name(owner_id: str, instance_key: str) -> str:
+    return service_name(owner_id, instance_key, "gateway")
+
+
 def network_name(owner_id: str, instance_key: str) -> str:
     return f"chnet-{instance_id(owner_id, instance_key)}"
 
@@ -55,6 +59,10 @@ def range_network_name(owner_id: str) -> str:
 
 def range_attacker_service_name(owner_id: str) -> str:
     return f"chrange-{slugify(owner_id)}-attacker"
+
+
+def range_gateway_service_name(owner_id: str) -> str:
+    return f"chrange-{slugify(owner_id)}-gateway"
 
 
 def range_target_service_name(owner_id: str, instance_key: str) -> str:
