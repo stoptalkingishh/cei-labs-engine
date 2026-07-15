@@ -27,6 +27,16 @@ export WARGAMES_REPO=/path/to/CEI-Labs-Wargames
 ./scripts/verify-backup.sh /protected/backups/<UTC-run-id>
 ```
 
+If the running station's `.env`, secrets, and TLS material live in a separate
+deployment checkout, run the script from the exact Engine commit being
+recorded and point it at that deployment root:
+
+```bash
+DEPLOYMENT_ROOT=/srv/cei-labs-engine-live \
+  BACKUP_ENCRYPTION_KEY_FILE=/protected/cei-backup.pass \
+  ./scripts/backup-platform.sh /protected/backups
+```
+
 The backup briefly scales CTFd and the orchestrator to zero, creates a
 transaction-consistent MariaDB dump, archives uploads and orchestrator state,
 encrypts `.env`, secrets, and TLS configuration with AES-256-CBC/PBKDF2, then

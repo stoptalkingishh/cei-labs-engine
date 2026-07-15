@@ -4,6 +4,7 @@ set -Eeuo pipefail
 umask 077
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEPLOYMENT_ROOT="${DEPLOYMENT_ROOT:-$REPO_ROOT}"
 STACK_NAME="${STACK_NAME:-cei-labs}"
 DEST_ROOT="${1:-$REPO_ROOT/backups}"
 KEY_FILE="${BACKUP_ENCRYPTION_KEY_FILE:-}"
@@ -24,6 +25,14 @@ key_mode="$(stat -c '%a' "$KEY_FILE")"
 }
 docker info >/dev/null
 docker service inspect "$CTFD_SERVICE" "$DB_SERVICE" "$ORCH_SERVICE" >/dev/null
+[[ -f "$DEPLOYMENT_ROOT/docker/.env" ]] || {
+  echo "deployment config missing: $DEPLOYMENT_ROOT/docker/.env" >&2
+  exit 1
+}
+[[ -d "$DEPLOYMENT_ROOT/docker/secrets" ]] || {
+  echo "deployment secrets directory missing: $DEPLOYMENT_ROOT/docker/secrets" >&2
+  exit 1
+}
 
 mkdir -p "$DEST"
 chmod 700 "$DEST"
@@ -66,7 +75,7 @@ docker run --rm --entrypoint tar \
   -v "${STACK_NAME}_orchestrator_data:/source:ro" "$orch_image" -C /source -cf - . \
   > "$DEST/orchestrator-data.tar"
 
-tar -C "$REPO_ROOT" -cf - \
+tar -C "$DEPLOYMENT_ROOT" -cf - \
   docker/.env docker/secrets docker/traefik/dynamic docker/traefik/certs \
   | openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:$KEY_FILE" \
       -out "$DEST/protected-config.tar.enc"
@@ -82,10 +91,10 @@ docker service inspect $(docker stack services "$STACK_NAME" -q) > "$DEST/servic
 (
   set -a
   # shellcheck disable=SC1091
-  source "$REPO_ROOT/docker/.env"
+  source "$DEPLOYMENT_ROOT/docker/.env"
   set +a
-  cd "$REPO_ROOT/docker"
-  docker stack config -c stack.yml
+  cd "$DEPLOYMENT_ROOT/docker"
+  docker stack config -c "$REPO_ROOT/docker/stack.yml"
 ) > "$DEST/resolved-stack.yml"
 
 BACKUP_RUN_ID="$RUN_ID" BACKUP_DIR="$DEST" python3 - <<'PY'
