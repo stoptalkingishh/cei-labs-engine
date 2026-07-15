@@ -126,19 +126,19 @@ RUN mkdir -p /var/run/sshd \
 # teams/instances. Fails loudly and refuses to start rather than silently
 # falling back to no password if the orchestrator/spawn script didn't set
 # one.
-RUN cat > /entrypoint.sh <<'SCRIPT'
-#!/bin/bash
-set -e
-
-if [ -z "${OPERATOR_PASSWORD:-}" ]; then
-    echo "FATAL: OPERATOR_PASSWORD is not set in the container environment -- refusing to start with no password." >&2
-    exit 1
-fi
-
-echo "operator:${OPERATOR_PASSWORD}" | chpasswd
-exec /usr/sbin/sshd -D
-SCRIPT
-RUN chmod +x /entrypoint.sh
+RUN printf '%s\n' \
+      '#!/bin/bash' \
+      'set -e' \
+      '' \
+      'if [ -z "${OPERATOR_PASSWORD:-}" ]; then' \
+      '    echo "FATAL: OPERATOR_PASSWORD is not set in the container environment -- refusing to start with no password." >&2' \
+      '    exit 1' \
+      'fi' \
+      '' \
+      'echo "operator:${OPERATOR_PASSWORD}" | chpasswd' \
+      'exec /usr/sbin/sshd -D' \
+      > /entrypoint.sh \
+    && chmod +x /entrypoint.sh
 
 EXPOSE 22
 HEALTHCHECK --interval=30s --timeout=5s \

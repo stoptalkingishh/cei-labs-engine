@@ -111,24 +111,24 @@ USER root
 # the image, never shared across teams/instances. Fails loudly and
 # refuses to start rather than silently falling back to no password if
 # the orchestrator/spawn script didn't set one.
-RUN cat > /start.sh <<'SCRIPT'
-#!/bin/bash
-set -e
-
-if [ -z "${VNC_PASSWORD:-}" ]; then
-    echo "FATAL: VNC_PASSWORD is not set in the container environment -- refusing to start with no password." >&2
-    exit 1
-fi
-
-echo "operator:${VNC_PASSWORD}" | chpasswd
-su operator -c "mkdir -p ~/.config/tigervnc && echo \"${VNC_PASSWORD}\" | vncpasswd -f > ~/.config/tigervnc/passwd && chmod 600 ~/.config/tigervnc/passwd"
-
-su operator -c "vncserver :1 -geometry 1280x800 -depth 24 -localhost no"
-su operator -c "websockify --web=/usr/share/novnc 6080 localhost:5901" &
-/usr/sbin/sshd
-tail -f /dev/null
-SCRIPT
-RUN chmod +x /start.sh \
+RUN printf '%s\n' \
+      '#!/bin/bash' \
+      'set -e' \
+      '' \
+      'if [ -z "${VNC_PASSWORD:-}" ]; then' \
+      '    echo "FATAL: VNC_PASSWORD is not set in the container environment -- refusing to start with no password." >&2' \
+      '    exit 1' \
+      'fi' \
+      '' \
+      'echo "operator:${VNC_PASSWORD}" | chpasswd' \
+      'su operator -c "mkdir -p ~/.config/tigervnc && echo \"${VNC_PASSWORD}\" | vncpasswd -f > ~/.config/tigervnc/passwd && chmod 600 ~/.config/tigervnc/passwd"' \
+      '' \
+      'su operator -c "vncserver :1 -geometry 1280x800 -depth 24 -localhost no"' \
+      'su operator -c "websockify --web=/usr/share/novnc 6080 localhost:5901" &' \
+      '/usr/sbin/sshd' \
+      'tail -f /dev/null' \
+      > /start.sh \
+    && chmod +x /start.sh \
     && ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
 EXPOSE 6080 22

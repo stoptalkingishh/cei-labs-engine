@@ -87,7 +87,8 @@ fi
 docker version > "$DEST/docker-version.txt"
 docker info > "$DEST/docker-info.txt"
 docker node inspect self > "$DEST/swarm-node.json"
-docker service inspect $(docker stack services "$STACK_NAME" -q) > "$DEST/services.json"
+mapfile -t stack_service_ids < <(docker stack services "$STACK_NAME" -q)
+docker service inspect "${stack_service_ids[@]}" > "$DEST/services.json"
 (
   set -a
   # shellcheck disable=SC1091

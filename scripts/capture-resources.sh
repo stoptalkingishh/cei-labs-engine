@@ -63,7 +63,7 @@ trap 'exit 143' TERM
 while true; do
   timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   read -r load_1m load_5m load_15m _ < /proc/loadavg
-  read -r mem_total mem_used mem_free mem_shared mem_buffers mem_available < <(free -b | awk '/^Mem:/ {print $2, $3, $4, $5, $6, $7}')
+  read -r mem_total mem_used _ _ _ mem_available < <(free -b | awk '/^Mem:/ {print $2, $3, $4, $5, $6, $7}')
   read -r swap_total swap_used _ < <(free -b | awk '/^Swap:/ {print $2, $3, $4}')
   read -r root_total root_used _ < <(df -B1 --output=size,used,avail / | tail -n 1)
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
