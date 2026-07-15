@@ -48,8 +48,9 @@ full record.
   shared VNC/operator password baked into images, and an unpinned Kali
   base image.
 - Staggered-game administration (independent per-game starts/scoreboards)
-  built on `feature/staggered-wargames` — **not yet merged to `main`**, see
-  `cei-labs-event/TRACKER.md`.
+  merged to `main`, plus a trusted-gateway rewrite of `challenge-edge`
+  routing, real-Swarm station validation, and CTFd-dialect/launcher-action
+  fixes found via adversarial persona testing.
 
 Full detail for all of the above lives in `docs/self-hosted-wargames-status.md`,
 `docs/security-audit-status.md`, and `docs/validation-session-2026-07-14-15.md`.
