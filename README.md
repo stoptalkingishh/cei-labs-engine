@@ -298,10 +298,18 @@ This initializes a one-node swarm if needed and deploys the full stack.
 Edit `ansible/inventory.ini` to list your hosts under `[swarm_managers]`/`[swarm_workers]`, then:
 
 ```bash
+ansible-galaxy collection install -r ansible/requirements.yml
 ansible-playbook -i ansible/inventory.ini ansible/site.yml
 ```
 
-This installs Docker, forms the swarm across every listed host, and labels the primary manager to hold stateful services. Then, from that primary manager:
+The playbook supports Ubuntu/Debian hosts with UFW and Fedora/RedHat-family
+hosts with firewalld. It installs Docker, forms the swarm across every listed
+host, opens only the required Swarm/HTTP, `30001–31999` bulk-workspace, and
+`32000–32767` trusted-gateway ports, and labels the primary manager to hold
+stateful services. The firewalld zone defaults to `public`; override
+`common_firewalld_zone` in inventory variables when a station's
+participant-facing interface belongs to another zone. Then, from that primary
+manager:
 
 ```bash
 ./scripts/stack-up.sh
@@ -354,7 +362,7 @@ backup/restore, monitoring, and ten-persona diagnostic is recorded in
 Shows a live snapshot: swarm nodes, stack service health, bulk-spawned workspaces, and active self-service challenge instances.
 
 For an interactive host view, the common Ansible role installs `btop` and
-`tmux` on every Ubuntu/Debian Swarm node:
+`tmux` on every supported Ubuntu/Debian or Fedora/RedHat-family Swarm node:
 
 ```bash
 ssh <node>

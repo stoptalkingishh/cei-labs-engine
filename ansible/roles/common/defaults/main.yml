@@ -1,0 +1,78 @@
+---
+# Defaults for the cross-platform host baseline.
+
+common_supported_os_families:
+  - Debian
+  - RedHat
+
+common_base_packages:
+  - btop
+  - curl
+  - fail2ban
+  - git
+  - htop
+  - jq
+  - tmux
+  - unzip
+  - wget
+
+common_os_packages:
+  Debian:
+    - ufw
+  RedHat:
+    - firewalld
+    - python3-firewall
+
+common_ssh_service:
+  Debian: ssh
+  RedHat: sshd
+
+common_ufw_rules:
+  - port: "22"
+    proto: tcp
+    description: SSH
+  - port: "2377"
+    proto: tcp
+    description: Docker Swarm management
+  - port: "7946"
+    proto: tcp
+    description: Docker Swarm node communication
+  - port: "7946"
+    proto: udp
+    description: Docker Swarm node communication
+  - port: "4789"
+    proto: udp
+    description: Docker Swarm overlay data path
+  - port: "80"
+    proto: tcp
+    description: HTTP ingress
+  - port: "443"
+    proto: tcp
+    description: HTTPS ingress
+  - port: "30001:31999"
+    proto: tcp
+    description: Bulk Analyst and Kali workspace ports
+  - port: "32000:32767"
+    proto: tcp
+    description: Participant gateway ports
+
+common_firewalld_zone: public
+common_firewalld_rules:
+  - port: "22/tcp"
+    description: SSH
+  - port: "2377/tcp"
+    description: Docker Swarm management
+  - port: "7946/tcp"
+    description: Docker Swarm node communication
+  - port: "7946/udp"
+    description: Docker Swarm node communication
+  - port: "4789/udp"
+    description: Docker Swarm overlay data path
+  - port: "80/tcp"
+    description: HTTP ingress
+  - port: "443/tcp"
+    description: HTTPS ingress
+  - port: "30001-31999/tcp"
+    description: Bulk Analyst and Kali workspace ports
+  - port: "32000-32767/tcp"
+    description: Participant gateway ports
