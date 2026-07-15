@@ -196,6 +196,11 @@ The Fedora test station used a user-local btop installation, so Fedora-native
 package automation remains an installation portability gap, not a monitoring
 functionality gap.
 
+Post-session follow-up: Engine issue #1 adds Fedora package installation and
+firewalld handling, including Ansible-managed `btop`, alongside the existing
+Debian/UFW path. That change requires PR CI and a Fedora check-mode/live role
+run before it supersedes the exact station evidence above.
+
 ## Remaining release gates
 
 - Deploy and validate all 59 Wargames challenges and 58 mappings.

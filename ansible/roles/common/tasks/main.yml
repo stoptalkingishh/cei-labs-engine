@@ -1,91 +1,81 @@
 ---
-# ansible/roles/common/tasks/main.yml
-# Runs on every node. Installs prerequisites, hardens SSH, sets up the
-# firewall for Docker Swarm (replaces the old K3s-specific port set).
+# Runs on every node. Supports Debian-family hosts through UFW and
+# Fedora/RedHat-family hosts through firewalld.
 
-- name: Update apt cache
+- name: Reject unsupported operating-system families
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family in common_supported_os_families
+    fail_msg: >-
+      Unsupported OS family {{ ansible_facts.os_family }}. The common role
+      supports Debian/Ubuntu and Fedora/RedHat-family hosts.
+
+- name: Update apt cache on Debian-family hosts
   ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 3600
+  when: ansible_facts.os_family == "Debian"
 
-- name: Install system packages
-  ansible.builtin.apt:
-    name:
-      - curl
-      - wget
-      - git
-      - ufw
-      - fail2ban
-      - btop
-      - htop
-      - tmux
-      - unzip
-      - jq
+- name: Install common and OS-specific system packages
+  ansible.builtin.package:
+    name: >-
+      {{ common_base_packages
+         + common_os_packages[ansible_facts.os_family] }}
     state: present
 
 - name: Set timezone to UTC
   community.general.timezone:
     name: UTC
 
-- name: Harden SSH — disable root login
+- name: Harden SSH - disable root login
   ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
     regexp: "^#?PermitRootLogin"
     line: "PermitRootLogin no"
-  notify: Restart sshd
+  notify: Restart SSH
 
-- name: Harden SSH — disable password auth
+- name: Harden SSH - disable password authentication
   ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
     regexp: "^#?PasswordAuthentication"
     line: "PasswordAuthentication no"
-  notify: Restart sshd
+  notify: Restart SSH
 
-- name: UFW — allow SSH
+- name: Configure UFW ingress rules on Debian-family hosts
   community.general.ufw:
     rule: allow
-    port: "22"
-    proto: tcp
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    comment: "CEI Labs: {{ item.description }}"
+  loop: "{{ common_ufw_rules }}"
+  loop_control:
+    label: "{{ item.port }}/{{ item.proto }}"
+  when: ansible_facts.os_family == "Debian"
 
-- name: UFW — allow Docker Swarm cluster management (manager nodes)
-  community.general.ufw:
-    rule: allow
-    port: "2377"
-    proto: tcp
-
-- name: UFW — allow Docker Swarm node communication (all nodes)
-  community.general.ufw:
-    rule: allow
-    port: "7946"
-    proto: "{{ item }}"
-  loop: ["tcp", "udp"]
-
-- name: UFW — allow Docker Swarm overlay network data path (all nodes)
-  community.general.ufw:
-    rule: allow
-    port: "4789"
-    proto: udp
-
-- name: UFW — allow HTTP/HTTPS
-  # Every node needs this open, not just managers — Traefik is reached via
-  # Swarm's routing mesh, which can forward from any node regardless of
-  # where the traefik service is actually scheduled.
-  community.general.ufw:
-    rule: allow
-    port: "{{ item }}"
-    proto: tcp
-  loop: ["80", "443"]
-
-- name: UFW — allow participant workspace ports (bulk-spawned analyst/kali + orchestrator instances)
-  community.general.ufw:
-    rule: allow
-    port: "30000:32767"
-    proto: tcp
-
-- name: Enable UFW
+- name: Enable UFW with default-deny ingress on Debian-family hosts
   community.general.ufw:
     state: enabled
     policy: deny
+  when: ansible_facts.os_family == "Debian"
+
+- name: Enable and start firewalld on Fedora/RedHat-family hosts
+  ansible.builtin.service:
+    name: firewalld
+    state: started
+    enabled: true
+  when: ansible_facts.os_family == "RedHat"
+
+- name: Configure firewalld ingress rules on Fedora/RedHat-family hosts
+  ansible.posix.firewalld:
+    zone: "{{ common_firewalld_zone }}"
+    port: "{{ item.port }}"
+    state: enabled
+    permanent: true
+    immediate: true
+  loop: "{{ common_firewalld_rules }}"
+  loop_control:
+    label: "{{ item.port }}"
+  when: ansible_facts.os_family == "RedHat"
 
 - name: Enable fail2ban
   ansible.builtin.service:

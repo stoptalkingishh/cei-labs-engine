@@ -1,7 +1,7 @@
 ---
 # ansible/roles/common/handlers/main.yml
 
-- name: Restart sshd
+- name: Restart SSH
   ansible.builtin.service:
-    name: sshd
+    name: "{{ common_ssh_service[ansible_facts.os_family] }}"
     state: restarted

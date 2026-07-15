@@ -109,6 +109,16 @@ jobs:
             echo "No Ansible requirements file found, skipping collection install."
           fi
 
+      - name: Syntax-check Debian and Fedora inventory paths
+        run: |
+          python3 scripts/validate-common-role.py
+          ansible-playbook \
+            -i ansible/tests/inventory-debian.ini \
+            ansible/site.yml --syntax-check
+          ansible-playbook \
+            -i ansible/tests/inventory-fedora.ini \
+            ansible/site.yml --syntax-check
+
       - name: Lint Ansible roles and playbooks
         run: |
           if [ -d "ansible" ]; then
