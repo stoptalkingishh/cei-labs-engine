@@ -136,7 +136,11 @@ def _persist_and_scrub_secrets(status: "dict | None", config: InstanceChallengeC
             continue
         value = access.pop(level_key)
         values = {"owner_id": owner_id, "challenge_id": flag.challenge_id, "value": value}
-        dialect = db.session.get_bind().dialect.name
+        # Flask-SQLAlchemy's scoped session API differs across the CTFd
+        # supported dependency versions; get_bind() raises TypeError on the
+        # deployed CTFd 3.8.2 stack. db.engine is stable inside this request's
+        # application context and identifies the same active dialect.
+        dialect = db.engine.dialect.name
         if dialect == "mysql":
             statement = mysql_insert(TeamChallengeSecret.__table__).values(**values)
             statement = statement.on_duplicate_key_update(value=statement.inserted.value, updated_at=datetime.utcnow())
