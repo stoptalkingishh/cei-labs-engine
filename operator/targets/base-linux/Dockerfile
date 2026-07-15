@@ -9,7 +9,7 @@
 # vulnerable service, a planted flag, misconfigured permissions, ...) and
 # publishes their own image; the orchestrator takes that image reference at
 # instance-creation time (see docker/orchestrator/README.md, "target_image").
-FROM debian:12-slim
+FROM debian:12-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
 ARG DEBIAN_FRONTEND=noninteractive
 

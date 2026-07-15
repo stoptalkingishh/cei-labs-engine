@@ -62,7 +62,7 @@ secrets:
 services:
   # ── Ingress ────────────────────────────────────────────────────────────────
   traefik:
-    image: traefik:v3.7.6
+    image: traefik:v3.7.6@sha256:21a3d83696379bac6434bb32e1dde0aff0e84ef2abd053ed3db87d3f45e749b2
     command:
       - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
       - "--providers.swarm.exposedbydefault=false"
@@ -100,7 +100,7 @@ services:
 
   # ── CTFd scoring platform ────────────────────────────────────────────────────
   ctfd-db:
-    image: mariadb:10.11
+    image: mariadb:10.11@sha256:be981e4113326ada8d6004174dd09eeaefc03094037f811182a52d4f2e737350
     environment:
       MYSQL_DATABASE: ctfd
       MYSQL_USER: ctfd
@@ -134,7 +134,7 @@ services:
     logging: *default-logging
 
   ctfd-redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     networks:
       - ctfd-internal
     deploy:
