@@ -161,8 +161,26 @@ inputs, generated-content validation, release digest enforcement, and
 deployment preflight checks. Local validation proved exactly 59 challenge
 files, 58 instance mappings, and 3 visible launchers. Release mode accepted
 digest-pinned references and rejected floating tags. `deploy.sh` passed Bash
-syntax validation. The workflows themselves still require a GitHub run after
-push, and the full catalog still requires station deployment.
+syntax validation. GitHub's Wargames `Validate` workflow passed after push at
+repository head `581544f`. The full catalog still requires station deployment.
+
+## Publication and CI follow-up
+
+All four local histories were pushed and their remote branch heads were
+compared directly with `git ls-remote`. Engine CI then exposed ShellCheck
+warnings in the backup/resource scripts and Hadolint incompatibility with two
+Dockerfile heredocs. Engine commits `1ca7c12` and `2fe9338` fixed those findings
+with array-safe service inspection, ignored-field placeholders, and portable
+`printf`-generated runtime entrypoints that preserve fail-closed password
+handling.
+
+The final pushed code/CI head `2fe9338` passed Engine `Validate`, `Build analyst
+image`, and `Build Kali noVNC image`. On the preceding documentation head,
+`Build CTFd image`, `Build Challenge Instance Orchestrator image`, and `Build
+TCP gateway image` also passed. Event and Net define no GitHub Actions
+workflows. These post-station CI fixes have lint/build evidence; the exact
+live-station acceptance evidence remains scoped to the source and image IDs
+listed at the start of this report.
 
 ## Monitoring result
 
@@ -187,4 +205,4 @@ functionality gap.
 - Perform a timed full-stack restore on clean infrastructure.
 - Clean up disposable persona accounts and teams through an approved admin
   workflow.
-- Run GitHub CI on the pushed commits and pin/freeze the final release set.
+- Pin/freeze the final release set after the remaining acceptance gates pass.
