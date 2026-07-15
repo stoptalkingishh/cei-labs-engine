@@ -110,7 +110,9 @@ USER root
 # in this specific container's runtime environment -- never baked into
 # the image, never shared across teams/instances. Fails loudly and
 # refuses to start rather than silently falling back to no password if
-# the orchestrator/spawn script didn't set one.
+# the orchestrator/spawn script didn't set one. The single quotes intentionally
+# preserve runtime environment expansion.
+# hadolint ignore=SC2016
 RUN printf '%s\n' \
       '#!/bin/bash' \
       'set -e' \
