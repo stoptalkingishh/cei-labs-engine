@@ -172,11 +172,12 @@ Same shapes as above, admin-authenticated, for an ops dashboard.
   can directly reach its workloads.
 
 The gateway design removes participant-controlled workloads from shared
-overlays and Swarm ingress. Direct TCP ports use Swarm host publish mode on
-the trusted gateway; routing-mesh/VIP publishing is prohibited because it
-would attach the gateway to the shared ingress overlay and can exhaust the
-ingress IPAM pool during repeated launch/delete cycles. Its isolation claims
-still require the documented live checks on the release platform: external access succeeds through the
+overlays and Swarm ingress. The hardened gateway may join Swarm ingress when
+it owns a directly published TCP port; no untrusted target or attacker does.
+The ingress address pool must be sized for repeated gateway launch/delete
+cycles because the release station's `/24` pool exhausted during load testing.
+Its isolation claims still require the documented live checks on the release
+platform: external access succeeds through the
 gateway; target egress, cross-team reach, management-plane reach, and route
 abuse through the gateway all fail; and the gateway runs non-root with a
 read-only root filesystem, zero capabilities, and forwarding sysctls disabled.

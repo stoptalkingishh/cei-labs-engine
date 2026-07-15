@@ -13,6 +13,23 @@ require any specific firewall/router product.
 | `ORCHESTRATOR_SSH_PORT_RANGE_START`–`END` (default `30000`–`32767`) | TCP | Inbound to any Swarm node | Directly-published ports for `single-target` orchestrator instances (e.g. SSH challenges) and bulk-spawned analyst/Kali workspaces (`scripts/spawn-workspaces.sh`, via `ANALYST_BASE_PORT`). Both provisioning paths share this one range — see `docker/.env.example`. |
 | 2377/tcp, 7946/tcp+udp, 4789/udp | — | Between Swarm nodes only | Swarm cluster management, node gossip, and overlay network data path (VXLAN). Only relevant for multi-node deployments — irrelevant on a single-host swarm. |
 
+## Swarm ingress capacity
+
+Direct TCP ports belong only to hardened gateway services, but each such
+service uses Swarm ingress. The release station exhausted Docker's default
+`10.0.0.0/24` ingress allocator during repeated launch/delete testing even
+though inspection showed only two live endpoints. Provision a non-overlapping
+ingress subnet with substantially more headroom (the tested station uses a
+`/16`) before an event, and record the chosen subnet in the station runbook.
+
+Changing ingress is a maintenance operation: every service that publishes a
+port must first be removed or stopped, including Traefik, and the stack is
+unavailable until ingress and those services are recreated. Confirm the new
+subnet does not overlap the LAN, VPNs, Docker address pools, or any CEI Labs
+overlay. Afterward, the release gate must prove external gateway access,
+target egress denial, cross-tenant denial, management-plane denial, and clean
+launch/delete/relaunch behavior.
+
 ## DNS
 
 Traefik routes on hostname, not bare IP (with a `HostRegexp` fallback for

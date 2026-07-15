@@ -96,15 +96,14 @@ both before and after the Finding 2 revert.
 
 > **Resolution update for Finding 2 (2026-07-14):** the trusted-gateway
 > redesign removes all published ports and shared overlays from untrusted
-> workloads. A fresh bare Swarm smoke test on the current station successfully
-> scheduled `nginx:alpine` with `mode=host`, bound node port 32999, and returned
-> HTTP 200. Engine therefore now uses host publish mode only on its hardened
-> TCP gateway. This also avoids a newly observed failure mode in the old
-> routing-mesh path: the `/24` ingress allocator reported no available IPs
-> after repeated launch/delete testing even though network inspection showed
-> only two visible endpoints. The gateway live isolation suite is the release
-> gate for this fix; the historical failed attempt above is retained as
-> context.
+> workloads. Only a non-root, read-only, capability-free gateway may own a
+> routing-mesh port. Host mode was retested: a service with no explicit overlay
+> bound successfully, but adding any overlay again made the listener disappear,
+> so host mode remains incompatible with this station. Testing also exposed an
+> exhausted `/24` ingress allocator despite only two visible endpoints. The
+> release design therefore retains routing mesh only for trusted gateways and
+> requires a larger ingress pool plus live egress, cross-tenant, management,
+> and route-abuse checks.
 
 ## Finding 3 (documentation gap, not yet fixed): SSH `connect_host` doesn't resolve
 

@@ -48,10 +48,5 @@ def test_create_gateway_service_passes_hardening_and_published_port():
     assert kwargs["cap_drop"] == ["ALL"]
     assert kwargs["sysctls"] == {"net.ipv4.ip_forward": "0"}
     assert kwargs["endpoint_spec"]["Ports"] == [
-        {
-            "Protocol": "tcp",
-            "PublishedPort": 32000,
-            "TargetPort": 10022,
-            "PublishMode": "host",
-        }
+        {"Protocol": "tcp", "PublishedPort": 32000, "TargetPort": 10022}
     ]

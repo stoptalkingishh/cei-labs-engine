@@ -143,21 +143,13 @@ class DockerOrchestratorClient:
 
         endpoint_spec = None
         if spec.published_ports:
-            # Publish directly on the node. The routing mesh implicitly joins
-            # every published service to the shared ingress overlay, which
-            # defeats per-instance isolation and can exhaust Swarm's ingress
-            # IPAM pool after repeated launch/delete cycles. Host mode keeps
-            # the trusted gateway on only its declared networks. PortAllocator
-            # guarantees that these node-local published ports are unique.
-            endpoint_spec = EndpointSpec(ports=[
-                {
-                    "Protocol": "tcp",
-                    "PublishedPort": published,
-                    "TargetPort": target,
-                    "PublishMode": "host",
-                }
-                for published, target in spec.published_ports
-            ])
+            # Only the hardened gateway may own published ports. Swarm's host
+            # publish mode does not bind on this station when a service joins
+            # an explicit overlay, so use the routing mesh here. Untrusted
+            # targets and attackers never receive published ports or join the
+            # ingress overlay. The station ingress pool must be sized for
+            # repeated gateway churn; see docs/network-prerequisites.md.
+            endpoint_spec = EndpointSpec(ports={published: target for published, target in spec.published_ports})
 
         logger.info("creating service %s (image=%s, networks=%s)", spec.name, spec.image, spec.networks)
         return self._client.services.create(
