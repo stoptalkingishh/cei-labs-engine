@@ -70,6 +70,7 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--api.dashboard=false"
+      - "--ping=true"
       - "--log.level=INFO"
       # LAN/air-gapped default: self-signed cert dropped in ./traefik/certs/ (see README).
       # For internet-facing events, replace with the ACME resolver block documented in README.
@@ -90,6 +91,12 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
       - ./traefik/certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     deploy:
       placement:
         constraints:
@@ -120,6 +127,12 @@ services:
       - ctfd_db_data:/var/lib/mysql
     networks:
       - ctfd-internal
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     deploy:
       placement:
         constraints:
@@ -137,6 +150,12 @@ services:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     networks:
       - ctfd-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     deploy:
       resources:
         limits:
@@ -165,6 +184,16 @@ services:
       - edge
       - ctfd-internal
       - orchestrator-internal
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5)"
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
     depends_on:
       - ctfd-db
       - ctfd-redis
@@ -246,6 +275,16 @@ services:
       - orchestrator_data:/var/lib/cei-orchestrator
     networks:
       - orchestrator-internal
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       replicas: 1
       placement:
