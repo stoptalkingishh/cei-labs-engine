@@ -229,3 +229,6 @@ class DockerOrchestratorClient:
 
     def list_managed_services(self) -> list:
         return self._client.services.list(filters={"label": ORCH_LABEL})
+
+    def list_managed_networks(self) -> list:
+        return self._client.networks.list(filters={"label": ORCH_LABEL})

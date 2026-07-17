@@ -19,7 +19,7 @@ import threading
 
 from app import instance_types as it
 from app.ports import PortAllocator
-from app.store import InstanceStore, RangeStore
+from app.store import InstanceStore, RangeStore, ReservationCapacityError
 
 N_WORKERS = 20
 
@@ -85,6 +85,38 @@ def test_range_reserve_is_also_atomic_across_independent_store_objects():
 
         assert results.count(True) == 1, f"expected exactly 1 winner, got {results.count(True)}: {results}"
         assert results.count(False) == N_WORKERS - 1
+
+
+def test_per_owner_quota_is_atomic_across_independent_store_objects():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "owner-quota.db")
+        stores = [InstanceStore(db_path=db_path) for _ in range(N_WORKERS)]
+        results = [None] * N_WORKERS
+        barrier = threading.Barrier(N_WORKERS)
+
+        def race(i):
+            barrier.wait()
+            try:
+                results[i] = stores[i].reserve(
+                    "race-team",
+                    f"box-{i}",
+                    max_instances=30,
+                    max_instances_per_owner=3,
+                )
+            except ReservationCapacityError:
+                results[i] = "capacity"
+
+        threads = [threading.Thread(target=race, args=(i,)) for i in range(N_WORKERS)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert results.count(True) == 3
+        assert results.count("capacity") == N_WORKERS - 3
+        assert stores[0].count_for_owner("race-team") == 3
+        for store in stores:
+            store.close()
 
 
 def test_relaunch_claim_is_atomic_across_independent_store_objects():

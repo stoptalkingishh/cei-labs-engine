@@ -14,7 +14,13 @@ from . import instance_types
 from .docker_client import DockerOrchestratorClient
 from .instance_types import SINGLE_TARGET, TARGET_ATTACKER
 from .ports import PortAllocator
-from .store import InstanceRecord, InstanceStore, RangeRecord, RangeStore
+from .store import (
+    InstanceRecord,
+    InstanceStore,
+    RangeRecord,
+    RangeStore,
+    ReservationCapacityError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +65,8 @@ class InstanceController:
         challenge_network: str,
         max_instances: int,
         shutdown_max_extensions: int,
+        max_instances_per_owner: "int | None" = None,
+        workload_quota: "instance_types.WorkloadQuota | None" = None,
     ):
         self.docker = docker_client
         self.store = store
@@ -67,6 +75,10 @@ class InstanceController:
         self.base_domain = base_domain
         self.challenge_network = challenge_network
         self.max_instances = max_instances
+        self.max_instances_per_owner = (
+            max_instances if max_instances_per_owner is None else max_instances_per_owner
+        )
+        self.workload_quota = workload_quota or instance_types.DEFAULT_WORKLOAD_QUOTA
         self.shutdown_max_extensions = shutdown_max_extensions
 
     # ── Create / reuse ───────────────────────────────────────────────────────
@@ -102,9 +114,19 @@ class InstanceController:
         if not owns_reservation:
             deadline = time.time() + _RESERVATION_WAIT_SECONDS
             while True:
-                if self.store.reserve(owner_id, instance_key):
-                    owns_reservation = True
-                    break  # we won -- fall through and actually create it
+                try:
+                    if self.store.reserve(
+                        owner_id,
+                        instance_key,
+                        max_instances=self.max_instances,
+                        max_instances_per_owner=self.max_instances_per_owner,
+                    ):
+                        owns_reservation = True
+                        break  # we won -- fall through and actually create it
+                except ReservationCapacityError as exc:
+                    if exc.scope == "owner":
+                        raise CapacityError(f"owner at quota ({exc.limit} concurrent instances)") from exc
+                    raise CapacityError(f"at capacity ({exc.limit} concurrent instances)") from exc
                 record = self.store.get(owner_id, instance_key)
                 if record is not None:
                     record.touch()
@@ -116,10 +138,6 @@ class InstanceController:
                     )
                 time.sleep(_RESERVATION_POLL_INTERVAL)
 
-        if self.store.count() > self.max_instances:
-            self.store.release_reservation(owner_id, instance_key)
-            raise CapacityError(f"at capacity ({self.max_instances} concurrent instances)")
-
         try:
             if replacement_record is not None:
                 self._teardown_record(replacement_record)
@@ -128,7 +146,14 @@ class InstanceController:
             elif instance_type == SINGLE_TARGET:
                 plan = self._create_single_target(owner_id, instance_key, spec)
             else:
-                plan = instance_types.plan_web_app(owner_id, instance_key, spec, self.base_domain, self.challenge_network)
+                plan = instance_types.plan_web_app(
+                    owner_id,
+                    instance_key,
+                    spec,
+                    self.base_domain,
+                    self.challenge_network,
+                    self.workload_quota,
+                )
                 try:
                     self.docker.ensure_network(plan.network, internal=True)
                     self._create_services(plan.services)
@@ -157,7 +182,9 @@ class InstanceController:
         port = self.port_allocator.allocate()
         plan = None
         try:
-            plan = instance_types.plan_single_target(owner_id, instance_key, spec, port, self.base_domain)
+            plan = instance_types.plan_single_target(
+                owner_id, instance_key, spec, port, self.base_domain, self.workload_quota
+            )
             self.docker.ensure_network(plan.network, internal=True)
             self._create_services(plan.services)
         except Exception:
@@ -193,7 +220,13 @@ class InstanceController:
                 range_plan = None
                 try:
                     range_plan = instance_types.plan_range_attacker(
-                        owner_id, spec, ssh_port, novnc_port, self.base_domain, self.challenge_network
+                        owner_id,
+                        spec,
+                        ssh_port,
+                        novnc_port,
+                        self.base_domain,
+                        self.challenge_network,
+                        self.workload_quota,
                     )
                     self.docker.ensure_network(range_plan.network, internal=True)
                     self._create_services([range_plan.attacker_service, range_plan.gateway_service])
@@ -211,7 +244,12 @@ class InstanceController:
             self.range_store.touch(owner_id)
 
         target_plan = instance_types.plan_range_target(
-            owner_id, instance_key, spec, range_record.plan.network, range_record.plan.access
+            owner_id,
+            instance_key,
+            spec,
+            range_record.plan.network,
+            range_record.plan.access,
+            self.workload_quota,
         )
         self._create_services(target_plan.services)
         range_record.target_keys.add(instance_key)
@@ -272,6 +310,23 @@ class InstanceController:
         self.docker.remove_network(range_record.plan.network)
         self.range_store.remove(owner_id)
         return True
+
+    def cleanup_orphaned_service(self, service) -> None:
+        """Remove an untracked managed service and release its published ports."""
+        name = service.name
+        published_ports = list(getattr(service, "published_ports", []) or [])
+        if not published_ports:
+            attrs = getattr(service, "attrs", {}) or {}
+            endpoint = attrs.get("Endpoint", {}).get("Spec", {})
+            endpoint = endpoint or attrs.get("Spec", {}).get("EndpointSpec", {})
+            published_ports = [
+                (port["PublishedPort"], port.get("TargetPort"))
+                for port in endpoint.get("Ports", []) or []
+                if port.get("PublishedPort") is not None
+            ]
+        self.docker.remove_service(name)
+        for published, _target in published_ports:
+            self.port_allocator.release(published)
 
     # ── Reboot ("restart in place") ──────────────────────────────────────────
     def reboot(self, owner_id: str, instance_key: str) -> bool:

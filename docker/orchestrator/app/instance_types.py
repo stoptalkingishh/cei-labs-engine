@@ -61,6 +61,30 @@ _TARGET_CAPS = [
 _ATTACKER_CAPS = _TARGET_CAPS + ["NET_RAW", "NET_ADMIN"]
 
 
+@dataclass(frozen=True)
+class WorkloadQuota:
+    """Per-service resource ceiling for participant-controlled workloads."""
+    memory_limit_bytes: int = 512 * 1024 * 1024
+    memory_reservation_bytes: int = 128 * 1024 * 1024
+    cpu_limit_nanos: int = 1_000_000_000
+
+    def __post_init__(self) -> None:
+        if min(self.memory_limit_bytes, self.memory_reservation_bytes, self.cpu_limit_nanos) <= 0:
+            raise ValueError("workload quota values must be positive")
+        if self.memory_reservation_bytes > self.memory_limit_bytes:
+            raise ValueError("workload memory reservation cannot exceed its limit")
+
+    def service_kwargs(self) -> dict:
+        return {
+            "mem_limit_bytes": self.memory_limit_bytes,
+            "mem_reservation_bytes": self.memory_reservation_bytes,
+            "cpu_limit_nanos": self.cpu_limit_nanos,
+        }
+
+
+DEFAULT_WORKLOAD_QUOTA = WorkloadQuota()
+
+
 class InvalidInstanceRequestError(ValueError):
     pass
 
@@ -178,7 +202,14 @@ def _gateway_service(name: str, networks: list[str], forwards: list[dict], **kwa
     )
 
 
-def plan_web_app(owner_id: str, instance_key: str, spec: dict, base_domain: str, challenge_network: str) -> InstancePlan:
+def plan_web_app(
+    owner_id: str,
+    instance_key: str,
+    spec: dict,
+    base_domain: str,
+    challenge_network: str,
+    workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
+) -> InstancePlan:
     image = _require_str(spec, "image")
     port = int(spec.get("port", 3000))
     env = spec.get("env") or {}
@@ -194,6 +225,7 @@ def plan_web_app(owner_id: str, instance_key: str, spec: dict, base_domain: str,
         image=image,
         networks=[net_name],
         env={str(k): str(v) for k, v in env.items()},
+        **workload_quota.service_kwargs(),
     )
     gateway_name = naming.gateway_service_name(owner_id, instance_key)
     gateway = _gateway_service(
@@ -212,7 +244,14 @@ def plan_web_app(owner_id: str, instance_key: str, spec: dict, base_domain: str,
     )
 
 
-def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_port: int, base_domain: str) -> InstancePlan:
+def plan_single_target(
+    owner_id: str,
+    instance_key: str,
+    spec: dict,
+    allocated_port: int,
+    base_domain: str,
+    workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
+) -> InstancePlan:
     """No Traefik involvement — a dedicated airgapped network plus a directly
     published port (e.g. for SSH). `allocated_port` is acquired by the
     caller (controller.py) from a PortAllocator, since that's inherently
@@ -255,6 +294,7 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
         env={str(k): str(v) for k, v in env.items()},
         cap_drop=["ALL"],
         cap_add=list(_TARGET_CAPS),
+        **workload_quota.service_kwargs(),
     )
     gateway = _gateway_service(
         naming.gateway_service_name(owner_id, instance_key),
@@ -279,7 +319,13 @@ def plan_single_target(owner_id: str, instance_key: str, spec: dict, allocated_p
 
 
 def plan_range_attacker(
-    owner_id: str, spec: dict, allocated_port: int, allocated_novnc_port: int, base_domain: str, challenge_network: str
+    owner_id: str,
+    spec: dict,
+    allocated_port: int,
+    allocated_novnc_port: int,
+    base_domain: str,
+    challenge_network: str,
+    workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
 ) -> RangePlan:
     """Called once per team, the first time they launch any target-attacker
     challenge. Subsequent challenges reuse this range (see plan_range_target).
@@ -331,6 +377,7 @@ def plan_range_attacker(
         env={str(k): str(v) for k, v in attacker_env.items()},
         cap_drop=["ALL"],
         cap_add=list(_ATTACKER_CAPS),
+        **workload_quota.service_kwargs(),
     )
     gateway_name = naming.range_gateway_service_name(owner_id)
     gateway_service = _gateway_service(
@@ -364,7 +411,14 @@ def plan_range_attacker(
     )
 
 
-def plan_range_target(owner_id: str, instance_key: str, spec: dict, range_network: str, range_access: dict) -> InstancePlan:
+def plan_range_target(
+    owner_id: str,
+    instance_key: str,
+    spec: dict,
+    range_network: str,
+    range_access: dict,
+    workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
+) -> InstancePlan:
     """A single challenge's target within an existing (or about-to-exist)
     range. Joins ONLY the range's network — never challenge_network, never
     Traefik — so it is unreachable from anywhere except its range's own
@@ -380,6 +434,7 @@ def plan_range_target(owner_id: str, instance_key: str, spec: dict, range_networ
         env={str(k): str(v) for k, v in target_env.items()},
         cap_drop=["ALL"],
         cap_add=list(_TARGET_CAPS),
+        **workload_quota.service_kwargs(),
     )
     return InstancePlan(
         type=TARGET_ATTACKER,

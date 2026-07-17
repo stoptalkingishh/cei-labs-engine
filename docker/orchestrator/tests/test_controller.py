@@ -22,13 +22,14 @@ BASE_DOMAIN = "ctf.local"
 CHALLENGE_NET = "cei-labs_challenge-edge"
 
 
-def make_controller(max_instances=30, max_extensions=3):
+def make_controller(max_instances=30, max_extensions=3, max_instances_per_owner=None, workload_quota=None):
     docker = FakeDockerOrchestratorClient()
     store = InstanceStore()
     range_store = RangeStore()
     ports = PortAllocator(32000, 32767)
     controller = InstanceController(
-        docker, store, range_store, ports, BASE_DOMAIN, CHALLENGE_NET, max_instances, max_extensions
+        docker, store, range_store, ports, BASE_DOMAIN, CHALLENGE_NET,
+        max_instances, max_extensions, max_instances_per_owner, workload_quota
     )
     return controller, docker, store, range_store
 
@@ -57,6 +58,45 @@ def test_capacity_error_when_at_max():
     controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
     with pytest.raises(CapacityError):
         controller.create_or_get(it.WEB_APP, "team-2", "juice", {"image": "img"})
+
+
+def test_owner_quota_blocks_only_that_owner_and_releases_reservation():
+    controller, _, store, _ = make_controller(max_instances_per_owner=1)
+    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+
+    with pytest.raises(CapacityError, match="owner at quota"):
+        controller.create_or_get(it.WEB_APP, "team-1", "second", {"image": "img"})
+
+    assert store.count_for_owner("team-1") == 1
+    controller.create_or_get(it.WEB_APP, "team-2", "juice", {"image": "img"})
+    assert store.count_for_owner("team-2") == 1
+
+
+def test_owner_quota_allows_idempotent_reuse_and_relaunch():
+    controller, _, store, _ = make_controller(max_instances_per_owner=1)
+    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+
+    _, created = controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    _, relaunched = controller.create_or_get(
+        it.WEB_APP, "team-1", "juice", {"image": "img"}, force_relaunch=True
+    )
+
+    assert created is False
+    assert relaunched is True
+    assert store.count_for_owner("team-1") == 1
+
+
+def test_controller_applies_configured_workload_quota():
+    quota = it.WorkloadQuota(256 * 1024 * 1024, 64 * 1024 * 1024, 500_000_000)
+    controller, _, _, _ = make_controller(workload_quota=quota)
+
+    plan, _ = controller.create_or_get(it.SINGLE_TARGET, "team-1", "otw", {"image": "img"})
+    workload, gateway = plan.services
+
+    assert workload.mem_limit_bytes == quota.memory_limit_bytes
+    assert workload.mem_reservation_bytes == quota.memory_reservation_bytes
+    assert workload.cpu_limit_nanos == quota.cpu_limit_nanos
+    assert gateway.mem_limit_bytes == 64 * 1024 * 1024
 
 
 # ── single-target ─────────────────────────────────────────────────────────────
