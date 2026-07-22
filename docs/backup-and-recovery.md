@@ -73,3 +73,24 @@ duration, restore duration, size, RPO, and RTO.
 Restore automation is intentionally not marked production-ready until this
 clean-station rehearsal has been completed. The verification script is
 read-only; it is safe to run against every retained bundle.
+
+## Restore onto a clean station
+
+The restore command is intentionally destructive only to a new, empty stack
+namespace. It refuses to run if the target stack or any of its three durable
+volumes already exists, verifies checksums and decryptability before mutation,
+and requires a typed confirmation unless `--yes` is supplied for an attended
+automation run.
+
+```bash
+export BACKUP_ENCRYPTION_KEY_FILE=/protected/cei-backup.pass
+./scripts/restore-platform.sh /protected/backups/<UTC-run-id>
+```
+
+The script restores protected deployment configuration, uploads,
+orchestrator state, and MariaDB before deploying `resolved-stack.yml`. It then
+waits up to ten minutes and compares the deployed service set, immutable image
+references, desired replica counts, and running replica counts with
+`services.json`. Use `DEPLOYMENT_ROOT` when restored configuration belongs in a
+separate deployment checkout, and `STACK_NAME` only for an isolated rehearsal
+namespace.
