@@ -11,6 +11,7 @@ import logging
 
 from flask import Flask, jsonify, request
 
+from . import instance_types
 from .config import Config
 from .controller import (
     CapacityError,
@@ -72,8 +73,22 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
         challenge_network=cfg.CHALLENGE_NETWORK,
         max_instances=cfg.MAX_INSTANCES,
         shutdown_max_extensions=cfg.SHUTDOWN_MAX_EXTENSIONS,
+        max_instances_per_owner=cfg.MAX_INSTANCES_PER_OWNER,
+        workload_quota=instance_types.WorkloadQuota(
+            memory_limit_bytes=cfg.WORKLOAD_MEMORY_LIMIT_BYTES,
+            memory_reservation_bytes=cfg.WORKLOAD_MEMORY_RESERVATION_BYTES,
+            cpu_limit_nanos=cfg.WORKLOAD_CPU_LIMIT_NANOS,
+        ),
     )
-    reaper = Reaper(controller, store, range_store, cfg.IDLE_GRACE_MINUTES, cfg.REAP_INTERVAL_SECONDS)
+    reaper = Reaper(
+        controller,
+        store,
+        range_store,
+        cfg.IDLE_GRACE_MINUTES,
+        cfg.REAP_INTERVAL_SECONDS,
+        cfg.MAX_INSTANCE_LIFETIME_MINUTES,
+        cfg.RESERVATION_TIMEOUT_SECONDS,
+    )
     if start_reaper:
         reaper.start()
 

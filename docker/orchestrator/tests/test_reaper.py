@@ -1,5 +1,6 @@
 from app import instance_types as it
 from app.controller import InstanceController
+from app.docker_client import ServiceSpec
 from app.ports import PortAllocator
 from app.reaper import Reaper
 from app.store import InstanceStore, RangeStore
@@ -10,13 +11,17 @@ BASE_DOMAIN = "ctf.local"
 CHALLENGE_NET = "cei-labs_challenge-edge"
 
 
-def make_reaper(grace_minutes=120):
+def make_reaper(grace_minutes=120, max_lifetime_minutes=None, reservation_timeout_seconds=60):
     docker = FakeDockerOrchestratorClient()
     store = InstanceStore()
     range_store = RangeStore()
     ports = PortAllocator(32000, 32767)
     controller = InstanceController(docker, store, range_store, ports, BASE_DOMAIN, CHALLENGE_NET, 30, 3)
-    reaper = Reaper(controller, store, range_store, grace_minutes, interval_seconds=9999)
+    reaper = Reaper(
+        controller, store, range_store, grace_minutes, interval_seconds=9999,
+        max_lifetime_minutes=max_lifetime_minutes,
+        reservation_timeout_seconds=reservation_timeout_seconds,
+    )
     return reaper, controller, docker, store, range_store
 
 
@@ -145,3 +150,53 @@ def test_pending_shutdown_instance_is_not_also_idle_reaped():
 
     assert reaped == 0
     assert store.get("team-1", "juice") is not None
+
+
+def test_sweep_enforces_absolute_lifetime_even_when_instance_is_active():
+    reaper, controller, docker, store, _ = make_reaper(
+        grace_minutes=120, max_lifetime_minutes=1
+    )
+    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    record = store.get("team-1", "juice")
+    record.created_at -= 120
+    store.put(record)
+
+    assert reaper.sweep() == 1
+    assert store.get("team-1", "juice") is None
+    assert docker.services == {}
+
+
+def test_sweep_releases_stale_reservation_and_removes_its_orphans():
+    reaper, controller, docker, store, _ = make_reaper(reservation_timeout_seconds=10)
+    assert store.reserve("team-1", "crashed")
+    store._conn().execute(
+        "UPDATE instances SET created_at = created_at - 60 WHERE owner_id = ? AND instance_key = ?",
+        ("team-1", "crashed"),
+    )
+    port = controller.port_allocator.allocate()
+    orphan = ServiceSpec(
+        name="orphan-service",
+        image="img",
+        networks=["orphan-network"],
+        published_ports=[(port, 22)],
+    )
+    docker.services[orphan.name] = orphan
+    docker.networks["orphan-network"] = True
+
+    assert reaper.sweep() == 3
+    assert store.pending_count() == 0
+    assert docker.services == {}
+    assert docker.networks == {}
+    assert controller.port_allocator.allocate() == port
+
+
+def test_sweep_does_not_reconcile_orphans_during_live_reservation():
+    reaper, _, docker, store, _ = make_reaper(reservation_timeout_seconds=60)
+    assert store.reserve("team-1", "creating")
+    in_flight = ServiceSpec(name="in-flight-service", image="img", networks=["in-flight-network"])
+    docker.services[in_flight.name] = in_flight
+    docker.networks["in-flight-network"] = True
+
+    assert reaper.sweep() == 0
+    assert in_flight.name in docker.services
+    assert "in-flight-network" in docker.networks

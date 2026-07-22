@@ -40,6 +40,13 @@ _SQLITE_INIT_RETRIES = 100
 _SQLITE_INIT_RETRY_SECONDS = 0.05
 
 
+class ReservationCapacityError(Exception):
+    def __init__(self, scope: str, limit: int):
+        self.scope = scope
+        self.limit = limit
+        super().__init__(f"{scope} capacity {limit} reached")
+
+
 @dataclass
 class InstanceRecord:
     plan: InstancePlan
@@ -236,11 +243,51 @@ class InstanceStore:
             """
         )
 
-    def reserve(self, owner_id: str, instance_key: str) -> bool:
+    def reserve(
+        self,
+        owner_id: str,
+        instance_key: str,
+        max_instances: "int | None" = None,
+        max_instances_per_owner: "int | None" = None,
+    ) -> bool:
         """Atomically claim the right to create this (owner_id, instance_key).
         Returns True iff this call won -- no row existed before. The PRIMARY
         KEY constraint makes this atomic across every worker process sharing
         this db file, closing the exact race verified in TRACKER.md."""
+        if max_instances is not None or max_instances_per_owner is not None:
+            conn = self._conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                exists = conn.execute(
+                    "SELECT 1 FROM instances WHERE owner_id = ? AND instance_key = ?",
+                    (owner_id, instance_key),
+                ).fetchone()
+                if exists:
+                    conn.execute("COMMIT")
+                    return False
+                if max_instances_per_owner is not None:
+                    (owner_count,) = conn.execute(
+                        "SELECT COUNT(*) FROM instances WHERE owner_id = ?", (owner_id,)
+                    ).fetchone()
+                    if owner_count >= max_instances_per_owner:
+                        raise ReservationCapacityError("owner", max_instances_per_owner)
+                if max_instances is not None:
+                    (total_count,) = conn.execute("SELECT COUNT(*) FROM instances").fetchone()
+                    if total_count >= max_instances:
+                        raise ReservationCapacityError("global", max_instances)
+                now = time.time()
+                conn.execute(
+                    "INSERT INTO instances (owner_id, instance_key, plan_json, created_at, last_accessed, extensions_used) "
+                    "VALUES (?, ?, NULL, ?, ?, 0)",
+                    (owner_id, instance_key, now, now),
+                )
+                conn.execute("COMMIT")
+                return True
+            except Exception:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+
         now = time.time()
         try:
             self._conn().execute(
@@ -407,6 +454,26 @@ class InstanceStore:
         (n,) = self._conn().execute("SELECT COUNT(*) FROM instances").fetchone()
         return n
 
+    def count_for_owner(self, owner_id: str) -> int:
+        """Counts finalized rows and in-flight reservations for one owner."""
+        (n,) = self._conn().execute(
+            "SELECT COUNT(*) FROM instances WHERE owner_id = ?", (owner_id,)
+        ).fetchone()
+        return n
+
+    def pending_count(self) -> int:
+        (n,) = self._conn().execute(
+            "SELECT COUNT(*) FROM instances WHERE plan_json IS NULL"
+        ).fetchone()
+        return n
+
+    def release_stale_reservations(self, max_age_seconds: int) -> int:
+        cutoff = time.time() - max_age_seconds
+        cursor = self._conn().execute(
+            "DELETE FROM instances WHERE plan_json IS NULL AND created_at <= ?", (cutoff,)
+        )
+        return cursor.rowcount
+
 
 class RangeStore:
     def __init__(self, db_path: str = ":memory:"):
@@ -479,6 +546,19 @@ class RangeStore:
             "SELECT 1 FROM ranges WHERE owner_id = ? AND plan_json IS NULL", (owner_id,)
         ).fetchone()
         return row is not None
+
+    def pending_count(self) -> int:
+        (n,) = self._conn().execute(
+            "SELECT COUNT(*) FROM ranges WHERE plan_json IS NULL"
+        ).fetchone()
+        return n
+
+    def release_stale_reservations(self, max_age_seconds: int) -> int:
+        cutoff = time.time() - max_age_seconds
+        cursor = self._conn().execute(
+            "DELETE FROM ranges WHERE plan_json IS NULL AND created_at <= ?", (cutoff,)
+        )
+        return cursor.rowcount
 
     def put(self, record: RangeRecord) -> None:
         self._conn().execute(

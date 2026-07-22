@@ -46,6 +46,23 @@ def test_web_app_plan_requires_image():
         it.plan_web_app("team-1", "app", {}, BASE_DOMAIN, CHALLENGE_NET)
 
 
+def test_workload_quota_applies_to_every_participant_controlled_service():
+    quota = it.WorkloadQuota(300_000_000, 100_000_000, 750_000_000)
+    web = it.plan_web_app("team-1", "app", {"image": "web"}, BASE_DOMAIN, CHALLENGE_NET, quota)
+    single = it.plan_single_target("team-1", "single", {"image": "target"}, 32000, BASE_DOMAIN, quota)
+    range_plan = it.plan_range_attacker(
+        "team-1", {"attacker_image": "attacker"}, 32001, 32002, BASE_DOMAIN, CHALLENGE_NET, quota
+    )
+    target = it.plan_range_target(
+        "team-1", "range-target", {"target_image": "target"}, range_plan.network, range_plan.access, quota
+    )
+
+    for service in (web.services[0], single.services[0], range_plan.attacker_service, target.services[0]):
+        assert service.mem_limit_bytes == quota.memory_limit_bytes
+        assert service.mem_reservation_bytes == quota.memory_reservation_bytes
+        assert service.cpu_limit_nanos == quota.cpu_limit_nanos
+
+
 # ── single-target ─────────────────────────────────────────────────────────────
 
 def test_single_target_isolated_behind_published_gateway():

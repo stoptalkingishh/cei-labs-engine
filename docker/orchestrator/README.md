@@ -255,16 +255,28 @@ Constraint: all challenges sharing an `instance_group` should declare the
 same `instance_type` and images — whichever one is launched first is what
 actually creates the container; the others just reuse it.
 
-## Idle reaping and shutdown countdowns
+## Quotas, cleanup, and shutdown countdowns
+
+A participant may own at most `ORCHESTRATOR_MAX_INSTANCES_PER_OWNER`
+(default 3) concurrent instance groups. Admission is atomic in the shared
+SQLite store and includes in-flight launches. Every participant-controlled
+target or attacker also receives the configured CPU and memory limits; the
+hardened gateways retain their smaller fixed limits.
 
 A background thread sweeps every `ORCHESTRATOR_REAP_INTERVAL_SECONDS`
-(default 60) and does two independent things:
+(default 60) and performs these independent cleanup jobs:
 
 1. Tears down any instance or range idle longer than
    `ORCHESTRATOR_IDLE_GRACE_MINUTES` (default 120) — mirrors MultiJuicer's
    `cleanup.gracePeriod`. An instance on an active shutdown countdown is
    exempt from idle-reaping (it's already scheduled to go).
 2. Tears down any instance whose `schedule-shutdown` deadline has passed.
+3. Enforces `ORCHESTRATOR_MAX_INSTANCE_LIFETIME_MINUTES` (default 240), even
+   if the participant continuously touches the instance.
+4. Releases creation reservations abandoned longer than
+   `ORCHESTRATOR_RESERVATION_TIMEOUT_SECONDS` (default 300), then removes any
+   label-managed services/networks that have no authoritative store record.
+   Reconciliation is skipped while a non-stale reservation is in flight.
 
 State is stored in SQLite and the Swarm stack mounts it from the persistent
 `orchestrator_data` volume. Routine service restarts therefore retain instance,

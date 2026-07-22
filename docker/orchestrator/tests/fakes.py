@@ -1,6 +1,9 @@
 """Test double for DockerOrchestratorClient — records calls, touches no daemon."""
 
 
+from types import SimpleNamespace
+
+
 class FakeDockerOrchestratorClient:
     def __init__(self):
         self.services: dict[str, object] = {}
@@ -35,3 +38,6 @@ class FakeDockerOrchestratorClient:
 
     def list_managed_services(self):
         return list(self.services.values())
+
+    def list_managed_networks(self):
+        return [SimpleNamespace(name=name) for name in self.networks]

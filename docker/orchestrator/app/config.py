@@ -26,8 +26,31 @@ class Config:
     # Hard cap on total concurrent instances (mirrors MultiJuicer's maxInstances).
     MAX_INSTANCES = int(os.environ.get("ORCHESTRATOR_MAX_INSTANCES", "30"))
 
+    # A single participant must not be able to consume the global pool. This
+    # counts in-flight reservations as well as running instances, so parallel
+    # launches cannot race past the limit.
+    MAX_INSTANCES_PER_OWNER = int(os.environ.get("ORCHESTRATOR_MAX_INSTANCES_PER_OWNER", "3"))
+
+    # Resource ceilings applied to every participant-controlled workload
+    # service. Gateways have their own smaller hard-coded limits.
+    WORKLOAD_MEMORY_LIMIT_BYTES = int(os.environ.get("ORCHESTRATOR_WORKLOAD_MEMORY_LIMIT_MB", "512")) * 1024 * 1024
+    WORKLOAD_MEMORY_RESERVATION_BYTES = (
+        int(os.environ.get("ORCHESTRATOR_WORKLOAD_MEMORY_RESERVATION_MB", "128")) * 1024 * 1024
+    )
+    WORKLOAD_CPU_LIMIT_NANOS = int(float(os.environ.get("ORCHESTRATOR_WORKLOAD_CPU_LIMIT", "1.0")) * 1_000_000_000)
+
     # Idle instances are torn down after this many minutes without a touch.
     IDLE_GRACE_MINUTES = int(os.environ.get("ORCHESTRATOR_IDLE_GRACE_MINUTES", "120"))
+
+    # Absolute lifetime cap, independent of touches and solve countdowns.
+    MAX_INSTANCE_LIFETIME_MINUTES = int(
+        os.environ.get("ORCHESTRATOR_MAX_INSTANCE_LIFETIME_MINUTES", "240")
+    )
+
+    # Reservations older than this represent a worker that died mid-create.
+    # Releasing them lets the orphan sweep remove any Docker resources that
+    # were created before the worker disappeared.
+    RESERVATION_TIMEOUT_SECONDS = int(os.environ.get("ORCHESTRATOR_RESERVATION_TIMEOUT_SECONDS", "300"))
 
     # How often the reaper thread sweeps for idle instances.
     REAP_INTERVAL_SECONDS = int(os.environ.get("ORCHESTRATOR_REAP_INTERVAL_SECONDS", "60"))
