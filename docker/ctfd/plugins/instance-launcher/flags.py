@@ -57,8 +57,8 @@ class PerTeamDynamicFlag(BaseFlag):
 
 
 class PerTeamDynamicAlphaFlag(PerTeamDynamicFlag):
-    """Identical validation to PerTeamDynamicFlag -- the only difference is
-    the flag TYPE itself, which routes.py's _spec_with_secret_keys reads to
+    """Case/whitespace-tolerant validation for alphabetic flags. The distinct
+    flag TYPE is also what routes.py's _spec_with_secret_keys reads to
     decide whether the orchestrator should generate this level's value with
     generate_track_secrets() (any character) or generate_alpha_track_secrets()
     (letters only). Needed for levels whose secret gets embedded inside a
@@ -67,6 +67,23 @@ class PerTeamDynamicAlphaFlag(PerTeamDynamicFlag):
     would pass through unencrypted and visibly stand out against the rest
     of the encrypted passage."""
     name = "per_team_dynamic_alpha"
+
+    @staticmethod
+    def compare(chal_key_obj, provided):
+        user = get_current_user()
+        if user is None:
+            return False
+
+        row = TeamChallengeSecret.query.filter_by(
+            owner_id=str(user.account_id),
+            challenge_id=chal_key_obj.challenge_id,
+        ).first()
+        if row is None:
+            return False
+
+        expected = row.value.strip().casefold()
+        submitted = provided.strip().casefold()
+        return hmac.compare_digest(expected.encode(), submitted.encode())
 
 
 class PerTeamDynamicFixedFlag(PerTeamDynamicFlag):
