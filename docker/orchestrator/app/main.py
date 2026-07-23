@@ -5,13 +5,25 @@ reachable from CTFd's instance-launcher plugin over the orchestrator-internal
 overlay network (see docker/stack.yml). All /instances* and /ranges* routes
 require the X-Orchestrator-Auth header to match the shared secret both sides
 mount from the same Docker secret. /admin/* routes use X-Admin-Auth instead.
+
+/wallet/sync is the one exception to the X-Orchestrator-Auth rule: it's
+called by the Wargames release pipeline, not the CTFd plugin, and
+authenticates itself with an HMAC-SHA256 body signature (X-Hint-Wallet-
+Signature) against a dedicated secret instead -- see
+docs/P0-FIX-LOG-2026-07-23.md for the full contract. /wallet/deduct and
+/wallet/balance are CTFd-plugin-facing and use the normal
+X-Orchestrator-Auth check like /instances*.
 """
+import hashlib
 import hmac
+import json
 import logging
+import time
 
 from flask import Flask, jsonify, request
 
 from . import instance_types
+from . import wallet
 from .config import Config
 from .controller import (
     CapacityError,
@@ -26,7 +38,8 @@ from .instance_types import InvalidInstanceRequestError, VALID_TYPES
 from .naming import InvalidIdentifierError
 from .ports import PortAllocator, PortsExhaustedError
 from .reaper import Reaper
-from .store import InstanceStore, RangeStore
+from .store import InstanceStore, RangeStore, WalletStore
+from .wallet import WalletIncompleteTracksError, WalletSchemaError, WalletValidationError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -59,6 +72,7 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
     docker_client = docker_client or DockerOrchestratorClient(cfg.DOCKER_SOCKET)
     store = InstanceStore(db_path=cfg.STORE_DB_PATH)
     range_store = RangeStore(db_path=cfg.STORE_DB_PATH)
+    wallet_store = WalletStore(db_path=cfg.STORE_DB_PATH)
     port_allocator = PortAllocator(
         cfg.SSH_PORT_RANGE_START,
         cfg.SSH_PORT_RANGE_END,
@@ -92,7 +106,9 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
     if start_reaper:
         reaper.start()
 
-    app.config.update(cfg=cfg, controller=controller, store=store, range_store=range_store, reaper=reaper)
+    app.config.update(
+        cfg=cfg, controller=controller, store=store, range_store=range_store, wallet_store=wallet_store, reaper=reaper
+    )
 
     @app.get("/healthz")
     def healthz():
@@ -106,6 +122,11 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             provided = request.headers.get("X-Admin-Auth")
             if not _authorized(provided, cfg.ADMIN_PASSWORD):
                 return jsonify(error="unauthorized"), 401
+            return None
+        if request.path == "/wallet/sync":
+            # Authenticated inside the route itself via HMAC body signature
+            # against a dedicated secret -- a different trust boundary than
+            # X-Orchestrator-Auth (release pipeline, not the CTFd plugin).
             return None
         provided = request.headers.get("X-Orchestrator-Auth")
         if not _authorized(provided, cfg.PLUGIN_SHARED_SECRET):
@@ -202,6 +223,108 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
         if not removed:
             return jsonify(error="not found"), 404
         return jsonify(status="removed"), 200
+
+    # ── Hint wallet ──────────────────────────────────────────────────────────
+    @app.post("/wallet/sync")
+    def wallet_sync():
+        raw_body = request.get_data()  # exact bytes, before any JSON re-encoding
+        secret_ids = {
+            "current": cfg.HINT_WALLET_SYNC_SECRET,
+            "previous": cfg.HINT_WALLET_SYNC_SECRET_PREVIOUS,
+        }
+        secret_ids = {sid: value for sid, value in secret_ids.items() if value}
+        if not secret_ids:
+            logger.error("wallet sync rejected: no hint_wallet_sync_secret configured")
+            return jsonify(error="secret_or_database_unavailable"), 503
+
+        signature = request.headers.get("X-Hint-Wallet-Signature", "")
+        matched_secret_id = None
+        if signature:
+            for secret_id, secret_value in secret_ids.items():
+                expected = hmac.new(secret_value.encode(), raw_body, hashlib.sha256).hexdigest()
+                if hmac.compare_digest(signature, expected):
+                    matched_secret_id = secret_id
+                    break
+        if matched_secret_id is None:
+            logger.warning("wallet sync rejected: invalid_signature")
+            return jsonify(error="invalid_signature"), 401
+
+        try:
+            bundle = json.loads(raw_body)
+        except (ValueError, TypeError):
+            logger.warning("wallet sync rejected: invalid_schema (unparseable JSON) secret_id=%s", matched_secret_id)
+            return jsonify(error="invalid_schema"), 400
+
+        try:
+            manifests = wallet.validate_bundle(bundle)
+        except WalletSchemaError as exc:
+            logger.warning("wallet sync rejected: invalid_schema (%s) secret_id=%s", exc, matched_secret_id)
+            return jsonify(error="invalid_schema"), 400
+        except WalletIncompleteTracksError as exc:
+            logger.warning("wallet sync rejected: incomplete_tracks (%s) secret_id=%s", exc, matched_secret_id)
+            return jsonify(error="incomplete_tracks"), 400
+        except WalletValidationError as exc:
+            logger.warning("wallet sync rejected: catalog_validation_failed (%s) secret_id=%s", exc, matched_secret_id)
+            return jsonify(error="catalog_validation_failed"), 422
+
+        revision = bundle["revision"]
+        catalog_digest = hashlib.sha256(raw_body).hexdigest()
+
+        try:
+            result = wallet_store.try_accept_catalog(revision, catalog_digest, manifests, matched_secret_id)
+        except Exception:
+            logger.exception("wallet sync failed: database error secret_id=%s revision=%s", matched_secret_id, revision)
+            return jsonify(error="secret_or_database_unavailable"), 503
+
+        logger.info(
+            "wallet sync result=%s secret_id=%s revision=%s digest=%s at=%s",
+            result, matched_secret_id, revision, catalog_digest, time.time(),
+        )
+        if result == "stale":
+            return jsonify(error="stale_revision"), 409
+        if result == "conflict":
+            return jsonify(error="revision_digest_conflict"), 409
+        # "accepted" or "idempotent" -- both are success from the caller's
+        # point of view (idempotent retry of an already-applied revision).
+        return jsonify(status=result, revision=revision, digest=catalog_digest), 200
+
+    @app.post("/wallet/deduct")
+    def wallet_deduct():
+        body = request.get_json(silent=True) or {}
+        owner_id = body.get("owner_id")
+        track = body.get("track")
+        entry_name = body.get("entry_name")
+        tier = body.get("tier")
+        if not owner_id or not track or not entry_name or not isinstance(tier, int) or isinstance(tier, bool):
+            return jsonify(error="'owner_id', 'track', 'entry_name', and integer 'tier' are required"), 400
+
+        catalog = wallet_store.get_catalog()
+        if catalog is None:
+            return jsonify(error="no_active_catalog"), 409
+        cost = wallet.find_hint_cost(catalog["manifests"], track, entry_name, tier)
+        if cost is None:
+            return jsonify(error="hint_not_found"), 404
+
+        status, balance = wallet_store.unlock_hint(owner_id, track, entry_name, tier, cost)
+        if status == "insufficient_balance":
+            return jsonify(error="insufficient_balance", balance=balance, cost=cost), 402
+
+        content = wallet.find_hint_content(catalog["manifests"], track, entry_name, tier)
+        return jsonify(status=status, balance=balance, cost=cost, content=content), 200
+
+    @app.get("/wallet/balance/<owner_id>")
+    def wallet_balance(owner_id: str):
+        return jsonify(owner_id=owner_id, balance=wallet_store.get_balance(owner_id)), 200
+
+    @app.post("/wallet/credit")
+    def wallet_credit():
+        body = request.get_json(silent=True) or {}
+        owner_id = body.get("owner_id")
+        amount = body.get("amount")
+        if not owner_id or not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+            return jsonify(error="'owner_id' and a positive integer 'amount' are required"), 400
+        new_balance = wallet_store.credit(owner_id, amount)
+        return jsonify(owner_id=owner_id, balance=new_balance), 200
 
     # ── Admin ────────────────────────────────────────────────────────────────
     @app.get("/admin/instances")

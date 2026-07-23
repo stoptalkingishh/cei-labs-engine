@@ -619,3 +619,225 @@ class RangeStore:
             )
             for plan_json, created_at, last_accessed, target_keys_json in rows
         ]
+
+
+class WalletStore:
+    """SQLite-backed hint-wallet state: the accepted three-track catalog
+    (`wallet_catalog`, a singleton row -- see the revision/digest contract in
+    docs/P0-FIX-LOG-2026-07-23.md), per-team credit balances
+    (`team_balance`), and a record of which (owner, track, entry, tier)
+    hints have already been unlocked (`wallet_unlocks`), so a retried
+    /wallet/deduct call is idempotent instead of double-charging.
+
+    Same cross-process-safety rationale as InstanceStore/RangeStore above:
+    gunicorn workers are separate processes, so state that must never race
+    (accepting a catalog, spending a balance) is done inside a `BEGIN
+    IMMEDIATE` transaction on the one shared SQLite file rather than in
+    Python-level locking that only covers one process.
+    """
+
+    def __init__(self, db_path: str = ":memory:"):
+        self._db_path = db_path
+        self._local = threading.local()
+        self._open_conns: list[sqlite3.Connection] = []
+        self._open_conns_lock = threading.Lock()
+        self._init_schema()
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self._db_path, timeout=30, isolation_level=None, check_same_thread=False)
+            conn.execute("PRAGMA busy_timeout=30000")
+            for attempt in range(_SQLITE_INIT_RETRIES):
+                try:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or attempt == _SQLITE_INIT_RETRIES - 1:
+                        conn.close()
+                        raise
+                    time.sleep(_SQLITE_INIT_RETRY_SECONDS)
+            self._local.conn = conn
+            with self._open_conns_lock:
+                self._open_conns.append(conn)
+        return conn
+
+    def close(self) -> None:
+        with self._open_conns_lock:
+            for conn in self._open_conns:
+                conn.close()
+            self._open_conns.clear()
+
+    def _init_schema(self) -> None:
+        conn = self._conn()
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wallet_catalog (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                revision INTEGER NOT NULL,
+                digest TEXT NOT NULL,
+                bundle_json TEXT NOT NULL,
+                secret_id TEXT NOT NULL,
+                accepted_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS team_balance (
+                owner_id TEXT PRIMARY KEY,
+                balance INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wallet_unlocks (
+                owner_id TEXT NOT NULL,
+                track TEXT NOT NULL,
+                entry_name TEXT NOT NULL,
+                tier INTEGER NOT NULL,
+                cost INTEGER NOT NULL,
+                unlocked_at REAL NOT NULL,
+                PRIMARY KEY (owner_id, track, entry_name, tier)
+            )
+            """
+        )
+
+    # ── Catalog sync ─────────────────────────────────────────────────────
+    def get_catalog(self) -> "dict | None":
+        row = self._conn().execute(
+            "SELECT revision, digest, bundle_json, secret_id, accepted_at FROM wallet_catalog WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return None
+        revision, digest, bundle_json, secret_id, accepted_at = row
+        return {
+            "revision": revision,
+            "digest": digest,
+            "manifests": json.loads(bundle_json),
+            "secret_id": secret_id,
+            "accepted_at": accepted_at,
+        }
+
+    def try_accept_catalog(self, revision: int, digest: str, manifests: list, secret_id: str) -> str:
+        """Atomically apply the revision/digest state machine documented in
+        docs/P0-FIX-LOG-2026-07-23.md:
+
+          - no catalog yet, or revision strictly greater than stored -> the
+            new catalog is committed; returns "accepted".
+          - revision equal to stored and digest equal -> idempotent retry,
+            no write; returns "idempotent".
+          - revision equal to stored and digest different -> returns
+            "conflict" (caller maps to 409 revision_digest_conflict).
+          - revision less than stored -> returns "stale" (caller maps to
+            409 stale_revision).
+
+        The whole check-then-write is inside one BEGIN IMMEDIATE transaction
+        so two concurrent /wallet/sync calls (e.g. a retried deploy racing
+        the original) can't both observe "no catalog yet" and both try to
+        insert -- exactly the same race class InstanceStore.reserve() closes
+        for instance creation.
+        """
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT revision, digest FROM wallet_catalog WHERE id = 1").fetchone()
+            if row is not None:
+                current_revision, current_digest = row
+                if revision < current_revision:
+                    conn.execute("COMMIT")
+                    return "stale"
+                if revision == current_revision:
+                    conn.execute("COMMIT")
+                    return "idempotent" if digest == current_digest else "conflict"
+            conn.execute(
+                "INSERT INTO wallet_catalog (id, revision, digest, bundle_json, secret_id, accepted_at) "
+                "VALUES (1, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET revision=excluded.revision, digest=excluded.digest, "
+                "bundle_json=excluded.bundle_json, secret_id=excluded.secret_id, accepted_at=excluded.accepted_at",
+                (revision, digest, json.dumps(manifests), secret_id, time.time()),
+            )
+            conn.execute("COMMIT")
+            return "accepted"
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+
+    # ── Balances ─────────────────────────────────────────────────────────
+    def get_balance(self, owner_id: str) -> int:
+        row = self._conn().execute(
+            "SELECT balance FROM team_balance WHERE owner_id = ?", (owner_id,)
+        ).fetchone()
+        return row[0] if row is not None else 0
+
+    def credit(self, owner_id: str, amount: int) -> int:
+        """Atomically add `amount` (must be > 0) to a team's balance,
+        creating the row on first credit. Returns the new balance."""
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO team_balance (owner_id, balance) VALUES (?, ?) "
+                "ON CONFLICT(owner_id) DO UPDATE SET balance = balance + excluded.balance",
+                (owner_id, amount),
+            )
+            (new_balance,) = conn.execute(
+                "SELECT balance FROM team_balance WHERE owner_id = ?", (owner_id,)
+            ).fetchone()
+            conn.execute("COMMIT")
+            return new_balance
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+
+    def unlock_hint(self, owner_id: str, track: str, entry_name: str, tier: int, cost: int):
+        """Atomically spend `cost` against `owner_id`'s balance to unlock one
+        hint tier, unless it was already unlocked (idempotent retry -- a
+        plugin request that timed out client-side after server-side success
+        must not double-charge on retry).
+
+        Returns (status, balance) where status is one of "unlocked",
+        "already_unlocked", "insufficient_balance". The whole
+        check-balance-then-spend sequence runs inside one BEGIN IMMEDIATE
+        transaction so concurrent deduct calls for the same team can't both
+        read the same starting balance and both succeed past a check that
+        should only let one of them through -- the double-spend race this
+        table exists to close.
+        """
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            already = conn.execute(
+                "SELECT cost FROM wallet_unlocks WHERE owner_id = ? AND track = ? AND entry_name = ? AND tier = ?",
+                (owner_id, track, entry_name, tier),
+            ).fetchone()
+            if already is not None:
+                conn.execute("COMMIT")
+                return "already_unlocked", self.get_balance(owner_id)
+            row = conn.execute(
+                "SELECT balance FROM team_balance WHERE owner_id = ?", (owner_id,)
+            ).fetchone()
+            balance = row[0] if row is not None else 0
+            if balance < cost:
+                conn.execute("COMMIT")
+                return "insufficient_balance", balance
+            new_balance = balance - cost
+            conn.execute(
+                "INSERT INTO team_balance (owner_id, balance) VALUES (?, ?) "
+                "ON CONFLICT(owner_id) DO UPDATE SET balance = excluded.balance",
+                (owner_id, new_balance),
+            )
+            conn.execute(
+                "INSERT INTO wallet_unlocks (owner_id, track, entry_name, tier, cost, unlocked_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (owner_id, track, entry_name, tier, cost, time.time()),
+            )
+            conn.execute("COMMIT")
+            return "unlocked", new_balance
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
