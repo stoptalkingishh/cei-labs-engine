@@ -148,6 +148,65 @@ and confirm login actually works (nonce → `POST /login` → session cookie →
 `GET /api/v1/users/me` returns the admin identity), not just that the login
 page renders.
 
+## Rotating `hint_wallet_sync_secret`
+
+`hint_wallet_sync_secret` (`docker/stack.yml`) is `file:`-sourced from
+`docker/secrets/hint_wallet_sync_secret.txt`, same as the platform's other
+secrets — see `docs/P0-FIX-LOG-2026-07-23.md` for why it was built that way
+(it mirrors `plugin_shared_secret`'s existing convention rather than
+inventing a new provisioning path). It's a dedicated HMAC-signing secret
+shared with `CEI-Labs-Wargames/deploy.sh`'s `sync_hint_wallet_bundle()`, and
+is live in production, so rotating it needs an overlap window rather than a
+hard cutover — a mid-rotation `POST /wallet/sync` signed with whichever
+value the Wargames CI side hasn't picked up yet must not be rejected.
+
+The application side of this is already built and tested (`app/config.py`'s
+`HINT_WALLET_SYNC_SECRET_PREVIOUS`, `app/main.py`'s `wallet_sync()`, and
+`docker/orchestrator/tests/test_wallet_api.py`'s rotation-window cases) — a
+signature matching *either* the current or previous secret is accepted.
+What's genuinely missing is the operator runbook for actually using it,
+since `hint_wallet_sync_secret_previous` is deliberately left undeclared in
+`docker/stack.yml` until a rotation is actually happening (see that file's
+comments) rather than sitting there unused between rotations.
+
+To rotate:
+
+1. **Generate the new value** and hand it to whoever controls the Wargames
+   CI secret store (out-of-band, protected channel) as the new
+   `HINT_WALLET_SYNC_SECRET` — but don't have them switch to it yet.
+2. **Preserve the retiring value** as `hint_wallet_sync_secret_previous`
+   before overwriting the primary secret — Docker secrets are write-only
+   (no read-back), so copy it *from* wherever it was originally generated/
+   recorded, not from the live Swarm secret:
+   ```bash
+   umask 077 && printf '%s' "$OLD_VALUE" | docker secret create hint_wallet_sync_secret_previous -
+   ```
+3. Uncomment the `hint_wallet_sync_secret_previous` secret definition in
+   `docker/stack.yml` and its mount under the `orchestrator` service (**not**
+   `ctfd` — the orchestrator is what verifies the HMAC signature; the ctfd
+   hint-wallet plugin only proxies the sync request through unchanged),
+   then redeploy: `docker stack deploy -c docker/stack.yml cei-labs`.
+4. Rotate the primary secret. Docker secrets can't be updated in place —
+   create a new one and repoint the service:
+   ```bash
+   umask 077 && openssl rand -base64 48 | docker secret create hint_wallet_sync_secret_v2 -
+   ```
+   update `docker/stack.yml`'s `hint_wallet_sync_secret` definition to point
+   at the new secret object (or `docker secret create` under the same
+   external name if you've since moved it off `file:` sourcing), redeploy,
+   and give the same new value to the Wargames CI secret store as the new
+   `HINT_WALLET_SYNC_SECRET`.
+5. **Verify the overlap works**: confirm a sync signed with the *old* value
+   still succeeds (still-in-flight CI runs that haven't picked up the new
+   value) and a sync signed with the *new* value also succeeds.
+6. **Close the window** once you've confirmed the Wargames CI side is
+   fully on the new value (check its last few deploy job logs, not just
+   assume): remove the `hint_wallet_sync_secret_previous` mount and secret
+   definition from `docker/stack.yml`, redeploy, then
+   `docker secret rm hint_wallet_sync_secret_previous`. Don't leave the
+   overlap open longer than the rotation actually needs — a retired secret
+   that still verifies is a liability, not a convenience.
+
 ## Known limitation of this setup
 
 A single-node Docker Desktop Swarm satisfies every placement constraint the

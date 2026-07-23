@@ -62,6 +62,25 @@ secrets:
     file: ./secrets/credential_encryption_key.txt
   hint_wallet_sync_secret:
     file: ./secrets/hint_wallet_sync_secret.txt
+  # Rotation-only. The orchestrator (app/config.py's HINT_WALLET_SYNC_SECRET_
+  # PREVIOUS, see app/main.py's wallet_sync()) already accepts a signature
+  # from either this or the primary hint_wallet_sync_secret above, so no
+  # app code is needed to use this -- only provisioning it. Deliberately
+  # `external: true`, not `file:`-based like the primary secret: this only
+  # exists for the short, coordinated window of a secret rotation, so an
+  # operator creates it directly rather than it living in a tracked
+  # ./secrets/ file that would need to be added and then removed again a
+  # few hours later. Uncomment this block plus the matching secret under
+  # the `orchestrator` service below only while a rotation is in progress;
+  # see docs/local-testing-deployment.md's "Rotating hint_wallet_sync_secret"
+  # section for the full runbook.
+  #
+  #   umask 077 && openssl rand -base64 48 | docker secret create hint_wallet_sync_secret_previous -
+  #
+  # (in practice: rename/reuse the *retiring* primary secret's value here,
+  # not a freshly generated one -- see the runbook.)
+  # hint_wallet_sync_secret_previous:
+  #   external: true
 
 services:
   # ── Ingress ────────────────────────────────────────────────────────────────
@@ -283,6 +302,15 @@ services:
       - ctf_key
       - credential_encryption_key
       - hint_wallet_sync_secret
+      # Rotation-only: uncomment together with the `hint_wallet_sync_secret_
+      # previous` secret definition above once that external secret has been
+      # created, so /run/secrets/hint_wallet_sync_secret_previous exists and
+      # app/config.py's HINT_WALLET_SYNC_SECRET_PREVIOUS picks it up. Note
+      # this is the `orchestrator` service, not `ctfd` -- the orchestrator is
+      # what verifies the HMAC signature on POST /wallet/sync (app/main.py's
+      # wallet_sync()); the ctfd hint-wallet plugin only proxies the request
+      # through unchanged and never touches this secret itself.
+      # - hint_wallet_sync_secret_previous
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - orchestrator_data:/var/lib/cei-orchestrator
