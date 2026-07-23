@@ -44,6 +44,43 @@ sits in front of this stack needs to resolve, **as a wildcard**:
 A single non-wildcard DNS record only covers the scoreboard and will
 silently break every orchestrator-launched challenge instance for players.
 
+## Stable access endpoint
+
+**The failure this section prevents:** an earlier event advertised a
+station address of `192.168.1.131` in participant launch instructions.
+That address was later reassigned away from the station (DHCP renewal /
+NIC change), so the advertised endpoint timed out for players mid-event,
+while a direct virtual-switch address (`172.20.10.2`) still worked locally.
+The root problem was not the code — `BASE_DOMAIN` (`docker/.env`,
+consumed by `Config.BASE_DOMAIN` in `docker/orchestrator/app/config.py`)
+is already a configurable value, never a hardcoded IP anywhere in this
+repo — it was that a person copied a point-in-time LAN IP into a
+participant-facing document and it was never revisited.
+
+**The fix is operational, not architectural:**
+
+- Always give players the DNS/hostname form: `https://ctfd.${BASE_DOMAIN}/`
+  (see the DNS section above for what must resolve, as a wildcard). Do not
+  hand out a bare IP as the primary instructions unless there genuinely is
+  no DNS for this event.
+- If a bare-IP fallback is unavoidable (no DNS available), Traefik's
+  `HostRegexp` rule on the `ctfd` router already accepts it — but treat
+  that IP as **perishable, event-day state**, not a fact to freeze into a
+  handout. Re-check and re-document it immediately before each event,
+  every time, from the actual running station — never reuse a value from
+  a previous event's notes.
+- **Current value for this station, confirmed live 2026-07-23:**
+  `192.168.1.173` (SSH and the Docker Swarm manager both answer there).
+  This will go stale the same way `192.168.1.131` did if the station's
+  network configuration changes — re-verify with `ip addr` / `hostname -I`
+  on the manager node before relying on it, do not assume this document is
+  current.
+- Before an event: from a clean client on the player network, confirm the
+  documented hostname (or, if unavoidable, IP) actually resolves/reaches
+  CTFd, SSH, and noVNC — this is the acceptance check called out in the
+  P1 fix notes. Reboot or reconnect the station and re-run the same check;
+  update the documented endpoint immediately if it changed.
+
 ## TLS
 
 LAN/air-gapped default (`USE_LETSENCRYPT=false`): Traefik presents a
