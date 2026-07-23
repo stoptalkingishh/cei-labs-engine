@@ -113,6 +113,108 @@ def test_reboot_missing_instance_404(client):
     assert resp.status_code == 404
 
 
+# ── idle pause / resume: the credential-lifecycle fix, end-to-end over HTTP ────
+# These simulate the real bug report: a learner leaves an environment idle,
+# the orchestrator's own reaper sweeps it (exactly as the background thread
+# would), and the learner comes back later. The credentials/flags they were
+# given at launch must still work -- and the API must say "resumed", not
+# silently reissue new ones under an "exists"/"created" label.
+
+def test_idle_then_resume_preserves_credentials_over_http(client):
+    create_resp = client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    assert create_resp.get_json()["status"] == "created"
+    original_access = create_resp.get_json()["access"]
+
+    controller = client.application.config["controller"]
+    store = client.application.config["store"]
+    reaper = client.application.config["reaper"]
+
+    # Simulate having been idle past the grace period, then run exactly the
+    # sweep the background reaper thread would run.
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 999999
+    store.update(record)
+    assert reaper.sweep() >= 1
+    assert store.get("team-1", "juice").stopped is True
+
+    # A learner reopening the challenge in CTFd hits this same endpoint --
+    # no `relaunch` flag, exactly like the idempotent "exists" case.
+    resume_resp = client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    assert resume_resp.status_code == 200
+    body = resume_resp.get_json()
+    # Must clearly signal "resumed a paused environment", not be
+    # indistinguishable from "was already running" or "freshly created".
+    assert body["status"] == "resumed"
+    assert body["access"] == original_access  # exact same credentials
+    assert store.get("team-1", "juice").stopped is False
+
+    # And the instance is genuinely usable again, not just recorded as such.
+    status = client.get("/instances/team-1/juice", headers=PLUGIN_HEADERS).get_json()
+    assert status["stopped"] is False
+
+
+def test_reboot_of_a_paused_instance_resumes_it_with_same_credentials(client):
+    create_resp = client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    original_access = create_resp.get_json()["access"]
+
+    store = client.application.config["store"]
+    reaper = client.application.config["reaper"]
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 999999
+    store.update(record)
+    reaper.sweep()
+    assert store.get("team-1", "juice").stopped is True
+
+    resp = client.post("/instances/team-1/juice/reboot", headers=PLUGIN_HEADERS)
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "resumed"
+    assert store.get("team-1", "juice").stopped is False
+
+    status = client.get("/instances/team-1/juice", headers=PLUGIN_HEADERS).get_json()
+    assert status["access"] == original_access
+
+
+def test_explicit_relaunch_after_pause_reports_rotated_credentials(client):
+    """The one case where credentials SHOULD change, and the API must say
+    so clearly -- not silently swap them under a resume-shaped response."""
+    create_resp = client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    original_access = create_resp.get_json()["access"]
+
+    store = client.application.config["store"]
+    reaper = client.application.config["reaper"]
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 999999
+    store.update(record)
+    reaper.sweep()
+    assert store.get("team-1", "juice").stopped is True
+
+    resp = client.post("/instances", json={**WEB_APP_PAYLOAD, "relaunch": True}, headers=PLUGIN_HEADERS)
+    assert resp.status_code == 201
+    body = resp.get_json()
+    # Matches the pre-existing convention (see test_relaunch_flag_recreates_
+    # the_instance above): an explicit relaunch always reports the same
+    # `status="created"` a first-ever create does, on a 201 -- the signal
+    # that credentials/flags changed is the 201 (only ever returned for a
+    # freshly (re)built environment) together with a different `access`
+    # payload, never the ambiguous 200 "exists"/"resumed" a caller could
+    # mistake for their already-known values still being valid.
+    assert body["status"] == "created"
+    assert store.get("team-1", "juice").stopped is False
+    # (web-app's own creds live in caller-supplied `env`/CTFd metadata, not
+    # generated access fields, so we only assert the lifecycle signaling
+    # here -- instance_types-level credential rotation on relaunch is
+    # covered directly in tests/test_controller.py.)
+
+
+def test_instance_response_reports_idle_pause_and_expiry_countdowns(client):
+    client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    status = client.get("/instances/team-1/juice", headers=PLUGIN_HEADERS).get_json()
+    assert status["stopped"] is False
+    assert "idle_pause_at" in status
+    assert "expires_at" in status
+    assert status["expires_at"] > status["idle_pause_at"]  # FakeConfig: 240min > 120min ceilings
+
+
 # ── shutdown countdown ────────────────────────────────────────────────────────
 
 def test_schedule_and_extend_shutdown(client):

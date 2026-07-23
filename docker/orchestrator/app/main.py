@@ -41,11 +41,32 @@ def _authorized(provided: "str | None", expected: str) -> bool:
     return hmac.compare_digest(provided, expected)
 
 
-def _instance_response(record) -> dict:
-    body = {"type": record.plan.type, "access": record.plan.access, "idle_seconds": record.idle_seconds()}
+def _instance_response(record, cfg: "Config | None" = None) -> dict:
+    body = {
+        "type": record.plan.type,
+        "access": record.plan.access,
+        "idle_seconds": record.idle_seconds(),
+        # Non-destructive pause state (idle timeout / post-solve countdown
+        # already fired, container stopped) vs. live -- NOT the same thing
+        # as "gone": a stopped instance's credentials/flags are unchanged
+        # and a create_or_get()/reboot() call resumes it with the same
+        # values. See controller.py's "Pause / resume" section.
+        "stopped": record.stopped,
+    }
     if record.shutdown_pending():
         body["shutdown_at"] = record.shutdown_at
         body["extensions_used"] = record.extensions_used
+    if cfg is not None:
+        # Countdown/warning info for callers, per
+        # docs/P0-FIX-LOG-2026-07-23.md's expiration-behavior notes: idle
+        # pausing is non-destructive (credentials survive), but the
+        # absolute lifetime ceiling below is a real, one-way expiration --
+        # once it fires the record itself is deleted and any later access
+        # is a brand-new environment with brand-new credentials.
+        if not record.stopped:
+            body["idle_pause_at"] = record.last_accessed + cfg.IDLE_GRACE_MINUTES * 60
+        if cfg.MAX_INSTANCE_LIFETIME_MINUTES:
+            body["expires_at"] = record.created_at + cfg.MAX_INSTANCE_LIFETIME_MINUTES * 60
     return body
 
 
@@ -127,6 +148,15 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
         if not owner_id or not instance_key:
             return jsonify(error="'owner_id' and 'instance_key' are required"), 400
 
+        # Recorded before the call: create_or_get() clears `stopped` itself
+        # when it resumes a paused record, so this is the only place left to
+        # tell "resumed a paused environment" apart from "already running,
+        # untouched" -- both report created=False from create_or_get().
+        was_stopped = False
+        if not force_relaunch:
+            existing_before = store.get(owner_id, instance_key)
+            was_stopped = existing_before.stopped if existing_before is not None else False
+
         try:
             plan, created = controller.create_or_get(instance_type, owner_id, instance_key, spec, force_relaunch)
         except (InvalidInstanceRequestError, InvalidIdentifierError) as exc:
@@ -137,7 +167,18 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             logger.exception("failed to create instance owner=%s key=%s", owner_id, instance_key)
             return jsonify(error="internal error creating instance"), 500
 
-        status = "created" if created else ("relaunched" if force_relaunch else "exists")
+        # "relaunched" is the only status where credentials/flags actually
+        # changed -- it's the sole caller-visible signal that an explicit
+        # reset happened, vs. "resumed" (same credentials, container was
+        # paused) or "exists" (same credentials, was already running).
+        if created:
+            status = "created"
+        elif force_relaunch:
+            status = "relaunched"
+        elif was_stopped:
+            status = "resumed"
+        else:
+            status = "exists"
         return jsonify(status=status, type=plan.type, access=plan.access), 201 if created else 200
 
     @app.get("/instances/<owner_id>/<instance_key>")
@@ -147,7 +188,7 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             return jsonify(error="not found"), 404
         record.touch()
         store.touch(owner_id, instance_key)
-        return jsonify(**_instance_response(record))
+        return jsonify(**_instance_response(record, cfg))
 
     @app.delete("/instances/<owner_id>/<instance_key>")
     def delete_instance(owner_id: str, instance_key: str):
@@ -158,10 +199,17 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
 
     @app.post("/instances/<owner_id>/<instance_key>/reboot")
     def reboot_instance(owner_id: str, instance_key: str):
+        # Same credentials/flags either way -- reboot() never generates a
+        # fresh plan (only force_relaunch=True does). This only tells the
+        # caller which path was taken (in-place restart vs. resuming a
+        # paused instance), not that anything about the environment itself
+        # changed.
+        record = store.get(owner_id, instance_key)
+        was_stopped = record.stopped if record is not None else False
         ok = controller.reboot(owner_id, instance_key)
         if not ok:
             return jsonify(error="not found"), 404
-        return jsonify(status="rebooting"), 200
+        return jsonify(status="resumed" if was_stopped else "rebooting"), 200
 
     # ── Post-solve shutdown countdown ────────────────────────────────────────
     @app.post("/instances/<owner_id>/<instance_key>/schedule-shutdown")
@@ -191,10 +239,12 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
     # ── Ranges (shared target-attacker attacker + network) ──────────────────
     @app.post("/ranges/<owner_id>/attacker/reboot")
     def reboot_range_attacker(owner_id: str):
+        range_record = range_store.get(owner_id)
+        was_stopped = range_record.stopped if range_record is not None else False
         ok = controller.reboot_range_attacker(owner_id)
         if not ok:
             return jsonify(error="not found"), 404
-        return jsonify(status="rebooting"), 200
+        return jsonify(status="resumed" if was_stopped else "rebooting"), 200
 
     @app.delete("/ranges/<owner_id>")
     def delete_range(owner_id: str):
@@ -210,7 +260,7 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             {
                 "owner_id": r.owner_id,
                 "instance_key": r.instance_key,
-                **_instance_response(r),
+                **_instance_response(r, cfg),
                 "created_at": r.created_at,
             }
             for r in store.all()
@@ -224,6 +274,7 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
                 "access": r.plan.access,
                 "target_keys": sorted(r.target_keys),
                 "idle_seconds": r.idle_seconds(),
+                "stopped": r.stopped,
                 "created_at": r.created_at,
             }
             for r in range_store.all()
