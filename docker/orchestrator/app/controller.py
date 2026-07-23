@@ -105,9 +105,16 @@ class InstanceController:
             replacement_record = self.store.claim_for_replacement(owner_id, instance_key)
             owns_reservation = replacement_record is not None
         elif existing is not None:
+            if existing.stopped:
+                # Non-destructive idle/shutdown pause -- recreate the exact
+                # same Docker resources from the persisted plan (same env,
+                # same generated credentials/flags) instead of replanning.
+                # See pause()/_resume_range_if_stopped()'s docstrings.
+                self._resume_record(existing)
             existing.touch()
             self.store.touch(owner_id, instance_key)
             if existing.plan.range_owner_id:
+                self._resume_range_if_stopped(existing.plan.range_owner_id)
                 self.range_store.touch(existing.plan.range_owner_id)
             return existing.plan, False
 
@@ -240,6 +247,9 @@ class InstanceController:
                 self.range_store.finalize(owner_id, range_plan)
                 range_record = RangeRecord(plan=range_plan, created_at=time.time())
         else:
+            if range_record.stopped:
+                self._resume_range_if_stopped(owner_id)
+                range_record = self.range_store.get(owner_id)
             range_record.touch()
             self.range_store.touch(owner_id)
 
@@ -255,6 +265,89 @@ class InstanceController:
         range_record.target_keys.add(instance_key)
         self.range_store.update(range_record)
         return target_plan
+
+    # ── Pause / resume ("non-destructive stop") ──────────────────────────────
+    # Idle timeout and the post-solve shutdown countdown are automatic
+    # housekeeping, not an explicit "reset my environment" request from the
+    # learner. Neither may rotate credentials or flags -- so instead of the
+    # destructive teardown() path (which deletes the store row and forces a
+    # fresh plan_*() call, generating brand-new secrets, on next access),
+    # both now go through pause(): remove the running Docker resources but
+    # keep the record -- and therefore the exact plan/env that was baked in
+    # at creation time -- so create_or_get()/reboot() can recreate the
+    # identical container the next time the learner shows up. Only
+    # create_or_get(force_relaunch=True) (an explicit relaunch/reset) and
+    # teardown()/teardown_range() (explicit delete, or true absolute-lifetime
+    # expiry -- see reaper._sweep_expired_instances) still end with a fresh
+    # plan and therefore new credentials.
+    def _resume_record(self, record: InstanceRecord) -> None:
+        """Recreate a paused instance's Docker resources from its persisted
+        plan -- same env (same VNC/OPERATOR password, same flags) -- and
+        clear its stopped flag. Ports were never released on pause (see
+        pause()), so `access` (advertised connect host/port) stays valid
+        too."""
+        if record.plan.network:
+            self.docker.ensure_network(record.plan.network, internal=True)
+        self._create_services(record.plan.services)
+        record.stopped = False
+        self.store.update(record)
+
+    def _resume_range_if_stopped(self, owner_id: str) -> None:
+        range_record = self.range_store.get(owner_id)
+        if range_record is None or not range_record.stopped:
+            return
+        self.docker.ensure_network(range_record.plan.network, internal=True)
+        services = [range_record.plan.attacker_service]
+        if range_record.plan.gateway_service:
+            services.append(range_record.plan.gateway_service)
+        self._create_services(services)
+        range_record.stopped = False
+        self.range_store.update(range_record)
+
+    def pause(self, owner_id: str, instance_key: str) -> bool:
+        """Non-destructive stop used by the idle reaper and the post-solve
+        shutdown countdown. Removes the live Docker service(s)/network but
+        keeps the store row (plan, credentials, flags) intact and marks it
+        `stopped` so the next create_or_get()/reboot() recreates the exact
+        same environment rather than generating a new one. Deliberately does
+        NOT release this instance's published ports (see
+        PortAllocator/_create_single_target) so a resumed instance keeps the
+        same connect_host:connect_port a learner may already have been
+        given. Returns False if there's nothing to pause (no record, or
+        already paused) -- idempotent/safe for the reaper to call every
+        sweep."""
+        record = self.store.get(owner_id, instance_key)
+        if record is None or record.stopped:
+            return False
+        for svc_spec in record.plan.services:
+            self.docker.remove_service(svc_spec.name)
+        if record.plan.network:
+            self.docker.remove_network(record.plan.network)
+        record.stopped = True
+        # A pause supersedes any pending post-solve countdown -- there's
+        # nothing left running to shut down, and carrying a stale
+        # shutdown_at across a later resume would immediately re-trigger
+        # teardown on the next sweep.
+        record.shutdown_at = None
+        record.extensions_used = 0
+        self.store.update(record)
+        return True
+
+    def pause_range(self, owner_id: str) -> bool:
+        """Same as pause(), for a range's shared attacker+gateway. The
+        range's overlay network is deliberately left in place (targets on
+        it are paused/resumed independently via pause()/create_or_get()),
+        and its published SSH/noVNC ports are kept reserved for the same
+        reason pause() keeps an instance's ports."""
+        range_record = self.range_store.get(owner_id)
+        if range_record is None or range_record.stopped:
+            return False
+        self.docker.remove_service(range_record.plan.attacker_service.name)
+        if range_record.plan.gateway_service:
+            self.docker.remove_service(range_record.plan.gateway_service.name)
+        range_record.stopped = True
+        self.range_store.update(range_record)
+        return True
 
     # ── Teardown ──────────────────────────────────────────────────────────────
     def _teardown_record(self, record: InstanceRecord) -> None:
@@ -330,9 +423,20 @@ class InstanceController:
 
     # ── Reboot ("restart in place") ──────────────────────────────────────────
     def reboot(self, owner_id: str, instance_key: str) -> bool:
+        """Restarts the container(s) in place, same credentials/flags either
+        way: force_update() for a live instance (env is part of the existing
+        task spec, untouched), or -- if the instance is currently paused --
+        recreate it from the persisted plan, exactly like a normal resume."""
         record = self.store.get(owner_id, instance_key)
         if record is None:
             return False
+        if record.stopped:
+            self._resume_record(record)
+            record.touch()
+            self.store.touch(owner_id, instance_key)
+            if record.plan.range_owner_id:
+                self._resume_range_if_stopped(record.plan.range_owner_id)
+            return True
         record.touch()
         self.store.touch(owner_id, instance_key)
         ok = True
@@ -344,6 +448,10 @@ class InstanceController:
         range_record = self.range_store.get(owner_id)
         if range_record is None:
             return False
+        if range_record.stopped:
+            self._resume_range_if_stopped(owner_id)
+            self.range_store.touch(owner_id)
+            return True
         range_record.touch()
         self.range_store.touch(owner_id)
         return self.docker.restart_service(range_record.plan.attacker_service.name)

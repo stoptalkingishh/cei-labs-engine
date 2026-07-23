@@ -60,6 +60,8 @@ secrets:
     file: ./secrets/plugin_shared_secret.txt
   credential_encryption_key:
     file: ./secrets/credential_encryption_key.txt
+  hint_wallet_sync_secret:
+    file: ./secrets/hint_wallet_sync_secret.txt
 
 services:
   # ── Ingress ────────────────────────────────────────────────────────────────
@@ -280,6 +282,7 @@ services:
       - orchestrator_admin_password
       - ctf_key
       - credential_encryption_key
+      - hint_wallet_sync_secret
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - orchestrator_data:/var/lib/cei-orchestrator
