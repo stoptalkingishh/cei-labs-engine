@@ -65,12 +65,25 @@
           '" target="_blank" rel="noopener">Open Attacker Workstation (direct link)</a></p>';
       }
       if (access.attacker_username) {
+        html += '<p class="mb-1">Username: <code>' + escapeHtml(access.attacker_username) + "</code></p>";
+      }
+      // Two SEPARATE credentials, deliberately never merged into one
+      // "password" field: SSH and noVNC/VNC use different passwords for
+      // the same account, because TigerVNC silently truncates its
+      // password to 8 characters -- reusing one long value for both
+      // would make the displayed password work for SSH but silently fail
+      // over noVNC.
+      if (access.ssh_password) {
         html +=
-          '<p class="mb-1">Login: <code>' +
-          escapeHtml(access.attacker_username) +
-          "</code> / <code>" +
-          escapeHtml(access.attacker_password) +
-          '</code><br><small class="text-muted">Unique to your team — needed for both noVNC and SSH.</small></p>';
+          '<p class="mb-1">SSH / console password: <code>' +
+          escapeHtml(access.ssh_password) +
+          '</code></p>';
+      }
+      if (access.novnc_password) {
+        html +=
+          '<p class="mb-1">noVNC password: <code>' +
+          escapeHtml(access.novnc_password) +
+          '</code><br><small class="text-muted">Unique to your team — these are two different passwords for the same account.</small></p>';
       }
       if (access.target_hostname) {
         html += '<p class="mb-1">Target (from inside the attacker only): <code>' + escapeHtml(access.target_hostname) + "</code></p>";

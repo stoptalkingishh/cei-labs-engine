@@ -54,6 +54,14 @@ class InstanceRecord:
     last_accessed: float = field(default_factory=time.time)
     shutdown_at: "float | None" = None  # set after a correct flag submission
     extensions_used: int = 0
+    # True means the Docker resources (services/network) have been torn
+    # down non-destructively -- by the idle reaper or a post-solve
+    # shutdown, never by an explicit reset/relaunch -- while this row
+    # (and therefore `plan`, which carries the generated credentials and
+    # any per-team flags baked into env) is kept exactly as-is so a later
+    # resume recreates the identical container config instead of a fresh
+    # one with new secrets. See InstanceController.pause()/create_or_get().
+    stopped: bool = False
 
     @property
     def owner_id(self) -> str:
@@ -82,6 +90,9 @@ class RangeRecord:
     created_at: float
     last_accessed: float = field(default_factory=time.time)
     target_keys: set = field(default_factory=set)
+    # See InstanceRecord.stopped's docstring -- same meaning, for the
+    # shared range attacker+gateway.
+    stopped: bool = False
 
     @property
     def owner_id(self) -> str:
@@ -238,10 +249,25 @@ class InstanceStore:
                 last_accessed REAL NOT NULL,
                 shutdown_at REAL,
                 extensions_used INTEGER NOT NULL DEFAULT 0,
+                stopped INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (owner_id, instance_key)
             )
             """
         )
+        self._add_column_if_missing("instances", "stopped", "INTEGER NOT NULL DEFAULT 0")
+
+    def _add_column_if_missing(self, table: str, column: str, coltype: str) -> None:
+        """Migrates a pre-existing on-disk db (the `orchestrator_data`
+        volume survives across image upgrades) that predates this column.
+        CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so
+        the column has to be added out-of-band; sqlite has no
+        'ADD COLUMN IF NOT EXISTS', so just swallow the one error it raises
+        when the column is already there."""
+        try:
+            self._conn().execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     def reserve(
         self,
@@ -318,18 +344,18 @@ class InstanceStore:
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT plan_json, created_at, last_accessed, shutdown_at, extensions_used "
+                "SELECT plan_json, created_at, last_accessed, shutdown_at, extensions_used, stopped "
                 "FROM instances WHERE owner_id = ? AND instance_key = ?",
                 (owner_id, instance_key),
             ).fetchone()
             if row is None or row[0] is None:
                 conn.execute("COMMIT")
                 return None
-            plan_json, created_at, last_accessed, shutdown_at, extensions_used = row
+            plan_json, created_at, last_accessed, shutdown_at, extensions_used, stopped = row
             now = time.time()
             conn.execute(
                 "UPDATE instances SET plan_json = NULL, created_at = ?, last_accessed = ?, "
-                "shutdown_at = NULL, extensions_used = 0 "
+                "shutdown_at = NULL, extensions_used = 0, stopped = 0 "
                 "WHERE owner_id = ? AND instance_key = ?",
                 (now, now, owner_id, instance_key),
             )
@@ -344,6 +370,7 @@ class InstanceStore:
             last_accessed=last_accessed,
             shutdown_at=shutdown_at,
             extensions_used=extensions_used,
+            stopped=bool(stopped),
         )
 
     def finalize(self, owner_id: str, instance_key: str, plan: InstancePlan) -> None:
@@ -367,11 +394,11 @@ class InstanceStore:
         """One-shot upsert -- used by tests and by the reaper/relaunch paths
         that already know they hold an uncontested slot."""
         self._conn().execute(
-            "INSERT INTO instances (owner_id, instance_key, plan_json, created_at, last_accessed, shutdown_at, extensions_used) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "INSERT INTO instances (owner_id, instance_key, plan_json, created_at, last_accessed, shutdown_at, extensions_used, stopped) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(owner_id, instance_key) DO UPDATE SET "
             "plan_json=excluded.plan_json, created_at=excluded.created_at, last_accessed=excluded.last_accessed, "
-            "shutdown_at=excluded.shutdown_at, extensions_used=excluded.extensions_used",
+            "shutdown_at=excluded.shutdown_at, extensions_used=excluded.extensions_used, stopped=excluded.stopped",
             (
                 record.owner_id,
                 record.instance_key,
@@ -380,24 +407,26 @@ class InstanceStore:
                 record.last_accessed,
                 record.shutdown_at,
                 record.extensions_used,
+                int(record.stopped),
             ),
         )
 
     def get(self, owner_id: str, instance_key: str) -> "InstanceRecord | None":
         row = self._conn().execute(
-            "SELECT plan_json, created_at, last_accessed, shutdown_at, extensions_used "
+            "SELECT plan_json, created_at, last_accessed, shutdown_at, extensions_used, stopped "
             "FROM instances WHERE owner_id = ? AND instance_key = ?",
             (owner_id, instance_key),
         ).fetchone()
         if row is None or row[0] is None:  # no row, or a reservation still in flight
             return None
-        plan_json, created_at, last_accessed, shutdown_at, extensions_used = row
+        plan_json, created_at, last_accessed, shutdown_at, extensions_used, stopped = row
         return InstanceRecord(
             plan=_plan_from_json(plan_json),
             created_at=created_at,
             last_accessed=last_accessed,
             shutdown_at=shutdown_at,
             extensions_used=extensions_used,
+            stopped=bool(stopped),
         )
 
     def reservation_pending(self, owner_id: str, instance_key: str) -> bool:
@@ -417,12 +446,20 @@ class InstanceStore:
 
     def update(self, record: InstanceRecord) -> None:
         """Persist a mutated record back (shutdown_at / extensions_used /
-        last_accessed changes) -- call after mutating an object returned by
-        get(), since get() always returns a fresh, disconnected copy."""
+        last_accessed / stopped changes) -- call after mutating an object
+        returned by get(), since get() always returns a fresh, disconnected
+        copy."""
         self._conn().execute(
-            "UPDATE instances SET last_accessed = ?, shutdown_at = ?, extensions_used = ? "
+            "UPDATE instances SET last_accessed = ?, shutdown_at = ?, extensions_used = ?, stopped = ? "
             "WHERE owner_id = ? AND instance_key = ?",
-            (record.last_accessed, record.shutdown_at, record.extensions_used, record.owner_id, record.instance_key),
+            (
+                record.last_accessed,
+                record.shutdown_at,
+                record.extensions_used,
+                int(record.stopped),
+                record.owner_id,
+                record.instance_key,
+            ),
         )
 
     def remove(self, owner_id: str, instance_key: str) -> None:
@@ -432,7 +469,7 @@ class InstanceStore:
 
     def all(self) -> list:
         rows = self._conn().execute(
-            "SELECT plan_json, created_at, last_accessed, shutdown_at, extensions_used "
+            "SELECT plan_json, created_at, last_accessed, shutdown_at, extensions_used, stopped "
             "FROM instances WHERE plan_json IS NOT NULL"
         ).fetchall()
         return [
@@ -442,8 +479,9 @@ class InstanceStore:
                 last_accessed=last_accessed,
                 shutdown_at=shutdown_at,
                 extensions_used=extensions_used,
+                stopped=bool(stopped),
             )
-            for plan_json, created_at, last_accessed, shutdown_at, extensions_used in rows
+            for plan_json, created_at, last_accessed, shutdown_at, extensions_used, stopped in rows
         ]
 
     def count(self) -> int:
@@ -514,10 +552,20 @@ class RangeStore:
                 plan_json TEXT,
                 created_at REAL NOT NULL,
                 last_accessed REAL NOT NULL,
-                target_keys_json TEXT NOT NULL DEFAULT '[]'
+                target_keys_json TEXT NOT NULL DEFAULT '[]',
+                stopped INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        self._add_column_if_missing("ranges", "stopped", "INTEGER NOT NULL DEFAULT 0")
+
+    def _add_column_if_missing(self, table: str, column: str, coltype: str) -> None:
+        """See InstanceStore._add_column_if_missing's docstring."""
+        try:
+            self._conn().execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     def reserve(self, owner_id: str) -> bool:
         """Same pattern as InstanceStore.reserve -- atomically claim the
@@ -562,33 +610,35 @@ class RangeStore:
 
     def put(self, record: RangeRecord) -> None:
         self._conn().execute(
-            "INSERT INTO ranges (owner_id, plan_json, created_at, last_accessed, target_keys_json) "
-            "VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO ranges (owner_id, plan_json, created_at, last_accessed, target_keys_json, stopped) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(owner_id) DO UPDATE SET "
             "plan_json=excluded.plan_json, created_at=excluded.created_at, last_accessed=excluded.last_accessed, "
-            "target_keys_json=excluded.target_keys_json",
+            "target_keys_json=excluded.target_keys_json, stopped=excluded.stopped",
             (
                 record.owner_id,
                 _range_plan_to_json(record.plan),
                 record.created_at,
                 record.last_accessed,
                 json.dumps(sorted(record.target_keys)),
+                int(record.stopped),
             ),
         )
 
     def get(self, owner_id: str) -> "RangeRecord | None":
         row = self._conn().execute(
-            "SELECT plan_json, created_at, last_accessed, target_keys_json FROM ranges WHERE owner_id = ?",
+            "SELECT plan_json, created_at, last_accessed, target_keys_json, stopped FROM ranges WHERE owner_id = ?",
             (owner_id,),
         ).fetchone()
         if row is None or row[0] is None:
             return None
-        plan_json, created_at, last_accessed, target_keys_json = row
+        plan_json, created_at, last_accessed, target_keys_json, stopped = row
         return RangeRecord(
             plan=_range_plan_from_json(plan_json),
             created_at=created_at,
             last_accessed=last_accessed,
             target_keys=set(json.loads(target_keys_json)),
+            stopped=bool(stopped),
         )
 
     def touch(self, owner_id: str) -> None:
@@ -597,10 +647,10 @@ class RangeStore:
         )
 
     def update(self, record: RangeRecord) -> None:
-        """Persist mutated target_keys / last_accessed back."""
+        """Persist mutated target_keys / last_accessed / stopped back."""
         self._conn().execute(
-            "UPDATE ranges SET last_accessed = ?, target_keys_json = ? WHERE owner_id = ?",
-            (record.last_accessed, json.dumps(sorted(record.target_keys)), record.owner_id),
+            "UPDATE ranges SET last_accessed = ?, target_keys_json = ?, stopped = ? WHERE owner_id = ?",
+            (record.last_accessed, json.dumps(sorted(record.target_keys)), int(record.stopped), record.owner_id),
         )
 
     def remove(self, owner_id: str) -> None:
@@ -608,7 +658,7 @@ class RangeStore:
 
     def all(self) -> list:
         rows = self._conn().execute(
-            "SELECT plan_json, created_at, last_accessed, target_keys_json FROM ranges WHERE plan_json IS NOT NULL"
+            "SELECT plan_json, created_at, last_accessed, target_keys_json, stopped FROM ranges WHERE plan_json IS NOT NULL"
         ).fetchall()
         return [
             RangeRecord(
@@ -616,8 +666,9 @@ class RangeStore:
                 created_at=created_at,
                 last_accessed=last_accessed,
                 target_keys=set(json.loads(target_keys_json)),
+                stopped=bool(stopped),
             )
-            for plan_json, created_at, last_accessed, target_keys_json in rows
+            for plan_json, created_at, last_accessed, target_keys_json, stopped in rows
         ]
 
 

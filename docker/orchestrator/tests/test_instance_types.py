@@ -203,8 +203,9 @@ def test_range_attacker_hostname_has_no_instance_key_component():
     assert plan_a.attacker_service.name == plan_b.attacker_service.name
     assert plan_a.access["attacker_url"] == plan_b.access["attacker_url"]
     assert plan_a.access["connect_host"] == plan_b.access["connect_host"]
-    # attacker_password is randomized per call by design (see
-    # test_range_attacker_password_is_random_and_never_baked_in below) --
+    # ssh_password/novnc_password are randomized per call by design (see
+    # test_range_attacker_password_is_random_and_never_baked_in and
+    # test_range_attacker_ssh_and_novnc_passwords_are_distinct below) --
     # controller.py only calls this once per team per range lifetime, so
     # this per-call randomness doesn't mean the credential changes on every
     # challenge launch in practice.
@@ -215,23 +216,51 @@ def test_range_attacker_password_is_random_and_never_baked_in():
     # value baked into the image at build time (recoverable via `docker
     # inspect`/`docker history` by anyone who could pull the image) and
     # shared by every team. Each range must now get its own random,
-    # server-generated credential, injected only into that specific
+    # server-generated credentials, injected only into that specific
     # service's runtime environment.
     plan_a = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
     plan_b = it.plan_range_attacker("team-2", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
 
-    assert plan_a.access["attacker_password"]
-    assert plan_a.access["attacker_password"] != plan_b.access["attacker_password"]
-    assert len(plan_a.access["attacker_password"]) >= 20  # secrets.token_urlsafe(18)
+    assert plan_a.access["ssh_password"]
+    assert plan_a.access["ssh_password"] != plan_b.access["ssh_password"]
+    assert len(plan_a.access["ssh_password"]) >= 20  # secrets.token_urlsafe(18)
+
+    assert plan_a.access["novnc_password"]
+    assert plan_a.access["novnc_password"] != plan_b.access["novnc_password"]
 
     # Must reach the container via its runtime environment, not be assumed
-    # present in the image -- both env var names are set since either a
-    # kali-novnc (VNC_PASSWORD) or analyst (OPERATOR_PASSWORD) image could
-    # be configured as the attacker_image.
+    # present in the image.
     env = plan_a.attacker_service.env
-    assert env["VNC_PASSWORD"] == plan_a.access["attacker_password"]
-    assert env["OPERATOR_PASSWORD"] == plan_a.access["attacker_password"]
+    assert env["OPERATOR_PASSWORD"] == plan_a.access["ssh_password"]
+    assert env["VNC_PASSWORD"] == plan_a.access["novnc_password"]
     assert plan_a.access["attacker_username"] == "operator"
+
+
+def test_range_attacker_ssh_and_novnc_passwords_are_distinct():
+    # Regression test for the P0 bug: VNC_PASSWORD and OPERATOR_PASSWORD
+    # used to be set to the SAME generated string. TigerVNC silently
+    # truncates its password to 8 characters (vncpasswd -f doesn't warn,
+    # it just discards the rest), so a shared 20+ char value meant SSH got
+    # the full string while VNC only ever actually honored its first 8
+    # characters -- whatever was displayed as "the" password would
+    # silently fail to connect over noVNC. ssh_password and novnc_password
+    # must now be genuinely different values, and never surfaced as a
+    # single merged "password" field.
+    plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
+
+    assert plan.access["ssh_password"] != plan.access["novnc_password"]
+    assert "attacker_password" not in plan.access
+    assert "password" not in plan.access
+
+    # novnc_password is generated at exactly 8 characters -- the length
+    # TigerVNC actually honors -- rather than something longer that would
+    # just get silently truncated.
+    assert len(plan.access["novnc_password"]) == 8
+
+    env = plan.attacker_service.env
+    assert env["VNC_PASSWORD"] == plan.access["novnc_password"]
+    assert env["OPERATOR_PASSWORD"] == plan.access["ssh_password"]
+    assert env["VNC_PASSWORD"] != env["OPERATOR_PASSWORD"]
 
 
 def test_range_attacker_requires_attacker_image():
