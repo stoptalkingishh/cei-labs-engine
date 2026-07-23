@@ -65,8 +65,33 @@ with a different top-level package list, re-run the same clean-container
 install test before trusting it — this class of gap won't show up just from
 reading `dnf download`'s output.
 
-## 5. No real Fedora hardware available for end-to-end testing
+## 5. No real Fedora hardware available for end-to-end testing (RESOLVED 2026-07-22)
 
-Everything below was built/verified on Windows + Docker Desktop (WSL2
-backend), never on real Fedora 44 hardware or a real air-gapped network.
-See `docs/VERIFICATION.md` for exactly what was and wasn't exercised.
+Originally: everything below was built/verified on Windows + Docker Desktop
+(WSL2 backend), never on real Fedora 44 hardware or a real air-gapped
+network. Update: `offline-install.sh` was subsequently run end-to-end on
+real Fedora 44 hardware (a real air-gapped-style target, not a container),
+all 9 steps passing cleanly. That real-hardware run surfaced two genuine
+bugs neither reading nor container-based testing had caught — see item 4's
+sibling below and the `docker swarm init` multi-address fix already in the
+script — both fixed and folded back into this repo. See
+`docs/VERIFICATION.md` for what's now actually been exercised on real
+hardware vs. still only in containers.
+
+## 6. Swarm services didn't survive a real host reboot (found 2026-07-22, fixed)
+
+Found by actually rebooting the real Fedora test box (for an unrelated
+reason — installing a GPU-related kernel boot parameter), not by reading
+Swarm's docs: every service in `docker/stack.yml` was deployed with
+`restart_policy: condition: on-failure`. A clean host reboot stops
+containers with exit code 0, which Swarm correctly treats as "not a
+failure" under that policy — so the orchestrator never recreated the
+tasks, and the entire CTF stack (CTFd, its DB, Redis, the orchestrator,
+Traefik) stayed dead at 0/1 replicas indefinitely after every reboot,
+including this offline-install target, until someone noticed and manually
+re-ran `stack-up.sh`. Fixed by changing all five services to
+`restart_policy: condition: any`, which makes Swarm reconcile back up to
+the desired replica count regardless of why the previous task stopped.
+Verified live: rebooted the box again after the fix, redeployed, all 5
+services converged to 1/1 on their own and CTFd answered again. See
+[PR #10](https://github.com/stoptalkingishh/cei-labs-engine/pull/10).
