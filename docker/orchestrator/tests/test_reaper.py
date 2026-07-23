@@ -32,9 +32,12 @@ def test_sweep_leaves_fresh_instances_alone():
     assert store.count() == 1
 
 
-def test_sweep_removes_idle_instance_past_grace_period():
+# ── idle pausing (non-destructive: credentials/flags must survive) ─────────────
+
+def test_sweep_pauses_idle_instance_past_grace_period_without_deleting_it():
     reaper, controller, docker, store, _ = make_reaper(grace_minutes=1)
-    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    plan, _ = controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    original_env = dict(plan.services[0].env)
     record = store.get("team-1", "juice")
     record.last_accessed -= 120  # 2 minutes idle, grace is 1
     store.update(record)
@@ -42,11 +45,18 @@ def test_sweep_removes_idle_instance_past_grace_period():
     reaped = reaper.sweep()
 
     assert reaped == 1
-    assert store.count() == 0
+    # The record survives a pause -- only the running Docker resources go
+    # away. This is the crux of the credential-lifecycle fix: idle timeout
+    # must not delete the row that holds the generated credentials/env.
+    assert store.count() == 1
+    paused = store.get("team-1", "juice")
+    assert paused.stopped is True
+    assert paused.plan.services[0].env == original_env
     assert docker.services == {}
+    assert docker.networks == {}
 
 
-def test_sweep_only_reaps_the_idle_one():
+def test_sweep_only_pauses_the_idle_one():
     reaper, controller, docker, store, _ = make_reaper(grace_minutes=1)
     controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
     controller.create_or_get(it.WEB_APP, "team-2", "juice", {"image": "img"})
@@ -57,11 +67,64 @@ def test_sweep_only_reaps_the_idle_one():
     reaped = reaper.sweep()
 
     assert reaped == 1
-    assert store.get("team-1", "juice") is None
-    assert store.get("team-2", "juice") is not None
+    assert store.get("team-1", "juice").stopped is True
+    assert store.get("team-2", "juice").stopped is False
 
 
-def test_sweep_tears_down_range_target_and_its_shared_network():
+def test_sweep_does_not_repause_an_already_paused_instance():
+    reaper, controller, docker, store, _ = make_reaper(grace_minutes=1)
+    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 120
+    store.update(record)
+
+    assert reaper.sweep() == 1
+    assert reaper.sweep() == 0  # already stopped -- nothing left to do
+
+
+def test_paused_instance_resumes_with_identical_credentials():
+    reaper, controller, docker, store, _ = make_reaper(grace_minutes=1)
+    plan, _ = controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    original_env = dict(plan.services[0].env)
+    original_access = dict(plan.access)
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 120
+    store.update(record)
+    reaper.sweep()
+    assert store.get("team-1", "juice").stopped is True
+
+    resumed_plan, created = controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+
+    assert created is False
+    assert resumed_plan.services[0].env == original_env
+    assert resumed_plan.access == original_access
+    assert store.get("team-1", "juice").stopped is False
+    assert len(docker.services) == 2  # target + gateway recreated
+
+
+def test_relaunch_after_pause_does_rotate_credentials():
+    """The one path that's SUPPOSED to change credentials: an explicit
+    relaunch/reset, even against a currently-paused instance."""
+    reaper, controller, docker, store, _ = make_reaper(grace_minutes=1)
+    plan, _ = controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    original_env = dict(plan.services[0].env)
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 120
+    store.update(record)
+    reaper.sweep()
+    assert store.get("team-1", "juice").stopped is True
+
+    relaunched_plan, created = controller.create_or_get(
+        it.WEB_APP, "team-1", "juice", {"image": "img", "env": {"MARKER": "rotated"}}, force_relaunch=True
+    )
+
+    assert created is True
+    assert store.get("team-1", "juice").stopped is False
+    assert relaunched_plan.services[0].env != original_env
+    assert relaunched_plan.services[0].env.get("MARKER") == "rotated"
+
+
+def test_sweep_pauses_range_attacker_but_keeps_shared_network_for_resume():
     reaper, controller, docker, store, range_store = make_reaper(grace_minutes=1)
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"})
     record = store.get("team-1", "otw")
@@ -73,27 +136,33 @@ def test_sweep_tears_down_range_target_and_its_shared_network():
 
     reaper.sweep()
 
-    assert docker.networks == {}
+    # Both the target and the shared attacker/gateway are stopped...
     assert docker.services == {}
-    assert range_store.get("team-1") is None
+    assert store.get("team-1", "otw").stopped is True
+    assert range_store.get("team-1").stopped is True
+    # ...but the range's shared overlay network is NOT torn down on a
+    # pause (only on a real teardown_range()) -- targets/attacker resume
+    # back onto it later.
+    assert "chrange-team-1" in docker.networks
 
 
-def test_sweep_reaps_idle_range_even_with_no_remaining_targets():
+def test_sweep_pauses_idle_range_even_with_no_remaining_targets():
     reaper, controller, docker, store, range_store = make_reaper(grace_minutes=1)
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"})
-    controller.teardown("team-1", "otw")  # target gone, attacker/network remain
+    controller.teardown("team-1", "otw")  # target explicitly deleted, attacker/network remain
     range_record = range_store.get("team-1")
     range_record.last_accessed -= 120
     range_store.update(range_record)
 
     reaper.sweep()
 
-    assert range_store.get("team-1") is None
+    paused = range_store.get("team-1")
+    assert paused is not None
+    assert paused.stopped is True
     assert docker.services == {}
-    assert docker.networks == {}
 
 
-def test_sweep_leaves_active_range_alone_even_if_a_target_was_reaped():
+def test_sweep_leaves_active_range_alone_even_if_a_target_was_paused():
     reaper, controller, docker, store, range_store = make_reaper(grace_minutes=1)
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw-1", {"target_image": "t", "attacker_image": "k"})
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw-2", {"target_image": "t", "attacker_image": "k"})
@@ -104,16 +173,38 @@ def test_sweep_leaves_active_range_alone_even_if_a_target_was_reaped():
 
     reaper.sweep()
 
-    assert store.get("team-1", "otw-1") is None
-    assert store.get("team-1", "otw-2") is not None
-    assert range_store.get("team-1") is not None
+    assert store.get("team-1", "otw-1").stopped is True
+    assert store.get("team-1", "otw-2").stopped is False
+    assert range_store.get("team-1").stopped is False
 
 
-# ── shutdown countdown sweeping ───────────────────────────────────────────────
+def test_paused_range_attacker_resumes_with_same_password():
+    reaper, controller, docker, store, range_store = make_reaper(grace_minutes=1)
+    plan, _ = controller.create_or_get(
+        it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"}
+    )
+    original_password = range_store.get("team-1").plan.access["ssh_password"]
+    range_record = range_store.get("team-1")
+    range_record.last_accessed -= 120
+    range_store.update(range_record)
+    reaper.sweep()
+    assert range_store.get("team-1").stopped is True
 
-def test_sweep_tears_down_instance_whose_shutdown_deadline_passed():
+    resumed_plan, created = controller.create_or_get(
+        it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"}
+    )
+
+    assert created is False
+    assert range_store.get("team-1").stopped is False
+    assert resumed_plan.access["ssh_password"] == original_password
+
+
+# ── shutdown countdown sweeping (also non-destructive) ──────────────────────
+
+def test_sweep_pauses_instance_whose_shutdown_deadline_passed_without_deleting_it():
     reaper, controller, docker, store, _ = make_reaper(grace_minutes=120)
-    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    plan, _ = controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    original_env = dict(plan.services[0].env)
     controller.schedule_shutdown("team-1", "juice", delay_seconds=30)
     record = store.get("team-1", "juice")
     record.shutdown_at -= 60  # force it into the past
@@ -122,7 +213,11 @@ def test_sweep_tears_down_instance_whose_shutdown_deadline_passed():
     reaped = reaper.sweep()
 
     assert reaped == 1
-    assert store.get("team-1", "juice") is None
+    paused = store.get("team-1", "juice")
+    assert paused is not None
+    assert paused.stopped is True
+    assert paused.shutdown_at is None  # countdown cleared, doesn't fire again on resume
+    assert paused.plan.services[0].env == original_env
 
 
 def test_sweep_does_not_touch_instance_with_future_shutdown_deadline():
@@ -134,6 +229,7 @@ def test_sweep_does_not_touch_instance_with_future_shutdown_deadline():
 
     assert reaped == 0
     assert store.get("team-1", "juice") is not None
+    assert store.get("team-1", "juice").stopped is False
 
 
 def test_pending_shutdown_instance_is_not_also_idle_reaped():
@@ -152,6 +248,8 @@ def test_pending_shutdown_instance_is_not_also_idle_reaped():
     assert store.get("team-1", "juice") is not None
 
 
+# ── absolute lifetime (still real, destructive expiration) ─────────────────
+
 def test_sweep_enforces_absolute_lifetime_even_when_instance_is_active():
     reaper, controller, docker, store, _ = make_reaper(
         grace_minutes=120, max_lifetime_minutes=1
@@ -164,6 +262,28 @@ def test_sweep_enforces_absolute_lifetime_even_when_instance_is_active():
     assert reaper.sweep() == 1
     assert store.get("team-1", "juice") is None
     assert docker.services == {}
+
+
+def test_sweep_absolute_lifetime_also_destroys_an_already_paused_instance():
+    """Absolute lifetime is a real, one-way expiration -- it must still fire
+    (and actually delete the row/credentials) even for an instance that's
+    currently paused, so credentials don't become permanently sticky."""
+    reaper, controller, docker, store, _ = make_reaper(
+        grace_minutes=1, max_lifetime_minutes=2
+    )
+    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 120  # idle -> gets paused first
+    store.update(record)
+    assert reaper.sweep() == 1
+    assert store.get("team-1", "juice").stopped is True
+
+    record = store.get("team-1", "juice")
+    record.created_at -= 180  # now also past the absolute lifetime ceiling
+    store.put(record)
+
+    assert reaper.sweep() == 1
+    assert store.get("team-1", "juice") is None
 
 
 def test_sweep_releases_stale_reservation_and_removes_its_orphans():
