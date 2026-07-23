@@ -154,8 +154,26 @@ step3_docker_swarm() {
   local swarm_state
   swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo "inactive")
   if [[ "$swarm_state" != "active" ]]; then
-    log_info "Initializing a single-node Docker Swarm..."
-    if ! docker swarm init >>"$LOG_FILE" 2>&1; then
+    # `docker swarm init` with no --advertise-addr fails outright on any
+    # host with more than one address on its primary interface — e.g. a
+    # real Wi-Fi NIC with both an IPv4 and multiple global/temporary IPv6
+    # addresses, which is normal on real hardware and never showed up in
+    # the throwaway single-NIC containers this was built against
+    # ("could not choose an IP address to advertise since this system has
+    # multiple addresses on interface ..."). Resolve the address the
+    # kernel would actually route out on ourselves instead of leaving it
+    # to Docker's own (single-address-only) heuristic.
+    local advertise_addr
+    advertise_addr=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+    if [[ -z "$advertise_addr" ]]; then
+      advertise_addr=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+    if [[ -z "$advertise_addr" ]]; then
+      log_error "Could not determine an IPv4 address to advertise for Docker Swarm (checked 'ip route get' and 'hostname -I')."
+      return 1
+    fi
+    log_info "Initializing a single-node Docker Swarm (advertising $advertise_addr)..."
+    if ! docker swarm init --advertise-addr "$advertise_addr" >>"$LOG_FILE" 2>&1; then
       log_error "docker swarm init failed."
       return 1
     fi
@@ -276,18 +294,26 @@ step5_wheels() {
   #   - ctfcli + pyyaml, needed to run CEI-Labs-Wargames/deploy.sh (step 9)
   #     directly on the host (outside any container).
   # Installed into a dedicated venv so this never fights the RPM-installed
-  # system python3/pip from step 2.
+  # system python3/pip from step 2. --system-site-packages so it inherits
+  # the RPM-installed pyyaml: the vendored pyyaml wheel is built for the
+  # build machine's Python ABI (cp312), which doesn't match every target's
+  # system python3 (e.g. Fedora 44 ships Python 3.14) — pip has no matching
+  # wheel to fall back to since this is a --no-index offline install.
   local venv="$INSTALL_ROOT/venv"
   mkdir -p "$INSTALL_ROOT"
-  if ! python3 -m venv "$venv" >>"$LOG_FILE" 2>&1; then
+  if ! python3 -m venv --system-site-packages "$venv" >>"$LOG_FILE" 2>&1; then
     log_error "python3 -m venv failed — is python3-pip/python3 fully installed?"
     return 1
   fi
-  if ! "$venv/bin/pip" install --no-index --find-links "$wheel_dir" ctfcli pyyaml >>"$LOG_FILE" 2>&1; then
-    log_error "Offline pip install of ctfcli/pyyaml into $venv failed — see $LOG_FILE."
+  if ! "$venv/bin/python3" -c "import yaml" >>"$LOG_FILE" 2>&1; then
+    log_error "pyyaml isn't available via the system site-packages inherited into $venv — is the RPM-installed python3-pyyaml present from step 2?"
     return 1
   fi
-  log_info "Installed ctfcli + pyyaml (and deps) offline into $venv from $count vendored wheel files."
+  if ! "$venv/bin/pip" install --no-index --find-links "$wheel_dir" ctfcli >>"$LOG_FILE" 2>&1; then
+    log_error "Offline pip install of ctfcli into $venv failed — see $LOG_FILE."
+    return 1
+  fi
+  log_info "Installed ctfcli offline into $venv from $count vendored wheel files; pyyaml inherited from the RPM-installed system package via --system-site-packages."
   log_info "(flask/docker/gunicorn/requests wheels are also vendored here for reference/rebuild use, but are not installed on the host — they're already baked into the ctfd/orchestrator images.)"
   return 0
 }
@@ -355,6 +381,23 @@ step7_deploy_stack() {
     done
   fi
 
+  # This is a fully offline install with no DNS server standing up
+  # BASE_DOMAIN's records — nothing else in this script (or in
+  # stack-up.sh) makes `ctfd.$BASE_DOMAIN` resolve anywhere. traefik's
+  # own router rule for CTFd also matches a bare dotted-IP Host header
+  # (see stack.yml's HostRegexp clause), which is how the stack is
+  # reachable at all right now, but step 8's bootstrap and any browser
+  # pointed at the documented https://ctfd.$BASE_DOMAIN URL both need the
+  # name to actually resolve on this host. Point it at loopback via
+  # /etc/hosts, idempotently.
+  local base_domain
+  base_domain=$(grep '^BASE_DOMAIN=' docker/.env 2>/dev/null | cut -d= -f2)
+  base_domain="${base_domain:-ctf.local}"
+  if ! getent hosts "ctfd.${base_domain}" >>"$LOG_FILE" 2>&1; then
+    log_info "ctfd.${base_domain} does not resolve — adding a loopback entry to /etc/hosts."
+    echo "127.0.0.1 ctfd.${base_domain}" >> /etc/hosts
+  fi
+
   log_info "Running scripts/stack-up.sh..."
   if ! ./scripts/stack-up.sh >>"$LOG_FILE" 2>&1; then
     log_error "scripts/stack-up.sh failed — see $LOG_FILE. (Common cause offline: docker/.env's BASE_DOMAIN doesn't resolve/have a cert — this install doesn't set up DNS or TLS for you; see docs/network-prerequisites.md in the engine repo, or use the default ctf.local + a self-signed cert.)"
@@ -406,23 +449,30 @@ import re, sys
 import urllib.request, urllib.error, http.cookiejar
 
 base_url, admin_pass = sys.argv[1], sys.argv[2]
-cj = http.cookiejar.CookieJar()
-opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 
 import ssl
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
 
+# The TLS context has to be bound at build_opener() time via HTTPSHandler —
+# urllib's OpenerDirector.open() has never accepted a context= kwarg in any
+# Python version; passing it there raises "unexpected keyword argument".
+cj = http.cookiejar.CookieJar()
+opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(cj),
+    urllib.request.HTTPSHandler(context=ctx),
+)
+
 def get(path):
     req = urllib.request.Request(base_url + path)
-    return opener.open(req, context=ctx, timeout=30).read().decode()
+    return opener.open(req, timeout=30).read().decode()
 
 def post(path, data: dict):
     import urllib.parse
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(base_url + path, data=body, method="POST")
-    return opener.open(req, context=ctx, timeout=30)
+    return opener.open(req, timeout=30)
 
 def nonce(html):
     m = re.search(r'name="nonce"[^>]*value="([a-f0-9]+)"', html) or \
@@ -465,7 +515,7 @@ req = urllib.request.Request(
     headers={"Content-Type": "application/json", "CSRF-Token": n2.group(1)},
     method="POST",
 )
-resp = opener.open(req, context=ctx, timeout=30)
+resp = opener.open(req, timeout=30)
 token = json.loads(resp.read())["data"]["value"]
 print(f"TOKEN:{token}")
 PYEOF

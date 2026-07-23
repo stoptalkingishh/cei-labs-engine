@@ -102,7 +102,7 @@ services:
         constraints:
           - node.role == manager
       restart_policy:
-        condition: on-failure
+        condition: any
     logging: *default-logging
 
   # ── CTFd scoring platform ────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ services:
         reservations:
           memory: 512M
       restart_policy:
-        condition: on-failure
+        condition: any
     logging: *default-logging
 
   ctfd-redis:
@@ -163,7 +163,7 @@ services:
         reservations:
           memory: 128M
       restart_policy:
-        condition: on-failure
+        condition: any
     logging: *default-logging
 
   ctfd:
@@ -206,7 +206,7 @@ services:
         reservations:
           memory: 512M
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
         max_attempts: 10
       labels:
@@ -302,5 +302,5 @@ services:
         reservations:
           memory: 128M
       restart_policy:
-        condition: on-failure
+        condition: any
     logging: *default-logging
