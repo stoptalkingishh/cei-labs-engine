@@ -21,6 +21,7 @@ from .controller import (
     NotFoundError,
     ShutdownNotPendingError,
 )
+from .crypto import CredentialCipher
 from .docker_client import DockerOrchestratorClient
 from .instance_types import InvalidInstanceRequestError, VALID_TYPES
 from .naming import InvalidIdentifierError
@@ -57,8 +58,12 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
     app = Flask(__name__)
 
     docker_client = docker_client or DockerOrchestratorClient(cfg.DOCKER_SOCKET)
-    store = InstanceStore(db_path=cfg.STORE_DB_PATH)
-    range_store = RangeStore(db_path=cfg.STORE_DB_PATH)
+    # Shared between both stores so a single deployment's persisted
+    # instances and ranges are encrypted (and decryptable) under the same
+    # key -- see crypto.py and config.py's CREDENTIAL_ENCRYPTION_KEY.
+    cipher = CredentialCipher.from_key_material(cfg.CREDENTIAL_ENCRYPTION_KEY)
+    store = InstanceStore(db_path=cfg.STORE_DB_PATH, cipher=cipher)
+    range_store = RangeStore(db_path=cfg.STORE_DB_PATH, cipher=cipher)
     port_allocator = PortAllocator(
         cfg.SSH_PORT_RANGE_START,
         cfg.SSH_PORT_RANGE_END,

@@ -375,10 +375,20 @@ step7_deploy_stack() {
     log_warn "docker/secrets/ was populated from secrets.example with CHANGE_ME placeholders."
     log_warn "Generating random values for every CHANGE_ME secret now (non-interactive install) — rotate them before a real event if that matters to you."
     for f in docker/secrets/*.txt; do
+      # credential_encryption_key needs a real Fernet key, not an arbitrary
+      # alnum string (app/crypto.py hands it straight to
+      # cryptography.fernet.Fernet(), which requires urlsafe-base64-encoded
+      # 32 raw bytes) -- handled separately below instead of here.
+      if [[ "$(basename "$f")" == "credential_encryption_key.txt" ]]; then
+        continue
+      fi
       if grep -q CHANGE_ME "$f"; then
         head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32 > "$f"
       fi
     done
+    if grep -q CHANGE_ME docker/secrets/credential_encryption_key.txt 2>/dev/null; then
+      python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"         > docker/secrets/credential_encryption_key.txt 2>/dev/null         || python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"           > docker/secrets/credential_encryption_key.txt
+    fi
   fi
 
   # This is a fully offline install with no DNS server standing up

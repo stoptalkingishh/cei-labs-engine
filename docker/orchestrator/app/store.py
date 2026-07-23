@@ -26,6 +26,20 @@ INSERT ever creates containers; a loser never touches Docker at all.
 The stack stores this file on the `orchestrator_data` volume so routine service
 restarts keep the authoritative instance/range/port/timer registry aligned
 with live Swarm resources. Tests may still use `:memory:` or temporary files.
+
+`plan_json` is the one column that actually carries credential material --
+every generated secret (VNC_PASSWORD/OPERATOR_PASSWORD, per-team flag
+secrets riding the `access` dict, anything else instance_types.py ever
+stuffs into a ServiceSpec's env or a plan's access dict) flows through it.
+It is encrypted at rest with AEAD (see crypto.py) before it ever reaches
+SQLite -- `_encrypt_plan`/`_decrypt_plan` below are the only two places that
+cross the boundary between the plaintext JSON the rest of this file already
+worked with and the ciphertext actually written to disk, so the rest of
+this module (query shapes, transaction handling, the reservation race logic
+et al) is unchanged. `_decrypt_plan` tolerates rows written before this
+patch (plain JSON, not a Fernet token) so an in-place upgrade doesn't break
+reads of already-running instances; every write after the upgrade always
+produces ciphertext.
 """
 import json
 import sqlite3
@@ -33,6 +47,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from .crypto import CredentialCipher, InvalidToken
 from .docker_client import ServiceSpec
 from .instance_types import InstancePlan, RangePlan
 
@@ -176,9 +191,38 @@ def _range_plan_from_json(raw: str) -> RangePlan:
     )
 
 
+def _encrypt_plan(cipher: CredentialCipher, plan_json: "str | None") -> "str | None":
+    """NULL plan_json means "reservation in flight, no plan yet" -- pass
+    NULL straight through rather than encrypting the string "null"."""
+    if plan_json is None:
+        return None
+    return cipher.encrypt(plan_json)
+
+
+def _decrypt_plan(cipher: CredentialCipher, stored: "str | None") -> "str | None":
+    """Inverse of _encrypt_plan. Tolerates rows persisted before this module
+    started encrypting plan_json: a pre-upgrade row is plain JSON (starts
+    with '{'), which is never valid Fernet ciphertext, so InvalidToken (or
+    any decode failure) falls back to treating `stored` as already-plaintext
+    JSON. This is a one-way migration path -- the next write of that same
+    row (finalize/put) always produces ciphertext, so rows self-upgrade as
+    they're touched."""
+    if stored is None:
+        return None
+    try:
+        return cipher.decrypt(stored)
+    except (InvalidToken, ValueError):
+        return stored
+
+
 class InstanceStore:
-    def __init__(self, db_path: str = ":memory:"):
+    def __init__(self, db_path: str = ":memory:", cipher: "CredentialCipher | None" = None):
         self._db_path = db_path
+        # See crypto.py: encrypts plan_json (the column carrying every
+        # generated credential) before it reaches SQLite. Defaults to an
+        # ephemeral key (loud warning logged) if the caller doesn't wire one
+        # up -- production (main.py's create_app) always passes a real one.
+        self._cipher = cipher or CredentialCipher.from_key_material(None)
         # sqlite3 connections aren't safe to share across threads; each
         # thread (gunicorn sync workers use one thread per request, plus the
         # reaper's own background thread) gets its own connection onto the
@@ -326,6 +370,7 @@ class InstanceStore:
                 conn.execute("COMMIT")
                 return None
             plan_json, created_at, last_accessed, shutdown_at, extensions_used = row
+            plan_json = _decrypt_plan(self._cipher, plan_json)
             now = time.time()
             conn.execute(
                 "UPDATE instances SET plan_json = NULL, created_at = ?, last_accessed = ?, "
@@ -351,7 +396,7 @@ class InstanceStore:
         actually got created."""
         self._conn().execute(
             "UPDATE instances SET plan_json = ? WHERE owner_id = ? AND instance_key = ?",
-            (_plan_to_json(plan), owner_id, instance_key),
+            (_encrypt_plan(self._cipher, _plan_to_json(plan)), owner_id, instance_key),
         )
 
     def release_reservation(self, owner_id: str, instance_key: str) -> None:
@@ -375,7 +420,7 @@ class InstanceStore:
             (
                 record.owner_id,
                 record.instance_key,
-                _plan_to_json(record.plan),
+                _encrypt_plan(self._cipher, _plan_to_json(record.plan)),
                 record.created_at,
                 record.last_accessed,
                 record.shutdown_at,
@@ -392,6 +437,7 @@ class InstanceStore:
         if row is None or row[0] is None:  # no row, or a reservation still in flight
             return None
         plan_json, created_at, last_accessed, shutdown_at, extensions_used = row
+        plan_json = _decrypt_plan(self._cipher, plan_json)
         return InstanceRecord(
             plan=_plan_from_json(plan_json),
             created_at=created_at,
@@ -437,7 +483,7 @@ class InstanceStore:
         ).fetchall()
         return [
             InstanceRecord(
-                plan=_plan_from_json(plan_json),
+                plan=_plan_from_json(_decrypt_plan(self._cipher, plan_json)),
                 created_at=created_at,
                 last_accessed=last_accessed,
                 shutdown_at=shutdown_at,
@@ -476,8 +522,9 @@ class InstanceStore:
 
 
 class RangeStore:
-    def __init__(self, db_path: str = ":memory:"):
+    def __init__(self, db_path: str = ":memory:", cipher: "CredentialCipher | None" = None):
         self._db_path = db_path
+        self._cipher = cipher or CredentialCipher.from_key_material(None)
         self._local = threading.local()
         self._open_conns: list[sqlite3.Connection] = []
         self._open_conns_lock = threading.Lock()
@@ -535,7 +582,8 @@ class RangeStore:
 
     def finalize(self, owner_id: str, plan: RangePlan) -> None:
         self._conn().execute(
-            "UPDATE ranges SET plan_json = ? WHERE owner_id = ?", (_range_plan_to_json(plan), owner_id)
+            "UPDATE ranges SET plan_json = ? WHERE owner_id = ?",
+            (_encrypt_plan(self._cipher, _range_plan_to_json(plan)), owner_id),
         )
 
     def release_reservation(self, owner_id: str) -> None:
@@ -569,7 +617,7 @@ class RangeStore:
             "target_keys_json=excluded.target_keys_json",
             (
                 record.owner_id,
-                _range_plan_to_json(record.plan),
+                _encrypt_plan(self._cipher, _range_plan_to_json(record.plan)),
                 record.created_at,
                 record.last_accessed,
                 json.dumps(sorted(record.target_keys)),
@@ -584,6 +632,7 @@ class RangeStore:
         if row is None or row[0] is None:
             return None
         plan_json, created_at, last_accessed, target_keys_json = row
+        plan_json = _decrypt_plan(self._cipher, plan_json)
         return RangeRecord(
             plan=_range_plan_from_json(plan_json),
             created_at=created_at,
@@ -612,7 +661,7 @@ class RangeStore:
         ).fetchall()
         return [
             RangeRecord(
-                plan=_range_plan_from_json(plan_json),
+                plan=_range_plan_from_json(_decrypt_plan(self._cipher, plan_json)),
                 created_at=created_at,
                 last_accessed=last_accessed,
                 target_keys=set(json.loads(target_keys_json)),

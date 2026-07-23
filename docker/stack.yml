@@ -58,6 +58,8 @@ secrets:
     file: ./secrets/orchestrator_admin_password.txt
   plugin_shared_secret:
     file: ./secrets/plugin_shared_secret.txt
+  credential_encryption_key:
+    file: ./secrets/credential_encryption_key.txt
 
 services:
   # ── Ingress ────────────────────────────────────────────────────────────────
@@ -178,6 +180,7 @@ services:
       - ctfd_secret_key
       - ctfd_db_password
       - plugin_shared_secret
+      - credential_encryption_key
     volumes:
       - ctfd_uploads:/var/uploads
     networks:
@@ -276,6 +279,7 @@ services:
       - plugin_shared_secret
       - orchestrator_admin_password
       - ctf_key
+      - credential_encryption_key
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - orchestrator_data:/var/lib/cei-orchestrator

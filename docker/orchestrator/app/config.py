@@ -62,6 +62,17 @@ class Config:
     # Protects the /admin/* dashboard endpoints.
     ADMIN_PASSWORD = _read_secret("orchestrator_admin_password", os.environ.get("ORCHESTRATOR_ADMIN_PASSWORD", ""))
 
+    # AEAD key store.py encrypts persisted credentials (plan_json -- VNC/
+    # SSH passwords, per-team flag secrets) with before they reach SQLite.
+    # See app/crypto.py. Deliberately outside the database (a Docker secret,
+    # same mechanism as every other secret above), and unset here defaults
+    # to "" so CredentialCipher.from_key_material can log its own loud
+    # warning and fall back to an ephemeral key rather than this file
+    # silently deciding what "unconfigured" means.
+    CREDENTIAL_ENCRYPTION_KEY = _read_secret(
+        "credential_encryption_key", os.environ.get("CREDENTIAL_ENCRYPTION_KEY", "")
+    )
+
     DOCKER_SOCKET = os.environ.get("DOCKER_SOCKET", "unix://var/run/docker.sock")
 
     # SQLite-backed store path. Must be a real file (not ":memory:") in

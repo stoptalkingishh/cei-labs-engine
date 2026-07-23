@@ -17,7 +17,10 @@ import os
 import tempfile
 import threading
 
+from cryptography.fernet import Fernet
+
 from app import instance_types as it
+from app.crypto import CredentialCipher
 from app.ports import PortAllocator
 from app.store import InstanceStore, RangeStore, ReservationCapacityError
 
@@ -122,7 +125,14 @@ def test_per_owner_quota_is_atomic_across_independent_store_objects():
 def test_relaunch_claim_is_atomic_across_independent_store_objects():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         db_path = os.path.join(tmp_dir, "relaunch.db")
-        stores = [InstanceStore(db_path=db_path) for _ in range(N_WORKERS)]
+        # Real gunicorn workers each construct their own CredentialCipher
+        # from the SAME mounted `credential_encryption_key` secret file, so
+        # sharing one cipher (rather than each store defaulting to its own
+        # ephemeral random key) reproduces that -- otherwise worker B could
+        # never decrypt a plan worker A encrypted, which is a real
+        # deployment requirement, not a race.
+        cipher = CredentialCipher(Fernet.generate_key())
+        stores = [InstanceStore(db_path=db_path, cipher=cipher) for _ in range(N_WORKERS)]
         plan = it.plan_web_app("race-team", "juice", {"image": "img"}, "ctf.local", "challenge-net")
         assert stores[0].reserve("race-team", "juice") is True
         stores[0].finalize("race-team", "juice", plan)
