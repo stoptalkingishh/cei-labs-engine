@@ -123,6 +123,17 @@ configure_docker_env() {
     fi
     echo "$CTF_KEY" > "$DOCKER_DIR/secrets/ctf_key.txt"
 
+    # credential_encryption_key must be a valid Fernet key (urlsafe-base64
+    # encoded 32 raw bytes) -- app/crypto.py hands it straight to
+    # cryptography.fernet.Fernet(), so unlike the secrets in the loop above
+    # it can'''t just be an arbitrary alnum string. Generated with Python
+    # (already a hard dependency of every image this stack builds) so the
+    # encoding always matches what Fernet itself expects.
+    if [[ ! -s "$DOCKER_DIR/secrets/credential_encryption_key.txt" ]]; then
+        python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"             > "$DOCKER_DIR/secrets/credential_encryption_key.txt" 2>/dev/null             || python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"                 > "$DOCKER_DIR/secrets/credential_encryption_key.txt"
+        log_info "  generated random Fernet key for credential_encryption_key"
+    fi
+
     log_info "Configuration written to docker/.env and docker/secrets/."
 }
 

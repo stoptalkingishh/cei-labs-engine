@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import Fernet
 
 from app.config import Config
 from app.main import create_app
@@ -113,6 +114,108 @@ def test_reboot_missing_instance_404(client):
     assert resp.status_code == 404
 
 
+# ── idle pause / resume: the credential-lifecycle fix, end-to-end over HTTP ────
+# These simulate the real bug report: a learner leaves an environment idle,
+# the orchestrator's own reaper sweeps it (exactly as the background thread
+# would), and the learner comes back later. The credentials/flags they were
+# given at launch must still work -- and the API must say "resumed", not
+# silently reissue new ones under an "exists"/"created" label.
+
+def test_idle_then_resume_preserves_credentials_over_http(client):
+    create_resp = client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    assert create_resp.get_json()["status"] == "created"
+    original_access = create_resp.get_json()["access"]
+
+    controller = client.application.config["controller"]
+    store = client.application.config["store"]
+    reaper = client.application.config["reaper"]
+
+    # Simulate having been idle past the grace period, then run exactly the
+    # sweep the background reaper thread would run.
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 999999
+    store.update(record)
+    assert reaper.sweep() >= 1
+    assert store.get("team-1", "juice").stopped is True
+
+    # A learner reopening the challenge in CTFd hits this same endpoint --
+    # no `relaunch` flag, exactly like the idempotent "exists" case.
+    resume_resp = client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    assert resume_resp.status_code == 200
+    body = resume_resp.get_json()
+    # Must clearly signal "resumed a paused environment", not be
+    # indistinguishable from "was already running" or "freshly created".
+    assert body["status"] == "resumed"
+    assert body["access"] == original_access  # exact same credentials
+    assert store.get("team-1", "juice").stopped is False
+
+    # And the instance is genuinely usable again, not just recorded as such.
+    status = client.get("/instances/team-1/juice", headers=PLUGIN_HEADERS).get_json()
+    assert status["stopped"] is False
+
+
+def test_reboot_of_a_paused_instance_resumes_it_with_same_credentials(client):
+    create_resp = client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    original_access = create_resp.get_json()["access"]
+
+    store = client.application.config["store"]
+    reaper = client.application.config["reaper"]
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 999999
+    store.update(record)
+    reaper.sweep()
+    assert store.get("team-1", "juice").stopped is True
+
+    resp = client.post("/instances/team-1/juice/reboot", headers=PLUGIN_HEADERS)
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "resumed"
+    assert store.get("team-1", "juice").stopped is False
+
+    status = client.get("/instances/team-1/juice", headers=PLUGIN_HEADERS).get_json()
+    assert status["access"] == original_access
+
+
+def test_explicit_relaunch_after_pause_reports_rotated_credentials(client):
+    """The one case where credentials SHOULD change, and the API must say
+    so clearly -- not silently swap them under a resume-shaped response."""
+    create_resp = client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    original_access = create_resp.get_json()["access"]
+
+    store = client.application.config["store"]
+    reaper = client.application.config["reaper"]
+    record = store.get("team-1", "juice")
+    record.last_accessed -= 999999
+    store.update(record)
+    reaper.sweep()
+    assert store.get("team-1", "juice").stopped is True
+
+    resp = client.post("/instances", json={**WEB_APP_PAYLOAD, "relaunch": True}, headers=PLUGIN_HEADERS)
+    assert resp.status_code == 201
+    body = resp.get_json()
+    # Matches the pre-existing convention (see test_relaunch_flag_recreates_
+    # the_instance above): an explicit relaunch always reports the same
+    # `status="created"` a first-ever create does, on a 201 -- the signal
+    # that credentials/flags changed is the 201 (only ever returned for a
+    # freshly (re)built environment) together with a different `access`
+    # payload, never the ambiguous 200 "exists"/"resumed" a caller could
+    # mistake for their already-known values still being valid.
+    assert body["status"] == "created"
+    assert store.get("team-1", "juice").stopped is False
+    # (web-app's own creds live in caller-supplied `env`/CTFd metadata, not
+    # generated access fields, so we only assert the lifecycle signaling
+    # here -- instance_types-level credential rotation on relaunch is
+    # covered directly in tests/test_controller.py.)
+
+
+def test_instance_response_reports_idle_pause_and_expiry_countdowns(client):
+    client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    status = client.get("/instances/team-1/juice", headers=PLUGIN_HEADERS).get_json()
+    assert status["stopped"] is False
+    assert "idle_pause_at" in status
+    assert "expires_at" in status
+    assert status["expires_at"] > status["idle_pause_at"]  # FakeConfig: 240min > 120min ceilings
+
+
 # ── shutdown countdown ────────────────────────────────────────────────────────
 
 def test_schedule_and_extend_shutdown(client):
@@ -195,3 +298,59 @@ def test_auth_rejected_when_no_secret_configured():
     c = app.test_client()
     resp = c.post("/instances", json={}, headers={"X-Orchestrator-Auth": ""})
     assert resp.status_code == 401
+
+
+# ── production credential_encryption_key gate ───────────────────────────────
+#
+# create_app() distinguishes "production" from "test" the same way as every
+# other call site in this file: production (app/wsgi.py) always calls
+# create_app() with no `config` at all, letting it default to a real
+# Config() reading from env/secrets; every test above passes its own
+# FakeConfig explicitly. These tests exercise that no-config path directly
+# (with a fake docker_client so no real Docker daemon is required).
+#
+# Config.CREDENTIAL_ENCRYPTION_KEY (like every other Config attribute) is
+# computed once at class-definition/import time via _read_secret, so
+# setting the CREDENTIAL_ENCRYPTION_KEY env var *after* import (i.e. from
+# inside a test) has no effect on it -- monkeypatch.setattr on the class
+# attribute directly instead, which is the accurate way to simulate "this
+# deployment does/doesn't have the secret mounted."
+
+def test_create_app_refuses_to_start_in_production_without_a_credential_encryption_key(monkeypatch):
+    monkeypatch.setattr(Config, "CREDENTIAL_ENCRYPTION_KEY", "")
+
+    with pytest.raises(RuntimeError, match="credential_encryption_key"):
+        create_app(docker_client=FakeDockerOrchestratorClient(), start_reaper=False)
+
+
+def test_create_app_refuses_to_start_in_production_with_an_invalid_credential_encryption_key(monkeypatch):
+    monkeypatch.setattr(Config, "CREDENTIAL_ENCRYPTION_KEY", "not-a-valid-fernet-key")
+
+    with pytest.raises(RuntimeError, match="credential_encryption_key"):
+        create_app(docker_client=FakeDockerOrchestratorClient(), start_reaper=False)
+
+
+def test_create_app_starts_fine_in_production_with_a_valid_credential_encryption_key(monkeypatch):
+    monkeypatch.setattr(Config, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+
+    app = create_app(docker_client=FakeDockerOrchestratorClient(), start_reaper=False)
+    app.testing = True
+
+    assert app.test_client().get("/healthz").status_code == 200
+
+
+def test_create_app_with_an_explicit_config_is_never_subject_to_the_production_gate(monkeypatch):
+    # Passing `config=` explicitly -- what every other test in this file
+    # does, and the only thing that distinguishes them from app/wsgi.py's
+    # bare create_app() -- must keep working even with no key configured
+    # anywhere, since CredentialCipher.from_key_material()'s ephemeral-key
+    # fallback is exactly what local dev/test convenience relies on.
+    monkeypatch.setattr(Config, "CREDENTIAL_ENCRYPTION_KEY", "")
+
+    class NoKeyConfig(FakeConfig):
+        CREDENTIAL_ENCRYPTION_KEY = ""
+
+    app = create_app(config=NoKeyConfig(), docker_client=FakeDockerOrchestratorClient(), start_reaper=False)
+    app.testing = True
+
+    assert app.test_client().get("/healthz").status_code == 200

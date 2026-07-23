@@ -13,6 +13,9 @@ from app.controller import (
     NotFoundError,
     ShutdownNotPendingError,
 )
+from cryptography.fernet import Fernet
+
+from app.crypto import CredentialCipher
 from app.ports import PortAllocator
 from app.store import InstanceStore, RangeStore
 
@@ -142,6 +145,60 @@ def test_single_target_create_failure_removes_network_and_releases_port():
     assert ports.allocate() == 32000
 
 
+def test_single_target_pause_resume_keeps_same_port_and_secrets():
+    """The core credential-lifecycle fix, at the single-target level: a
+    non-destructive pause (idle/shutdown), followed by a resume through the
+    normal create_or_get() path, must hand back the exact same connect
+    port and per-team level secrets -- not a freshly generated set."""
+    controller, docker, store, _ = make_controller()
+    plan, _ = controller.create_or_get(
+        it.SINGLE_TARGET, "team-1", "otw", {"image": "img", "secret_keys": ["level1"]}
+    )
+    original_access = dict(plan.access)
+    original_port = plan.access["connect_port"]
+
+    assert controller.pause("team-1", "otw") is True
+    paused = store.get("team-1", "otw")
+    assert paused.stopped is True
+    assert paused.plan.access == original_access  # secrets/port still on the record
+    assert docker.services == {}
+    assert docker.networks == {}
+    # Pausing does NOT release the port -- a different instance must not be
+    # able to grab it out from under a soon-to-resume one.
+    assert controller.port_allocator.allocate() != original_port
+
+    resumed_plan, created = controller.create_or_get(
+        it.SINGLE_TARGET, "team-1", "otw", {"image": "img", "secret_keys": ["level1"]}
+    )
+
+    assert created is False
+    assert resumed_plan.access == original_access
+    assert resumed_plan.access["connect_port"] == original_port
+    assert store.get("team-1", "otw").stopped is False
+    assert len(docker.services) == 2  # target + gateway recreated
+
+
+def test_pause_is_a_noop_for_a_missing_or_already_paused_instance():
+    controller, docker, store, _ = make_controller()
+    assert controller.pause("nobody", "nothing") is False
+
+    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    assert controller.pause("team-1", "juice") is True
+    assert controller.pause("team-1", "juice") is False  # already paused
+
+
+def test_pause_clears_a_pending_shutdown_countdown():
+    controller, docker, store, _ = make_controller()
+    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    controller.schedule_shutdown("team-1", "juice", delay_seconds=30)
+
+    controller.pause("team-1", "juice")
+
+    record = store.get("team-1", "juice")
+    assert record.shutdown_at is None
+    assert record.extensions_used == 0
+
+
 # ── target-attacker (range) ───────────────────────────────────────────────────
 
 def test_first_range_target_creates_attacker_and_network():
@@ -191,6 +248,55 @@ def test_teardown_range_removes_attacker_network_and_all_targets():
     assert docker.networks == {}
 
 
+def test_pause_range_keeps_network_and_ports_for_resume():
+    controller, docker, store, range_store = make_controller()
+    plan, _ = controller.create_or_get(
+        it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"}
+    )
+    original_password = range_store.get("team-1").plan.access["ssh_password"]
+    network_name = range_store.get("team-1").plan.network
+
+    assert controller.pause_range("team-1") is True
+    assert range_store.get("team-1").stopped is True
+    # Attacker+gateway gone (pause_range only touches those two), but the
+    # shared network -- the still-live target stays attached to it
+    # independently -- and its published ports are untouched.
+    attacker_name = range_store.get("team-1").plan.attacker_service.name
+    gateway_name = range_store.get("team-1").plan.gateway_service.name
+    assert attacker_name not in docker.services
+    assert gateway_name not in docker.services
+    assert network_name in docker.networks
+
+    resumed_plan, created = controller.create_or_get(
+        it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"}
+    )
+    assert created is False
+    assert range_store.get("team-1").stopped is False
+    assert resumed_plan.access["ssh_password"] == original_password
+
+
+def test_pause_range_is_a_noop_for_a_missing_or_already_paused_range():
+    controller, docker, store, range_store = make_controller()
+    assert controller.pause_range("nobody") is False
+
+    controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"})
+    assert controller.pause_range("team-1") is True
+    assert controller.pause_range("team-1") is False
+
+
+def test_reboot_range_attacker_resumes_it_when_paused():
+    controller, docker, store, range_store = make_controller()
+    controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"})
+    original_password = range_store.get("team-1").plan.access["ssh_password"]
+    controller.pause_range("team-1")
+
+    ok = controller.reboot_range_attacker("team-1")
+
+    assert ok is True
+    assert range_store.get("team-1").stopped is False
+    assert range_store.get("team-1").plan.access["ssh_password"] == original_password
+
+
 def test_two_teams_get_independent_ranges():
     controller, docker, store, range_store = make_controller()
     controller.create_or_get(it.TARGET_ATTACKER, "team-a", "otw", {"target_image": "t", "attacker_image": "k"})
@@ -210,6 +316,22 @@ def test_reboot_restarts_the_instance_service():
     ok = controller.reboot("team-1", "juice")
     assert ok is True
     assert len(docker.restart_calls) == 2
+
+
+def test_reboot_of_a_paused_instance_resumes_it_instead_of_force_updating():
+    controller, docker, store, _ = make_controller()
+    plan, _ = controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    original_access = dict(plan.access)
+    controller.pause("team-1", "juice")
+    assert docker.services == {}
+
+    ok = controller.reboot("team-1", "juice")
+
+    assert ok is True
+    assert docker.restart_calls == []  # nothing live to force_update -- it was recreated instead
+    assert len(docker.services) == 2
+    assert store.get("team-1", "juice").stopped is False
+    assert store.get("team-1", "juice").plan.access == original_access
 
 
 def test_reboot_missing_instance_returns_false():
@@ -255,8 +377,14 @@ def test_parallel_relaunches_converge_on_one_replacement():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         db_path = os.path.join(tmp_dir, "controller-race.db")
         docker = BlockingRemovalDocker()
-        stores = [InstanceStore(db_path=db_path) for _ in range(worker_count)]
-        range_stores = [RangeStore(db_path=db_path) for _ in range(worker_count)]
+        # Real gunicorn workers each derive their CredentialCipher from the
+        # SAME mounted `credential_encryption_key` secret file -- sharing
+        # one cipher here (instead of each store defaulting to its own
+        # ephemeral random key) reproduces that, so a worker who wins the
+        # claim can actually decrypt the plan another worker encrypted.
+        cipher = CredentialCipher(Fernet.generate_key())
+        stores = [InstanceStore(db_path=db_path, cipher=cipher) for _ in range(worker_count)]
+        range_stores = [RangeStore(db_path=db_path, cipher=cipher) for _ in range(worker_count)]
         allocators = [PortAllocator(32000, 32767, db_path=db_path) for _ in range(worker_count)]
         controllers = [
             InstanceController(

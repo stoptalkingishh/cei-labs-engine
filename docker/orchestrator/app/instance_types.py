@@ -352,19 +352,36 @@ def plan_range_attacker(
     attacker_ssh_port = int(spec.get("attacker_ssh_port", 22))
     attacker_env = dict(spec.get("attacker_env") or {})
 
-    # Security: generate a random per-range credential here, at instance-
+    # Security: generate random per-range credentials here, at instance-
     # creation time, rather than trusting anything baked into the image.
     # operator/kali-novnc/Dockerfile and operator/analyst/Dockerfile both
-    # apply whichever of these two env vars they care about at container
-    # START (not build) time -- setting both is harmless since only one is
-    # ever read by a given image. Only generated the first time a team's
-    # range is created (this function isn't called again for that owner
-    # until a full teardown/relaunch — see controller.py._create_range_target
-    # and reboot_range_attacker), so the credential is stable across a
-    # team's whole session and only rotates on a real Relaunch.
-    attacker_password = secrets.token_urlsafe(18)
-    attacker_env["VNC_PASSWORD"] = attacker_password
-    attacker_env["OPERATOR_PASSWORD"] = attacker_password
+    # apply whichever of these env vars they care about at container START
+    # (not build) time -- setting both is harmless since analyst (SSH-only,
+    # no VNC) simply never reads VNC_PASSWORD. Only generated the first
+    # time a team's range is created (this function isn't called again for
+    # that owner until a full teardown/relaunch — see
+    # controller.py._create_range_target and reboot_range_attacker), so
+    # the credentials are stable across a team's whole session and only
+    # rotate on a real Relaunch.
+    #
+    # These are deliberately TWO DIFFERENT credentials, not one shared
+    # string, even though they both authenticate the same "operator"
+    # account. TigerVNC's protocol silently truncates its password to 8
+    # characters -- `vncpasswd -f` doesn't error or warn, it just discards
+    # everything past the 8th byte. Previously a single long
+    # secrets.token_urlsafe(18) string (20+ chars) was stuffed into both
+    # VNC_PASSWORD and OPERATOR_PASSWORD: SSH (chpasswd, no such limit)
+    # honored the full string, but VNC only ever actually accepted its
+    # first 8 characters -- whatever the UI displayed as "the" password
+    # would silently fail to connect over noVNC. ssh_password stays long
+    # or high-entropy since chpasswd/SSH has no length ceiling to work
+    # around; novnc_password is generated at exactly 8 characters so
+    # there's no truncation gap between what's generated and what VNC will
+    # actually honor.
+    ssh_password = secrets.token_urlsafe(18)
+    novnc_password = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+    attacker_env["OPERATOR_PASSWORD"] = ssh_password
+    attacker_env["VNC_PASSWORD"] = novnc_password
 
     range_network = naming.range_network_name(owner_id)
     attacker_name = naming.range_attacker_service_name(owner_id)
@@ -399,7 +416,13 @@ def plan_range_attacker(
         access={
             "attacker_url": f"https://{hostname}",
             "attacker_username": "operator",
-            "attacker_password": attacker_password,
+            # Two distinct fields, deliberately -- never a single shared
+            # "password" -- since ssh_password and novnc_password are two
+            # different generated values (see the truncation comment
+            # above). Any API consumer or launch panel must label these
+            # separately rather than presenting one credential for both.
+            "ssh_password": ssh_password,
+            "novnc_password": novnc_password,
             "connect_host": base_domain,
             "connect_port": allocated_port,
             "protocol": "ssh",

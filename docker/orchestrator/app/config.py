@@ -62,6 +62,36 @@ class Config:
     # Protects the /admin/* dashboard endpoints.
     ADMIN_PASSWORD = _read_secret("orchestrator_admin_password", os.environ.get("ORCHESTRATOR_ADMIN_PASSWORD", ""))
 
+    # AEAD key store.py encrypts persisted credentials (plan_json -- VNC/
+    # SSH passwords, per-team flag secrets) with before they reach SQLite.
+    # See app/crypto.py. Deliberately outside the database (a Docker secret,
+    # same mechanism as every other secret above), and unset here defaults
+    # to "" so CredentialCipher.from_key_material can log its own loud
+    # warning and fall back to an ephemeral key rather than this file
+    # silently deciding what "unconfigured" means.
+    CREDENTIAL_ENCRYPTION_KEY = _read_secret(
+        "credential_encryption_key", os.environ.get("CREDENTIAL_ENCRYPTION_KEY", "")
+    )
+
+    # Dedicated HMAC signing secret for POST /wallet/sync (the Wargames
+    # deploy job's `sync_hint_wallet_bundle()`). Deliberately distinct from
+    # PLUGIN_SHARED_SECRET: this crosses a different trust boundary
+    # (release pipeline -> Engine) than the CTFd-plugin-to-orchestrator one,
+    # per docs/P0-FIX-LOG-2026-07-23.md and the Wargames deployment doc.
+    HINT_WALLET_SYNC_SECRET = _read_secret(
+        "hint_wallet_sync_secret", os.environ.get("HINT_WALLET_SYNC_SECRET", "")
+    )
+
+    # Optional previous-generation secret, mounted only during a coordinated
+    # rotation window (see the Wargames deployment doc's "Coordinated
+    # rotation" section). Both this and HINT_WALLET_SYNC_SECRET are accepted
+    # for signature verification while both are present; retiring the old
+    # Docker secret (and this file no longer existing) makes it stop
+    # validating, same as an old API key expiring.
+    HINT_WALLET_SYNC_SECRET_PREVIOUS = _read_secret(
+        "hint_wallet_sync_secret_previous", os.environ.get("HINT_WALLET_SYNC_SECRET_PREVIOUS", "")
+    )
+
     DOCKER_SOCKET = os.environ.get("DOCKER_SOCKET", "unix://var/run/docker.sock")
 
     # SQLite-backed store path. Must be a real file (not ":memory:") in
