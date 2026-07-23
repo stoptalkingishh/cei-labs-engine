@@ -1,0 +1,131 @@
+/* docker/ctfd/plugins/modal-theme/assets/challenge-modal.css
+ *
+ * Subtle, professional theming for CTFd's challenge-detail modal only.
+ *
+ * Deliberately restrained: this is platform polish for a security/ops
+ * tool, not a game skin. No bright colors, no animation, no per-challenge
+ * or per-category theming -- the sibling wargame-track work (Bandit SSH
+ * banner, Krypton banner, Natas per-level backgrounds) is intentionally
+ * flashy/thematic; this is not, on purpose. If you're tempted to add a
+ * gradient, a glow, or a per-category accent here, stop -- that belongs
+ * in the wargame track work, not here. (Per-category accent coloring was
+ * considered and deliberately dropped: it would need extra JS to fetch
+ * challenge category data that CTFd's own modal template doesn't render,
+ * for a cosmetic payoff that isn't worth the added surface area on a
+ * "not too distracting" ask.)
+ *
+ * Scope: every rule below is nested under #challenge-window, the modal's
+ * own always-present container (confirmed in CTFd core's
+ * themes/core/templates/challenges.html:
+ * `x-ref="challengeWindow" id="challenge-window" class="modal fade"`).
+ * This cannot bleed onto the challenge board, scoreboard, or login page.
+ *
+ * Selectors otherwise target only classes/ids CTFd's own
+ * themes/core/templates/challenge.html already renders, plus
+ * #instance-launcher-panel (docker/ctfd/plugins/instance-launcher) so
+ * that plugin's "Launch Environment" panel reads as part of the same
+ * calm surface instead of clashing with it. hint-wallet has no modal UI
+ * of its own -- it rides CTFd's native hint <details> markup, which is
+ * covered here directly.
+ *
+ * Accessibility: the accent color (#2f5f8a) against white is ~4.9:1
+ * contrast, comfortably AA for normal text. Nothing here introduces a
+ * color-only distinction -- the flag-submit alert (success/info/danger/
+ * warning) already carries its state in the message text itself
+ * (`x-text="response.data.message"`, unchanged), not just its color.
+ */
+
+#challenge-window .modal-content {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-top: 3px solid #2f5f8a;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+/* Title block: tighter, calmer typography instead of the default heavy
+   centered heading. */
+#challenge-window .challenge-name {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+#challenge-window .challenge-value {
+  color: #2f5f8a;
+  font-size: 1rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+#challenge-window .challenge-attribution {
+  letter-spacing: 0.02em;
+}
+
+/* Tags: muted outline instead of a solid bright-blue badge, so they read
+   as metadata, not decoration. */
+#challenge-window .challenge-tag {
+  background-color: transparent !important;
+  border: 1px solid rgba(47, 95, 138, 0.4);
+  color: #2f5f8a;
+  font-weight: 500;
+}
+
+/* Nav tabs (Challenge / Solution / Solves): subtle underline instead of
+   the default bright active-tab treatment. */
+#challenge-window .nav-tabs {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+#challenge-window .nav-tabs .nav-link.active {
+  border-bottom: 2px solid #2f5f8a;
+  color: #1f3d57;
+  font-weight: 500;
+}
+
+/* Description body: a hair more line-height/measure for readability,
+   nothing structural. */
+#challenge-window .challenge-desc {
+  line-height: 1.55;
+}
+
+/* Hints: a quiet left rule instead of plain <details>/<summary>, so an
+   unlocked hint reads as a distinct, calm block rather than competing
+   with the description above it. Purely a border/spacing treatment --
+   the unlock/lock affordance itself (native <details> disclosure arrow
+   + cost text) is untouched. */
+#challenge-window .challenge-hints details {
+  border-left: 2px solid rgba(47, 95, 138, 0.35);
+  padding: 0.4rem 0 0.4rem 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+#challenge-window .challenge-hints summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+/* Flag submission row: a slightly more deliberate focus state than the
+   default Bootstrap blue glow, consistent with the modal's accent. */
+#challenge-window .challenge-input:focus {
+  border-color: #2f5f8a;
+  box-shadow: 0 0 0 0.2rem rgba(47, 95, 138, 0.2);
+}
+
+#challenge-window .challenge-submit {
+  font-weight: 500;
+}
+
+/* instance-launcher's "Launch Environment" panel: give it a quiet
+   bounding box so VNC/SSH credentials read as a distinct, structured
+   block rather than floating loose under the flag form. Only spacing/
+   border -- none of instance-launcher's own markup or classes change. */
+#challenge-window #instance-launcher-panel {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  margin-top: 0.75rem;
+  background-color: rgba(47, 95, 138, 0.03);
+}
+
+#challenge-window #instance-launcher-panel code {
+  color: #1f3d57;
+}
