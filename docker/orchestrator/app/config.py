@@ -62,6 +62,17 @@ class Config:
     # Protects the /admin/* dashboard endpoints.
     ADMIN_PASSWORD = _read_secret("orchestrator_admin_password", os.environ.get("ORCHESTRATOR_ADMIN_PASSWORD", ""))
 
+    # AEAD key store.py encrypts persisted credentials (plan_json -- VNC/
+    # SSH passwords, per-team flag secrets) with before they reach SQLite.
+    # See app/crypto.py. Deliberately outside the database (a Docker secret,
+    # same mechanism as every other secret above), and unset here defaults
+    # to "" so CredentialCipher.from_key_material can log its own loud
+    # warning and fall back to an ephemeral key rather than this file
+    # silently deciding what "unconfigured" means.
+    CREDENTIAL_ENCRYPTION_KEY = _read_secret(
+        "credential_encryption_key", os.environ.get("CREDENTIAL_ENCRYPTION_KEY", "")
+    )
+
     # Dedicated HMAC signing secret for POST /wallet/sync (the Wargames
     # deploy job's `sync_hint_wallet_bundle()`). Deliberately distinct from
     # PLUGIN_SHARED_SECRET: this crosses a different trust boundary

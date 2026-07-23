@@ -13,6 +13,9 @@ from app.controller import (
     NotFoundError,
     ShutdownNotPendingError,
 )
+from cryptography.fernet import Fernet
+
+from app.crypto import CredentialCipher
 from app.ports import PortAllocator
 from app.store import InstanceStore, RangeStore
 
@@ -374,8 +377,14 @@ def test_parallel_relaunches_converge_on_one_replacement():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         db_path = os.path.join(tmp_dir, "controller-race.db")
         docker = BlockingRemovalDocker()
-        stores = [InstanceStore(db_path=db_path) for _ in range(worker_count)]
-        range_stores = [RangeStore(db_path=db_path) for _ in range(worker_count)]
+        # Real gunicorn workers each derive their CredentialCipher from the
+        # SAME mounted `credential_encryption_key` secret file -- sharing
+        # one cipher here (instead of each store defaulting to its own
+        # ephemeral random key) reproduces that, so a worker who wins the
+        # claim can actually decrypt the plan another worker encrypted.
+        cipher = CredentialCipher(Fernet.generate_key())
+        stores = [InstanceStore(db_path=db_path, cipher=cipher) for _ in range(worker_count)]
+        range_stores = [RangeStore(db_path=db_path, cipher=cipher) for _ in range(worker_count)]
         allocators = [PortAllocator(32000, 32767, db_path=db_path) for _ in range(worker_count)]
         controllers = [
             InstanceController(

@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import Fernet
 
 from app.config import Config
 from app.main import create_app
@@ -297,3 +298,59 @@ def test_auth_rejected_when_no_secret_configured():
     c = app.test_client()
     resp = c.post("/instances", json={}, headers={"X-Orchestrator-Auth": ""})
     assert resp.status_code == 401
+
+
+# ── production credential_encryption_key gate ───────────────────────────────
+#
+# create_app() distinguishes "production" from "test" the same way as every
+# other call site in this file: production (app/wsgi.py) always calls
+# create_app() with no `config` at all, letting it default to a real
+# Config() reading from env/secrets; every test above passes its own
+# FakeConfig explicitly. These tests exercise that no-config path directly
+# (with a fake docker_client so no real Docker daemon is required).
+#
+# Config.CREDENTIAL_ENCRYPTION_KEY (like every other Config attribute) is
+# computed once at class-definition/import time via _read_secret, so
+# setting the CREDENTIAL_ENCRYPTION_KEY env var *after* import (i.e. from
+# inside a test) has no effect on it -- monkeypatch.setattr on the class
+# attribute directly instead, which is the accurate way to simulate "this
+# deployment does/doesn't have the secret mounted."
+
+def test_create_app_refuses_to_start_in_production_without_a_credential_encryption_key(monkeypatch):
+    monkeypatch.setattr(Config, "CREDENTIAL_ENCRYPTION_KEY", "")
+
+    with pytest.raises(RuntimeError, match="credential_encryption_key"):
+        create_app(docker_client=FakeDockerOrchestratorClient(), start_reaper=False)
+
+
+def test_create_app_refuses_to_start_in_production_with_an_invalid_credential_encryption_key(monkeypatch):
+    monkeypatch.setattr(Config, "CREDENTIAL_ENCRYPTION_KEY", "not-a-valid-fernet-key")
+
+    with pytest.raises(RuntimeError, match="credential_encryption_key"):
+        create_app(docker_client=FakeDockerOrchestratorClient(), start_reaper=False)
+
+
+def test_create_app_starts_fine_in_production_with_a_valid_credential_encryption_key(monkeypatch):
+    monkeypatch.setattr(Config, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+
+    app = create_app(docker_client=FakeDockerOrchestratorClient(), start_reaper=False)
+    app.testing = True
+
+    assert app.test_client().get("/healthz").status_code == 200
+
+
+def test_create_app_with_an_explicit_config_is_never_subject_to_the_production_gate(monkeypatch):
+    # Passing `config=` explicitly -- what every other test in this file
+    # does, and the only thing that distinguishes them from app/wsgi.py's
+    # bare create_app() -- must keep working even with no key configured
+    # anywhere, since CredentialCipher.from_key_material()'s ephemeral-key
+    # fallback is exactly what local dev/test convenience relies on.
+    monkeypatch.setattr(Config, "CREDENTIAL_ENCRYPTION_KEY", "")
+
+    class NoKeyConfig(FakeConfig):
+        CREDENTIAL_ENCRYPTION_KEY = ""
+
+    app = create_app(config=NoKeyConfig(), docker_client=FakeDockerOrchestratorClient(), start_reaper=False)
+    app.testing = True
+
+    assert app.test_client().get("/healthz").status_code == 200
