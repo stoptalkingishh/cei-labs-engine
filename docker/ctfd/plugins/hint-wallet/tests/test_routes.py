@@ -256,6 +256,51 @@ def test_machine_sync_caches_catalog_locally_only_on_orchestrator_acceptance(app
     assert json.loads(_FakeCatalogTable.row.bundle_json)["revision"] == 5
 
 
+def test_machine_sync_never_persists_hint_content_in_local_cache(app_client, monkeypatch):
+    """The cache exists only so /api/tiers can list tier numbers/costs
+    pre-spend -- api_tiers() already strips `content` at serialization
+    time, but that alone isn't enough: if the raw content were also
+    written to bundle_json, it would sit unencrypted in CTFd's own
+    database, readable by anything with DB access (SQLi, admin-panel
+    dump, backup) even though no current route serializes it back out.
+    The invariant has to hold at the point of writing the cache, not
+    just at the one read call site."""
+    bundle = {
+        "schema_version": 1,
+        "revision": 9,
+        "manifests": [
+            {
+                "track": "bandit",
+                "entries": [
+                    {
+                        "name": "Bandit 0 -> 1",
+                        "tiers": [
+                            {"tier": 1, "cost": 10, "content": "secret nudge"},
+                            {"tier": 2, "cost": 20, "content": "bigger secret nudge"},
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    _install_fake_client(monkeypatch, proxy_wallet_sync=lambda *a, **kw: _fake_orch_response(200, {"status": "accepted"}))
+
+    app_client.post(
+        "/plugins/hint-wallet/machine/sync",
+        data=json.dumps(bundle).encode(),
+        headers={"X-Hint-Wallet-Signature": "sig"},
+        content_type="application/json",
+    )
+
+    assert _FakeCatalogTable.row is not None
+    persisted = json.loads(_FakeCatalogTable.row.bundle_json)
+    for manifest in persisted["manifests"]:
+        for entry in manifest["entries"]:
+            for tier in entry["tiers"]:
+                assert "content" not in tier, f"hint content leaked into local cache: {tier}"
+                assert set(tier.keys()) == {"tier", "cost"}
+
+
 def test_machine_sync_does_not_cache_on_orchestrator_rejection(app_client, monkeypatch):
     _install_fake_client(monkeypatch, proxy_wallet_sync=lambda *a, **kw: _fake_orch_response(422, {"error": "catalog_validation_failed"}))
 

@@ -67,14 +67,37 @@ def _cache_catalog_for_browsing(raw_body: bytes) -> None:
     itself has already returned 200 for this exact body -- see
     machine_sync() below. Any failure here must never affect the response
     already sent for the sync (the orchestrator's acceptance is the real
-    outcome); callers are expected to catch and log, not propagate."""
+    outcome); callers are expected to catch and log, not propagate.
+
+    Strips every tier's `content` before persisting -- this cache exists
+    only so /api/tiers can list tier numbers/costs pre-spend. Storing the
+    real hint text here would put it, unencrypted, in CTFd's own database
+    (readable by an SQLi, an admin-panel dump, or a DB backup) even though
+    api_tiers() itself never serializes it -- the invariant has to be
+    enforced at write time, not just at the one read call site."""
     bundle = json.loads(raw_body)
+    stripped_manifests = []
+    for manifest in bundle.get("manifests", []):
+        stripped_manifest = dict(manifest)
+        stripped_manifest["entries"] = [
+            {
+                **entry,
+                "tiers": [
+                    {k: v for k, v in tier.items() if k != "content"}
+                    for tier in entry.get("tiers", [])
+                ],
+            }
+            for entry in manifest.get("entries", [])
+        ]
+        stripped_manifests.append(stripped_manifest)
+    stripped_bundle = {**bundle, "manifests": stripped_manifests}
+
     catalog = HintWalletCatalog.query.get(1)
     if catalog is None:
         catalog = HintWalletCatalog(id=1, bundle_json="{}")
         db.session.add(catalog)
-    catalog.revision = bundle.get("revision")
-    catalog.bundle_json = json.dumps(bundle)
+    catalog.revision = stripped_bundle.get("revision")
+    catalog.bundle_json = json.dumps(stripped_bundle)
     db.session.commit()
 
 
