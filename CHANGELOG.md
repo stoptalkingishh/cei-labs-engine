@@ -8,6 +8,20 @@ full record.
 
 ## [Unreleased]
 
+### Added
+- `docker/stack.yml`: commented-out scaffolding (secret definition +
+  `orchestrator` service mount) for `hint_wallet_sync_secret_previous`, an
+  `external: true` Docker secret an operator provisions only for the
+  duration of a coordinated `hint_wallet_sync_secret` rotation — the
+  application-side support for accepting either secret already existed
+  (`HINT_WALLET_SYNC_SECRET_PREVIOUS` in `app/config.py`/`app/main.py`,
+  PR #13), this just adds the missing operator-facing piece. Documented as
+  a full runbook in `docs/local-testing-deployment.md` ("Rotating
+  hint_wallet_sync_secret"). The primary `hint_wallet_sync_secret` itself
+  stays `file:`-sourced (unchanged from PR #13) — see that doc section for
+  why an `external:` primary secret was considered and rejected now that a
+  file-based one is already live in production with real data in it.
+
 ### Changed
 - Pinned every base/upstream image to an immutable digest instead of a
   floating tag: `traefik:v3.7.6`, `mariadb:10.11`, `redis:7-alpine` in
