@@ -25,6 +25,16 @@ git (docker/secrets/ is gitignored; docker/secrets.example/ documents the
 expected placeholder files -- see scripts/install.sh for how a real
 deployment generates one). It is never stored in the same SQLite file as the
 ciphertext it protects.
+
+`from_key_material()` itself never refuses to produce a usable cipher (see
+its docstring) -- that fallback is deliberately kept for local dev/test
+convenience. The production entrypoint (app/main.py's create_app(), when
+called with no explicit config -- i.e. never in tests) is what fails loudly
+via `is_valid_key_material()` instead, matching this codebase's other
+secret-gated components (operator/kali-novnc/Dockerfile's /start.sh exits 1
+without VNC_PASSWORD/OPERATOR_PASSWORD; POST /wallet/sync 503s without
+hint_wallet_sync_secret) rather than letting a misconfigured production
+deployment silently run on an ephemeral key.
 """
 import logging
 
@@ -32,7 +42,23 @@ from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CredentialCipher", "InvalidToken"]
+__all__ = ["CredentialCipher", "InvalidToken", "is_valid_key_material"]
+
+
+def is_valid_key_material(key_material: "str | None") -> bool:
+    """True iff `key_material` is non-blank and a validly-formatted Fernet
+    key (urlsafe-base64-encoded 32 bytes). Used both by
+    `CredentialCipher.from_key_material()` (to decide whether to log the
+    "unset" vs. "invalid" warning) and by app/main.py's create_app() (to
+    decide whether to refuse to start in production). Never raises."""
+    key_material = (key_material or "").strip()
+    if not key_material:
+        return False
+    try:
+        Fernet(key_material.encode("utf-8"))
+        return True
+    except (ValueError, TypeError):
+        return False
 
 
 class CredentialCipher:
@@ -57,7 +83,11 @@ class CredentialCipher:
         decryptable again after that process restarts. A real deployment
         MUST set this secret for persisted credentials to survive an
         orchestrator restart (the exact scenario -- 'VM password needs to be
-        rehydrated after a restart' -- this module exists for)."""
+        rehydrated after a restart' -- this module exists for).
+
+        This method itself never refuses to run -- app/main.py's
+        create_app() is where a production deployment with no valid key
+        configured is refused (see is_valid_key_material() above)."""
         key_material = (key_material or "").strip()
         if key_material:
             try:

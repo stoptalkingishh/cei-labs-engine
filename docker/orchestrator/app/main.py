@@ -21,7 +21,7 @@ from .controller import (
     NotFoundError,
     ShutdownNotPendingError,
 )
-from .crypto import CredentialCipher
+from .crypto import CredentialCipher, is_valid_key_material
 from .docker_client import DockerOrchestratorClient
 from .instance_types import InvalidInstanceRequestError, VALID_TYPES
 from .naming import InvalidIdentifierError
@@ -53,9 +53,44 @@ def _instance_response(record) -> dict:
 def create_app(config: "Config | None" = None, docker_client=None, start_reaper: bool = True) -> Flask:
     """`docker_client`/`start_reaper` are injectable so tests can run without
     a real Docker daemon or background thread — production (wsgi/CLI) always
-    calls this with defaults."""
+    calls this with defaults.
+
+    `config` follows the same convention: production (app/wsgi.py) always
+    calls create_app() with no config, letting it default to a real
+    Config() reading from env/secrets; every test constructs its own
+    FakeConfig (see tests/test_api.py) and passes it explicitly. That is
+    also this method's signal for whether it is safe to run with an
+    ephemeral, non-persistent encryption key -- see the
+    CREDENTIAL_ENCRYPTION_KEY check below."""
+    production = config is None
     cfg = config or Config()
     app = Flask(__name__)
+
+    if production and not is_valid_key_material(cfg.CREDENTIAL_ENCRYPTION_KEY):
+        # Fail loudly and refuse to start, matching this codebase's other
+        # secret-gated components: operator/kali-novnc/Dockerfile's
+        # /start.sh exit 1's without VNC_PASSWORD/OPERATOR_PASSWORD, and
+        # POST /wallet/sync 503s without hint_wallet_sync_secret.
+        #
+        # CredentialCipher.from_key_material() itself never refuses -- it
+        # silently falls back to an ephemeral in-process key, which is
+        # useful for local dev/testing (see its docstring and
+        # tests/test_crypto.py) but is exactly the wrong thing for a real
+        # deployment: store.py raises on any read of data encrypted under a
+        # different key than currently configured (see
+        # test_a_row_written_under_one_key_is_unreadable_under_a_different_key
+        # in tests/test_store_encryption.py), so an orchestrator that
+        # silently started with a fresh random key on this restart would
+        # crash on its very next store.get()/store.all() call -- including
+        # the reaper's every sweep -- instead of failing at startup where
+        # the cause is obvious.
+        raise RuntimeError(
+            "credential_encryption_key is not configured (or is not a valid Fernet "
+            "key) -- refusing to start. Set the `credential_encryption_key` Docker "
+            "secret before starting the orchestrator in production (see "
+            "docker/secrets.example/ and app/crypto.py), e.g.: "
+            'python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+        )
 
     docker_client = docker_client or DockerOrchestratorClient(cfg.DOCKER_SOCKET)
     # Shared between both stores so a single deployment's persisted
