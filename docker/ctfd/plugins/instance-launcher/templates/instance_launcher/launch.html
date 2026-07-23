@@ -34,8 +34,14 @@
           <p><a class="btn btn-secondary" href="{{ access.novnc_url }}" target="_blank" rel="noopener">Open Attacker Workstation (direct link)</a></p>
         {% endif %}
         {% if access.attacker_username %}
-          <p>Login: <code>{{ access.attacker_username }}</code> / <code>{{ access.attacker_password }}</code>
-          <br><small>Unique to your team — needed for both noVNC and SSH.</small></p>
+          <p>Username: <code>{{ access.attacker_username }}</code></p>
+        {% endif %}
+        {% if access.ssh_password %}
+          <p>SSH / console password: <code>{{ access.ssh_password }}</code></p>
+        {% endif %}
+        {% if access.novnc_password %}
+          <p>noVNC password: <code>{{ access.novnc_password }}</code>
+          <br><small>Unique to your team — these are two different passwords for the same account.</small></p>
         {% endif %}
         {% if access.target_hostname %}
           <p>Target (from inside the attacker only): <code>{{ access.target_hostname }}</code></p>
