@@ -104,6 +104,27 @@ RUN command -v chromium \
     && ln -sf /usr/bin/chromium /usr/local/bin/www-browser \
     && command -v www-browser
 
+# Natas per-level tab theming (favicon + title only -- native
+# window-chrome theming would need a custom Chromium build or a signed
+# Chrome Web Store theme, neither practical here; see
+# natas-theme-extension/README.md for the full investigation). Loaded
+# as an UNPACKED extension via --load-extension, which needs no
+# signing/store submission. Implemented as a wrapper script at the same
+# /usr/bin/chromium path the apt package installed to, rather than
+# touching update-alternatives -- every existing launcher
+# (exo-open -> sensible-browser -> x-www-browser, and the
+# /usr/local/bin/www-browser symlink above) already resolves to this
+# path, so the flag is picked up with no other launcher change needed.
+COPY natas-theme-extension/ /opt/cei-natas-theme-extension/
+RUN mv /usr/bin/chromium /usr/bin/chromium.real \
+    && printf '%s\n' \
+       '#!/bin/bash' \
+       'exec /usr/bin/chromium.real --load-extension=/opt/cei-natas-theme-extension "$@"' \
+       > /usr/bin/chromium \
+    && chmod +x /usr/bin/chromium \
+    && chown -R root:root /opt/cei-natas-theme-extension \
+    && chmod -R a+rX /opt/cei-natas-theme-extension
+
 # Multiple ways to interact with this box, deliberately (this is a
 # web-exploitation-focused attacker workstation as well as a general
 # analyst box): noVNC for a full desktop in the browser, SSH for players

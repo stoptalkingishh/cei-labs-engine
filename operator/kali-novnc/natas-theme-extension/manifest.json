@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "CEI Labs Natas Tab Theming",
+  "version": "1.0.0",
+  "description": "Colors the browser tab (favicon + title) to match the current Natas level, and reflects that level's already-rendered locked/solved state. Loaded unpacked via --load-extension; not published or signed.",
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*:8000/*", "http://*:8001/*", "http://*:8002/*", "http://*:8003/*",
+        "http://*:8004/*", "http://*:8005/*", "http://*:8006/*", "http://*:8007/*",
+        "http://*:8008/*", "http://*:8009/*", "http://*:8010/*", "http://*:8011/*",
+        "http://*:8012/*", "http://*:8013/*", "http://*:8014/*",
+        "https://*:8000/*", "https://*:8001/*", "https://*:8002/*", "https://*:8003/*",
+        "https://*:8004/*", "https://*:8005/*", "https://*:8006/*", "https://*:8007/*",
+        "https://*:8008/*", "https://*:8009/*", "https://*:8010/*", "https://*:8011/*",
+        "https://*:8012/*", "https://*:8013/*", "https://*:8014/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "all_frames": false
+    }
+  ]
+}
