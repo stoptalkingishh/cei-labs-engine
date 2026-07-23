@@ -75,8 +75,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     ffuf \
     mitmproxy \
+    chromium \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# The desktop's "Web Browser" launcher icon runs `exo-open --launch
+# WebBrowser %u`, which (per this image's /etc/xdg/xfce4/helpers.rc,
+# default WebBrowser=debian-sensible-browser) execs `sensible-browser`.
+# That script tries `$BROWSER`, then -- since an X `$DISPLAY` is always
+# set in this VNC desktop session -- `x-www-browser`, falling back to
+# plain `www-browser` only when `$DISPLAY` is unset (e.g. a bare SSH
+# session with no desktop). Debian's chromium package's postinst
+# already registers /usr/bin/chromium as the `update-alternatives`
+# provider for x-www-browser (and gnome-www-browser) automatically, so
+# the noVNC desktop launcher works with no extra step -- verified live:
+# `update-alternatives --list x-www-browser` reports /usr/bin/chromium
+# right after `apt-get install chromium`, with no manual registration.
+# It does NOT register a `www-browser` binary/alternative though (only
+# `Provides: www-browser` as a dpkg virtual package, which is not the
+# same as a binary on PATH) -- confirmed live: `command -v www-browser`
+# fails after installing chromium alone. That path only matters for the
+# no-$DISPLAY sensible-browser fallback and for anything invoking
+# `www-browser` directly by name (this project's own compatibility
+# convention), so provide it explicitly here rather than relying on
+# apt packaging behavior that could change.
+RUN command -v chromium \
+    && update-alternatives --list x-www-browser \
+    && ln -sf /usr/bin/chromium /usr/local/bin/www-browser \
+    && command -v www-browser
 
 # Multiple ways to interact with this box, deliberately (this is a
 # web-exploitation-focused attacker workstation as well as a general
