@@ -183,7 +183,7 @@ def test_paused_range_attacker_resumes_with_same_password():
     plan, _ = controller.create_or_get(
         it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"}
     )
-    original_password = range_store.get("team-1").plan.access["attacker_password"]
+    original_password = range_store.get("team-1").plan.access["ssh_password"]
     range_record = range_store.get("team-1")
     range_record.last_accessed -= 120
     range_store.update(range_record)
@@ -196,7 +196,7 @@ def test_paused_range_attacker_resumes_with_same_password():
 
     assert created is False
     assert range_store.get("team-1").stopped is False
-    assert resumed_plan.access["attacker_password"] == original_password
+    assert resumed_plan.access["ssh_password"] == original_password
 
 
 # ── shutdown countdown sweeping (also non-destructive) ──────────────────────

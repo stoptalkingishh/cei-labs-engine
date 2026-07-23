@@ -250,7 +250,7 @@ def test_pause_range_keeps_network_and_ports_for_resume():
     plan, _ = controller.create_or_get(
         it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"}
     )
-    original_password = range_store.get("team-1").plan.access["attacker_password"]
+    original_password = range_store.get("team-1").plan.access["ssh_password"]
     network_name = range_store.get("team-1").plan.network
 
     assert controller.pause_range("team-1") is True
@@ -269,7 +269,7 @@ def test_pause_range_keeps_network_and_ports_for_resume():
     )
     assert created is False
     assert range_store.get("team-1").stopped is False
-    assert resumed_plan.access["attacker_password"] == original_password
+    assert resumed_plan.access["ssh_password"] == original_password
 
 
 def test_pause_range_is_a_noop_for_a_missing_or_already_paused_range():
@@ -284,14 +284,14 @@ def test_pause_range_is_a_noop_for_a_missing_or_already_paused_range():
 def test_reboot_range_attacker_resumes_it_when_paused():
     controller, docker, store, range_store = make_controller()
     controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"})
-    original_password = range_store.get("team-1").plan.access["attacker_password"]
+    original_password = range_store.get("team-1").plan.access["ssh_password"]
     controller.pause_range("team-1")
 
     ok = controller.reboot_range_attacker("team-1")
 
     assert ok is True
     assert range_store.get("team-1").stopped is False
-    assert range_store.get("team-1").plan.access["attacker_password"] == original_password
+    assert range_store.get("team-1").plan.access["ssh_password"] == original_password
 
 
 def test_two_teams_get_independent_ranges():
