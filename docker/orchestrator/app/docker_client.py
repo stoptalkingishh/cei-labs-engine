@@ -136,6 +136,73 @@ class DockerOrchestratorClient:
         except NotFound:
             return None
 
+    def resolve_image_digest(self, image_ref: str) -> str:
+        """Best-effort pin of a mutable tag reference (`repo:tag`) to the
+        content digest that tag *currently* resolves to in the local image
+        store, e.g. `repo:latest` -> `repo@sha256:...`.
+
+        Why this and not a real registry digest: these attacker/target/
+        gateway images (ctf-kali-novnc, tcp-gateway, the Bandit/Krypton/
+        Natas targets, ...) are built and loaded locally as part of this
+        station's offline/air-gapped install path -- confirmed live on
+        2026-07-23 (`sudo docker images`, `docker manifest inspect`; see
+        docs/P1-FIX-LOG-2026-07-23.md) -- and are not reliably served by a
+        reachable registry from every Swarm node's point of view. The
+        original bug report's actual failure mode was a fresh Swarm task
+        getting stuck in `Preparing`: when a node schedules a task for a
+        service and doesn't already have a matching image cached, the
+        engine falls back to a registry pull, and a pull that can't
+        complete (private/unreachable registry, or a tag that was only
+        ever pushed locally, never to GHCR) hangs rather than failing fast.
+        Referencing the image by the digest already cached locally sidesteps
+        that: Docker resolves a `repo@sha256:...` reference against its own
+        content store first and only needs a registry if that exact digest
+        is missing everywhere -- which the offline installer is what's
+        supposed to guarantee across nodes (see docs/P1-FIX-LOG-2026-07-23.md
+        for the operational caveat this implies: every node must have
+        loaded the identical image content, or the digest won't be found
+        there either).
+
+        It is *also* the correct hardening against ordinary tag-mutation:
+        it stops a same-named `:latest` rebuild/retag between when an image
+        was tested and when Swarm places a fresh task from silently
+        changing what actually runs, matching how docker/stack.yml already
+        pins traefik/mariadb/redis by digest.
+
+        Falls back to the original tag reference, unresolved (with a
+        logged warning), if the image isn't present locally at all -- e.g.
+        a genuine dev/test environment that expects to pull from a real
+        registry. That is the one scenario this cannot protect against, by
+        design: there is nothing local to pin to yet.
+        """
+        try:
+            image = self._client.images.get(image_ref)
+        except NotFound:
+            logger.warning(
+                "resolve_image_digest: %s not found in the local image store; "
+                "using the tag reference as-is -- a fresh Swarm task for this "
+                "image will depend on a live registry pull succeeding",
+                image_ref,
+            )
+            return image_ref
+
+        repo = image_ref.rsplit("@", 1)[0].rsplit(":", 1)[0]
+        for repo_digest in image.attrs.get("RepoDigests") or []:
+            digest_repo, _, digest = repo_digest.rpartition("@")
+            if digest_repo == repo and digest:
+                pinned = f"{repo}@{digest}"
+                if pinned != image_ref:
+                    logger.info("resolve_image_digest: pinned %s -> %s", image_ref, pinned)
+                return pinned
+
+        logger.warning(
+            "resolve_image_digest: %s has no local RepoDigests (image may "
+            "have been built/loaded without one being recorded); using the "
+            "tag reference as-is",
+            image_ref,
+        )
+        return image_ref
+
     def create_service(self, spec: ServiceSpec):
         existing = self.get_service(spec.name)
         if existing is not None:
@@ -151,9 +218,13 @@ class DockerOrchestratorClient:
             # repeated gateway churn; see docs/network-prerequisites.md.
             endpoint_spec = EndpointSpec(ports={published: target for published, target in spec.published_ports})
 
-        logger.info("creating service %s (image=%s, networks=%s)", spec.name, spec.image, spec.networks)
+        resolved_image = self.resolve_image_digest(spec.image)
+        logger.info(
+            "creating service %s (image=%s, resolved=%s, networks=%s)",
+            spec.name, spec.image, resolved_image, spec.networks,
+        )
         return self._client.services.create(
-            image=spec.image,
+            image=resolved_image,
             name=spec.name,
             env=[f"{k}={v}" for k, v in spec.env.items()],
             networks=[NetworkAttachmentConfig(target=n) for n in spec.networks],
