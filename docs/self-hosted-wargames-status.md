@@ -171,6 +171,30 @@ resynced to the `ghcr.io/local-test/...` build via the plugin's own
 `/admin/mappings/sync` endpoint) — neither is new, both already known and
 documented above, not Stage 3 regressions.
 
+**Correction (`fix/attacker-tls-fallback`): Stage 3's "live-verified" claim
+above was true for functionality but did not cover transport security.**
+`http://localhost:<novnc_port>/vnc.html` above was exactly that — plain
+`http`. The fallback's actual path is
+player browser -> published `novnc_port` -> `operator/tcp-gateway`
+(a minimal byte-forwarding proxy with no TLS of its own) ->
+`kali-novnc`'s websockify, and websockify was started with no
+`--cert`/`--ssl-only`, so every byte on that path — including the noVNC
+password and the full remote-desktop session — went out in the clear, on
+the exact path the primary (Traefik, TLS) `attacker_url` route exists to
+avoid. Fixed by starting a second, TLS-only websockify listener in
+`operator/kali-novnc/Dockerfile`'s `/start.sh` (self-signed cert
+regenerated fresh per container at boot, same never-baked-in-the-image
+convention as `OPERATOR_PASSWORD`/`VNC_PASSWORD`), pointing
+`GATEWAY_NOVNC_PORT`'s forward at that listener instead of the original
+plain one, and switching `novnc_url` to `https://` with an updated
+`novnc_note` warning players to expect (and click through) a
+self-signed-certificate browser warning. The original plain listener is
+untouched and still serves the Traefik-fronted `attacker_url` route,
+which terminates TLS at the edge and never carries this traffic outside
+the private overlay network — a materially different exposure than the
+fallback, which crosses the public network directly. See that branch's
+commit for the full diff and reasoning.
+
 ## Player-experience round 2: minimal launch panel, per-challenge launcher visibility, and a real CSRF finding
 
 More real playtest feedback landed after Stage 2's browser-verification

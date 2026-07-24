@@ -22,11 +22,10 @@
  *
  * Selectors otherwise target only classes/ids CTFd's own
  * themes/core/templates/challenge.html already renders, plus
- * #instance-launcher-panel (docker/ctfd/plugins/instance-launcher) so
- * that plugin's "Launch Environment" panel reads as part of the same
- * calm surface instead of clashing with it. hint-wallet has no modal UI
- * of its own -- it rides CTFd's native hint <details> markup, which is
- * covered here directly.
+ * #instance-launcher-panel (docker/ctfd/plugins/instance-launcher) and
+ * #hint-wallet-panel (docker/ctfd/plugins/hint-wallet/assets/hint-wallet.js)
+ * so both plugins' injected panels read as part of the same calm surface
+ * instead of clashing with it.
  *
  * Accessibility: the accent color (#2f5f8a) against white is ~4.9:1
  * contrast, comfortably AA for normal text. Nothing here introduces a
@@ -128,4 +127,16 @@
 
 #challenge-window #instance-launcher-panel code {
   color: #1f3d57;
+}
+
+/* hint-wallet's panel (docker/ctfd/plugins/hint-wallet/assets/hint-wallet.js)
+   sits directly below instance-launcher's -- same quiet bounding-box
+   treatment so the two read as one consistent surface rather than the
+   second panel clashing with the first. */
+#challenge-window #hint-wallet-panel {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  margin-top: 0.75rem;
+  background-color: rgba(47, 95, 138, 0.03);
 }
