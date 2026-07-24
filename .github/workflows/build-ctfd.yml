@@ -27,16 +27,53 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install plugin test dependencies
+      - name: Install instance-launcher test dependencies
         working-directory: docker/ctfd/plugins/instance-launcher
-        run: pip install -r requirements.txt pytest
+        # flask isn't in requirements.txt because in production it's
+        # supplied by the CTFd base image (see docker/ctfd/Dockerfile);
+        # test_secret_scrubbing.py loads routes.py directly, which imports
+        # flask at module level, so it's installed explicitly here for CI.
+        run: pip install -r requirements.txt pytest flask
 
       - name: Run instance-launcher unit tests
-        # Only orchestrator_client.py is tested here — it's the one module
-        # with no CTFd dependency, so it can run without installing CTFd
-        # itself. models.py/routes.py are exercised via the manual
-        # verification steps in the migration plan (needs a real CTFd + DB).
+        # Runs this plugin's whole tests/ directory. CTFd/Flask/SQLAlchemy
+        # internals that routes.py/models.py import at module level are
+        # stubbed out with plain Python doubles inside the test modules
+        # themselves, so the suite runs without installing CTFd itself.
         working-directory: docker/ctfd/plugins/instance-launcher
+        run: pytest -q --import-mode=importlib tests/
+
+      - name: Install hint-wallet test dependencies
+        working-directory: docker/ctfd/plugins/hint-wallet
+        # flask isn't in requirements.txt because in production it's
+        # supplied by the CTFd base image (see docker/ctfd/Dockerfile);
+        # test_routes.py exercises routes.py's blueprint through a real
+        # Flask test client, so it's installed explicitly here for CI.
+        run: pip install -r requirements.txt pytest flask
+
+      - name: Run hint-wallet unit tests
+        working-directory: docker/ctfd/plugins/hint-wallet
+        run: pytest -q --import-mode=importlib tests/
+
+      - name: Install modal-theme test dependencies
+        working-directory: docker/ctfd/plugins/modal-theme
+        # No requirements.txt: this plugin is CSS-only, and its tests only
+        # read __init__.py and the stylesheet off disk (no CTFd/Flask
+        # imports), so pytest is the only dependency needed.
+        run: pip install pytest
+
+      - name: Run modal-theme unit tests
+        working-directory: docker/ctfd/plugins/modal-theme
+        run: pytest -q --import-mode=importlib tests/
+
+      - name: Install wargame-stages test dependencies
+        working-directory: docker/ctfd/plugins/wargame-stages
+        # No requirements.txt: logic.py has no third-party dependencies,
+        # so pytest is the only dependency needed.
+        run: pip install pytest
+
+      - name: Run wargame-stages unit tests
+        working-directory: docker/ctfd/plugins/wargame-stages
         run: pytest -q --import-mode=importlib tests/
 
   build-and-push:
