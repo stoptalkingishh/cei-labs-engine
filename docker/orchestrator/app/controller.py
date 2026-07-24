@@ -110,7 +110,7 @@ class InstanceController:
                 # same Docker resources from the persisted plan (same env,
                 # same generated credentials/flags) instead of replanning.
                 # See pause()/_resume_range_if_stopped()'s docstrings.
-                self._resume_record(existing)
+                self._resume_record(owner_id, instance_key)
             existing.touch()
             self.store.touch(owner_id, instance_key)
             if existing.plan.range_owner_id:
@@ -280,17 +280,31 @@ class InstanceController:
     # teardown()/teardown_range() (explicit delete, or true absolute-lifetime
     # expiry -- see reaper._sweep_expired_instances) still end with a fresh
     # plan and therefore new credentials.
-    def _resume_record(self, record: InstanceRecord) -> None:
+    def _resume_record(self, owner_id: str, instance_key: str) -> bool:
         """Recreate a paused instance's Docker resources from its persisted
         plan -- same env (same VNC/OPERATOR password, same flags) -- and
         clear its stopped flag. Ports were never released on pause (see
         pause()), so `access` (advertised connect host/port) stays valid
-        too."""
-        if record.plan.network:
-            self.docker.ensure_network(record.plan.network, internal=True)
-        self._create_services(record.plan.services)
-        record.stopped = False
-        self.store.update(record)
+        too.
+
+        Uses store.transition_stopped() to atomically claim the
+        stopped-True -> stopped-False transition before touching Docker:
+        exactly one caller ever recreates the resources for a given resume,
+        even if a concurrent reboot()/create_or_get() targets the same row
+        at the same instant, and this can't interleave with the reaper
+        concurrently pausing the same row mid-transition. Returns False
+        (no-op) if the row was already resumed or paused again by someone
+        else by the time this ran -- matches get()-then-check's previous
+        idempotency."""
+        claimed = self.store.transition_stopped(
+            owner_id, instance_key, expected_stopped=True, new_stopped=False
+        )
+        if claimed is None:
+            return False
+        if claimed.plan.network:
+            self.docker.ensure_network(claimed.plan.network, internal=True)
+        self._create_services(claimed.plan.services)
+        return True
 
     def _resume_range_if_stopped(self, owner_id: str) -> None:
         range_record = self.range_store.get(owner_id)
@@ -315,22 +329,28 @@ class InstanceController:
         same connect_host:connect_port a learner may already have been
         given. Returns False if there's nothing to pause (no record, or
         already paused) -- idempotent/safe for the reaper to call every
-        sweep."""
-        record = self.store.get(owner_id, instance_key)
-        if record is None or record.stopped:
+        sweep.
+
+        store.transition_stopped() atomically claims the stopped-False ->
+        stopped-True transition (clearing shutdown_at/extensions_used in
+        the same transaction -- a pause supersedes any pending post-solve
+        countdown, since there's nothing left running to shut down, and
+        carrying a stale shutdown_at across a later resume would
+        immediately re-trigger teardown on the next sweep) before any
+        Docker call runs, exactly like claim_for_replacement() claims a row
+        before teardown(). This closes the race where the reaper's sweep
+        thread and a request thread (e.g. extend_shutdown()) both read the
+        same pre-mutation row and whichever plain update() committed last
+        used to silently clobber the other."""
+        record = self.store.transition_stopped(
+            owner_id, instance_key, expected_stopped=False, new_stopped=True, reset_shutdown=True
+        )
+        if record is None:
             return False
         for svc_spec in record.plan.services:
             self.docker.remove_service(svc_spec.name)
         if record.plan.network:
             self.docker.remove_network(record.plan.network)
-        record.stopped = True
-        # A pause supersedes any pending post-solve countdown -- there's
-        # nothing left running to shut down, and carrying a stale
-        # shutdown_at across a later resume would immediately re-trigger
-        # teardown on the next sweep.
-        record.shutdown_at = None
-        record.extensions_used = 0
-        self.store.update(record)
         return True
 
     def pause_range(self, owner_id: str) -> bool:
@@ -431,13 +451,14 @@ class InstanceController:
         if record is None:
             return False
         if record.stopped:
-            self._resume_record(record)
-            record.touch()
+            # _resume_record atomically re-checks `stopped` itself (via
+            # transition_stopped) rather than trusting this `record` snapshot
+            # -- it may already be stale by the time we get here.
+            self._resume_record(owner_id, instance_key)
             self.store.touch(owner_id, instance_key)
             if record.plan.range_owner_id:
                 self._resume_range_if_stopped(record.plan.range_owner_id)
             return True
-        record.touch()
         self.store.touch(owner_id, instance_key)
         ok = True
         for svc_spec in record.plan.services:
@@ -457,31 +478,33 @@ class InstanceController:
         return self.docker.restart_service(range_record.plan.attacker_service.name)
 
     # ── Post-solve shutdown countdown ────────────────────────────────────────
+    # schedule/extend/cancel below all delegate the actual read-then-write to
+    # a dedicated store.py method wrapped in a single BEGIN IMMEDIATE
+    # transaction (see store.py's docstrings on those methods), rather than
+    # doing get() -> mutate in Python -> update() as three separate
+    # auto-committing statements. The old shape let a concurrent caller on
+    # the identical row -- most importantly the reaper's background thread
+    # (reaper.py's _sweep_due_shutdowns/_sweep_idle_instances calling
+    # controller.pause() concurrently with any request thread) -- read the
+    # same pre-mutation row and have its own update() silently clobber
+    # whichever of these three committed first.
     def schedule_shutdown(self, owner_id: str, instance_key: str, delay_seconds: int) -> float:
-        record = self.store.get(owner_id, instance_key)
-        if record is None:
+        shutdown_at = self.store.schedule_shutdown(owner_id, instance_key, delay_seconds)
+        if shutdown_at is None:
             raise NotFoundError(f"no instance for {owner_id}/{instance_key}")
-        record.shutdown_at = time.time() + delay_seconds
-        record.extensions_used = 0
-        self.store.update(record)
-        return record.shutdown_at
+        return shutdown_at
 
     def extend_shutdown(self, owner_id: str, instance_key: str, extend_seconds: int) -> float:
-        record = self.store.get(owner_id, instance_key)
-        if record is None:
+        status, shutdown_at = self.store.extend_shutdown(
+            owner_id, instance_key, extend_seconds, self.shutdown_max_extensions
+        )
+        if status == "not_found":
             raise NotFoundError(f"no instance for {owner_id}/{instance_key}")
-        if record.shutdown_at is None:
+        if status == "not_pending":
             raise ShutdownNotPendingError("no shutdown is currently scheduled for this instance")
-        if record.extensions_used >= self.shutdown_max_extensions:
+        if status == "exhausted":
             raise ExtensionsExhaustedError(f"maximum of {self.shutdown_max_extensions} extensions already used")
-        record.extensions_used += 1
-        record.shutdown_at = time.time() + extend_seconds
-        self.store.update(record)
-        return record.shutdown_at
+        return shutdown_at
 
     def cancel_shutdown(self, owner_id: str, instance_key: str) -> None:
-        record = self.store.get(owner_id, instance_key)
-        if record is not None:
-            record.shutdown_at = None
-            record.extensions_used = 0
-            self.store.update(record)
+        self.store.cancel_shutdown(owner_id, instance_key)
