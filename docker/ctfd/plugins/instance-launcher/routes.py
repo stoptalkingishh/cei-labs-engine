@@ -56,6 +56,23 @@ def _resolve_config(challenge_id: int) -> "InstanceChallengeConfig | None":
     return InstanceChallengeConfig.query.filter_by(challenge_id=challenge_id).first()
 
 
+def _reject_if_not_visible(challenge: "Challenges") -> None:
+    """wargame-stages (docker/ctfd/plugins/wargame-stages/routes.py) is the
+    sole gate for staged content -- it flips a challenge's CTFd `state`
+    between "hidden" (mapped into a not-yet-started stage, see sync()) and
+    "visible" (stage started, see start()) as stages open. CTFd challenge
+    ids are small sequential integers, so without this check any
+    authenticated player could enumerate ids and launch a real container --
+    getting real connect info -- for a challenge in a stage that hasn't
+    opened yet, ahead of schedule. Only "hidden" is blocked: any other CTFd
+    challenge state (visible, or a future custom one) is left alone so
+    already-open/launched challenges are unaffected, and this is never
+    applied to the /admin/* routes below, which must keep working on
+    hidden challenges (e.g. mapping instance config before a stage opens)."""
+    if challenge.state == "hidden":
+        abort(403, description="This challenge is not open yet.")
+
+
 DYNAMIC_FLAG_TYPES = ("per_team_dynamic", "per_team_dynamic_alpha", "per_team_dynamic_fixed")
 
 
@@ -229,6 +246,7 @@ def launch(challenge_id: int):
       - POST action=extend   "+5 more minutes" during a post-solve countdown
     """
     challenge = Challenges.query.get_or_404(challenge_id)
+    _reject_if_not_visible(challenge)
     config = _resolve_config(challenge_id)
     if config is None:
         abort(404, description="This challenge has no environment configured.")
@@ -252,6 +270,8 @@ def api_status(challenge_id: int):
     repeatedly. Used by challenge-launch.js to decide whether a challenge
     has a launchable environment at all, and to poll live status once a
     player has launched one, without ever re-triggering create_or_get."""
+    challenge = Challenges.query.get_or_404(challenge_id)
+    _reject_if_not_visible(challenge)
     config = _resolve_config(challenge_id)
     if config is None:
         return {"has_environment": False}, 200
@@ -291,6 +311,8 @@ def api_launch(challenge_id: int):
     session + CSRF checks (@authed_only, no @bypass_csrf_protection) —
     challenge-launch.js sends CTFd's own CSRF-Token header, matching every
     other authenticated fetch() call CTFd's own bundled frontend makes."""
+    challenge = Challenges.query.get_or_404(challenge_id)
+    _reject_if_not_visible(challenge)
     config = _resolve_config(challenge_id)
     if config is None:
         abort(404, description="This challenge has no environment configured.")
