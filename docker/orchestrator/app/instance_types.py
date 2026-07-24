@@ -349,6 +349,16 @@ def plan_range_attacker(
     fallback. This mirrors the SSH fix exactly, for the same reason."""
     attacker_image = _require_str(spec, "attacker_image")
     attacker_port = int(spec.get("attacker_port", 6080))
+    # Separate, TLS-only websockify listener (operator/kali-novnc/Dockerfile's
+    # /start.sh runs both) that the no-DNS noVNC fallback below is forwarded
+    # to instead of the plain `attacker_port`. attacker_port stays plaintext
+    # and keeps serving the Traefik-fronted primary route unchanged (that hop
+    # is edge-TLS-terminated by Traefik and never leaves the private overlay
+    # network); attacker_novnc_tls_port exists because the fallback -- unlike
+    # the Traefik route -- goes straight from the player's browser, through
+    # tcp-gateway (which does zero TLS of its own), to this container, so it
+    # needs its own encrypted listener rather than reusing the plaintext one.
+    attacker_novnc_tls_port = int(spec.get("attacker_novnc_tls_port", 6443))
     attacker_ssh_port = int(spec.get("attacker_ssh_port", 22))
     attacker_env = dict(spec.get("attacker_env") or {})
 
@@ -402,7 +412,7 @@ def plan_range_attacker(
         [range_network, challenge_network],
         [
             {"listen": GATEWAY_SSH_PORT, "host": attacker_name, "port": attacker_ssh_port},
-            {"listen": GATEWAY_NOVNC_PORT, "host": attacker_name, "port": attacker_port},
+            {"listen": GATEWAY_NOVNC_PORT, "host": attacker_name, "port": attacker_novnc_tls_port},
             {"listen": GATEWAY_HTTP_PORT, "host": attacker_name, "port": attacker_port},
         ],
         labels=_traefik_labels(gateway_name, hostname, GATEWAY_HTTP_PORT, challenge_network),
@@ -428,8 +438,26 @@ def plan_range_attacker(
             "protocol": "ssh",
             "note": "SSH connects via any swarm node — this hostname routes to whichever node the attacker actually landed on.",
             "novnc_port": allocated_novnc_port,
-            "novnc_url": f"http://{base_domain}:{allocated_novnc_port}/vnc.html",
-            "novnc_note": "Direct noVNC access, no DNS required — use this if the link above doesn't resolve.",
+            # https, not http: this URL reaches operator/tcp-gateway (a
+            # zero-TLS byte-forwarding proxy) straight through to
+            # kali-novnc's dedicated TLS websockify listener
+            # (attacker_novnc_tls_port above), with no Traefik hop in
+            # between -- it's the whole reason this fallback exists (works
+            # with no wildcard DNS). websockify terminates TLS itself there
+            # with a self-signed cert generated fresh per container at boot
+            # (see operator/kali-novnc/Dockerfile's /start.sh), so this path
+            # is encrypted instead of silently carrying the VNC password and
+            # full desktop session in cleartext, the way it would over the
+            # plain listener the Traefik-fronted primary route still uses.
+            "novnc_url": f"https://{base_domain}:{allocated_novnc_port}/vnc.html",
+            "novnc_note": (
+                "Direct noVNC access, no DNS required — use this if the link "
+                "above doesn't resolve. This connects over TLS with a "
+                "self-signed certificate (unique to your instance), so your "
+                "browser will show a certificate-warning page first — click "
+                "through it (e.g. \"Advanced\" -> \"Proceed\"). That warning "
+                "is expected here, not a sign of a problem."
+            ),
         },
     )
 
