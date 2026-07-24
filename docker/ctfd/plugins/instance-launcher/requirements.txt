@@ -4,14 +4,22 @@ requests==2.32.3
 # dedicated venv/image with nothing else opinionated about Flask's version.
 # This plugin is different: docker/ctfd/Dockerfile pip-installs this file
 # INTO the ctfd/ctfd:3.8.2 base image, which already bundles its own Flask
-# for CTFd itself. An exact pin here could force an upgrade/downgrade of
-# that bundled Flask and break CTFd on every image rebuild if CTFd's own
-# pin ever drifts from ours. routes.py only uses long-stable Blueprint/
-# abort/redirect/render_template/request/url_for, so a wide range is
-# enough: floor of 2.2 guarantees a modern-enough Flask for a clean CI venv
-# (tests/test_secret_scrubbing.py execs routes.py at module scope and needs
-# `flask` importable), ceiling of <4 avoids ever being silently bumped to a
-# future major version we haven't verified against. Inside the ctfd image
-# itself this constraint is normally already satisfied by CTFd's bundled
-# Flask, so `pip install -r requirements.txt` there is a no-op for this line.
-flask>=2.2,<4
+# for CTFd itself -- verified live: that image ships Flask 2.1.3, with
+# Flask-Babel 2.0.0 depending on a `flask.helpers.locked_cached_property`
+# that Flask itself removed in 2.3. A `>=2.2` floor here (an earlier version
+# of this constraint) is ABOVE that bundled 2.1.3, so `pip install -r
+# requirements.txt` treated it as unsatisfied and force-upgraded Flask past
+# 2.3 to satisfy the floor -- breaking Flask-Babel's import and crash-looping
+# every CTFd worker (`ImportError: cannot import name 'locked_cached_property'
+# from 'flask.helpers'`), reproduced by actually deploying the stack, not
+# just running this plugin's own tests in isolation. No floor is needed:
+# pip only upgrades an already-installed package to satisfy a *lower bound*
+# it fails to meet, never to satisfy just a ceiling, so `flask<4` alone
+# leaves CTFd's bundled 2.1.3 untouched inside the ctfd image (correctly a
+# no-op there) while still installing a modern Flask in a clean CI venv
+# that has no Flask yet (tests/test_secret_scrubbing.py execs routes.py at
+# module scope and needs `flask` importable). Ceiling of <4 avoids ever
+# being silently bumped to a future major version we haven't verified
+# against. routes.py only uses long-stable Blueprint/abort/redirect/
+# render_template/request/url_for, so this wide range is enough.
+flask<4
