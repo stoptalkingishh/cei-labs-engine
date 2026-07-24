@@ -50,6 +50,11 @@
 
       {% if access.connect_port %}
         <p>Host: <code>{{ access.connect_host }}</code><br>Port: <code>{{ access.connect_port }}</code></p>
+      {% elif not access.url and not access.attacker_url %}
+        <p>Provisioning your environment&hellip; this page will refresh automatically.</p>
+        <script>
+          setTimeout(function () { window.location.reload(); }, 3000);
+        </script>
       {% endif %}
 
       {% if status.shutdown_at %}
