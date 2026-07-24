@@ -1,1 +1,17 @@
 requests==2.32.3
+# Range-constrained, not exact-pinned like docker/orchestrator/requirements.txt's
+# flask==3.0.3. That pin is safe there because the orchestrator gets its own
+# dedicated venv/image with nothing else opinionated about Flask's version.
+# This plugin is different: docker/ctfd/Dockerfile pip-installs this file
+# INTO the ctfd/ctfd:3.8.2 base image, which already bundles its own Flask
+# for CTFd itself. An exact pin here could force an upgrade/downgrade of
+# that bundled Flask and break CTFd on every image rebuild if CTFd's own
+# pin ever drifts from ours. routes.py only uses long-stable Blueprint/
+# abort/redirect/render_template/request/url_for, so a wide range is
+# enough: floor of 2.2 guarantees a modern-enough Flask for a clean CI venv
+# (tests/test_secret_scrubbing.py execs routes.py at module scope and needs
+# `flask` importable), ceiling of <4 avoids ever being silently bumped to a
+# future major version we haven't verified against. Inside the ctfd image
+# itself this constraint is normally already satisfied by CTFd's bundled
+# Flask, so `pip install -r requirements.txt` there is a no-op for this line.
+flask>=2.2,<4

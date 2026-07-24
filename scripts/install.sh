@@ -107,7 +107,7 @@ configure_docker_env() {
     fi
 
     echo -e "\n${YELLOW}Secrets (leave blank to auto-generate a random value):${NC}"
-    for name in ctfd_secret_key ctfd_db_password ctfd_db_root_password plugin_shared_secret orchestrator_admin_password; do
+    for name in ctfd_secret_key ctfd_db_password ctfd_db_root_password plugin_shared_secret orchestrator_admin_password hint_wallet_sync_secret; do
         read -rsp "  ${name}: " VALUE
         echo
         if [[ -z "$VALUE" ]]; then
