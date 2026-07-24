@@ -155,7 +155,7 @@
         " &mdash; <strong>" +
         escapeHtml(t.cost) +
         '</strong> hint credits</span> ' +
-        '<button type="button" class="btn btn-outline-secondary btn-sm ml-1" data-action="reveal" data-tier="' +
+        '<button type="button" class="btn btn-outline-secondary btn-sm me-1" data-action="reveal" data-tier="' +
         escapeAttr(t.tier) +
         '">Reveal hint</button>' +
         '<div class="hint-wallet-content mt-1"></div>' +
