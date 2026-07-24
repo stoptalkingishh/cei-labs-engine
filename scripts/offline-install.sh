@@ -44,7 +44,6 @@ log_step()  { echo -e "\n${BLUE}══ $* ══${NC}" | tee -a "$LOG_FILE"; }
 # failure in one step stop later ones — that's the whole point of not
 # using `set -e` here; every step function traps its own errors.
 declare -A STEP_STATUS
-declare -A STEP_NOTE
 run_step() {
   local num="$1" name="$2" fn="$3"
   log_step "[$num/9] $name"
