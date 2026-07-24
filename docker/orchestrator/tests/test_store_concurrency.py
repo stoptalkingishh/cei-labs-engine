@@ -16,15 +16,21 @@ import multiprocessing
 import os
 import tempfile
 import threading
+import time
 
 from cryptography.fernet import Fernet
 
 from app import instance_types as it
+from app.controller import InstanceController, ShutdownNotPendingError
 from app.crypto import CredentialCipher
 from app.ports import PortAllocator
 from app.store import InstanceStore, RangeStore, ReservationCapacityError
 
+from .fakes import FakeDockerOrchestratorClient
+
 N_WORKERS = 20
+BASE_DOMAIN = "ctf.local"
+CHALLENGE_NET = "cei-labs_challenge-edge"
 
 
 def _open_all_sqlite_components(db_path, barrier):
@@ -172,3 +178,110 @@ def test_components_initialize_cleanly_in_parallel_processes():
 
         assert all(not process.is_alive() for process in processes)
         assert [process.exitcode for process in processes] == [0] * worker_count
+
+
+def test_reaper_pause_does_not_race_a_concurrent_extend_shutdown():
+    """Regression test for the reaper/controller race described in
+    store.py's transition_stopped()/schedule_shutdown()/extend_shutdown()
+    docstrings: reaper.py's background thread (started in main.py, running
+    inside the SAME process as every request thread) calls
+    controller.pause() out of _sweep_due_shutdowns()/_sweep_idle_instances()
+    concurrently with a player's request thread calling
+    controller.extend_shutdown() on the identical (owner_id, instance_key)
+    row -- e.g. a player extends their shutdown deadline at the exact
+    instant the reaper sweeps it as due.
+
+    Before pause()/extend_shutdown() wrapped their read-then-write in a
+    BEGIN IMMEDIATE transaction (the same pattern reserve()/
+    claim_for_replacement() use above), both sides read the identical
+    pre-mutation row via a plain get(), mutated their own Python-side copy,
+    and called update() -- three separate auto-committing statements with
+    no transaction spanning the read and the write. Whichever update()
+    landed last silently clobbered the other's fields. Concretely: if
+    extend_shutdown()'s update() (built from a stale get() that still saw
+    stopped=False) committed after pause()'s update(), the row would end up
+    with stopped=False even though pause() had already torn down the real
+    Docker service/network -- store bookkeeping desynced from reality, so a
+    later create_or_get()/reboot() would treat a nonexistent container as
+    still running.
+
+    This drives many trials of that exact interleaving (a fresh
+    barrier-released thread pair per trial, since racy interleavings only
+    reproduce probabilistically) and asserts, every time, that the
+    persisted `stopped` flag agrees with whether the Docker resources are
+    actually still live -- the store can never observably disagree with
+    what really happened to Docker -- and that the row never lands in a
+    hybrid state no single serialized operation could have produced.
+    """
+    trials = 40
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "reaper-race.db")
+        docker = FakeDockerOrchestratorClient()
+        store = InstanceStore(db_path=db_path)
+        range_store = RangeStore(db_path=db_path)
+        ports = PortAllocator(32000, 32767, db_path=db_path)
+        controller = InstanceController(
+            docker, store, range_store, ports, BASE_DOMAIN, CHALLENGE_NET,
+            max_instances=1000, shutdown_max_extensions=3,
+        )
+
+        for i in range(trials):
+            owner_id, instance_key = "race-team", f"box-{i}"
+            controller.create_or_get(it.WEB_APP, owner_id, instance_key, {"image": "img"})
+            controller.schedule_shutdown(owner_id, instance_key, delay_seconds=30)
+
+            barrier = threading.Barrier(2)
+            errors = []
+
+            def sweep_pause():
+                barrier.wait()
+                try:
+                    controller.pause(owner_id, instance_key)
+                except Exception as exc:  # pragma: no cover - surfaced via errors list
+                    errors.append(exc)
+
+            def player_extend():
+                barrier.wait()
+                try:
+                    controller.extend_shutdown(owner_id, instance_key, extend_seconds=300)
+                except ShutdownNotPendingError:
+                    pass  # correct outcome if pause() won the DB race first
+                except Exception as exc:  # pragma: no cover - surfaced via errors list
+                    errors.append(exc)
+
+            reaper_thread = threading.Thread(target=sweep_pause)
+            request_thread = threading.Thread(target=player_extend)
+            reaper_thread.start()
+            request_thread.start()
+            reaper_thread.join()
+            request_thread.join()
+
+            assert not errors, f"trial {i}: unexpected exception(s): {errors}"
+
+            record = store.get(owner_id, instance_key)
+            assert record is not None, f"trial {i}: record vanished"
+
+            service_names = {svc.name for svc in record.plan.services}
+            docker_live = bool(service_names & set(docker.services.keys()))
+
+            if record.stopped:
+                # pause() won: the row must not still claim a live shutdown
+                # countdown, and Docker must actually be torn down.
+                assert record.shutdown_at is None, f"trial {i}: stopped but shutdown_at survived: {record}"
+                assert record.extensions_used == 0, f"trial {i}: stopped but extensions_used survived: {record}"
+                assert not docker_live, f"trial {i}: store says stopped but Docker services are still live"
+            else:
+                # extend_shutdown() alone can never observably win here --
+                # pause() unconditionally clears shutdown_at as part of its
+                # own atomic transition regardless of commit order, so the
+                # only way `stopped` is False afterwards is if pause() never
+                # got a chance to run at all. Either way, Docker must still
+                # be live and the row internally consistent.
+                assert docker_live, f"trial {i}: store says running but Docker services were torn down (lost pause)"
+                assert record.shutdown_at is not None and record.shutdown_at > time.time(), (
+                    f"trial {i}: running with no live countdown: {record}"
+                )
+
+        store.close()
+        range_store.close()
+        ports.close()

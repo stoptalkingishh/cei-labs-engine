@@ -418,6 +418,80 @@ class InstanceStore:
             stopped=bool(stopped),
         )
 
+    def transition_stopped(
+        self,
+        owner_id: str,
+        instance_key: str,
+        expected_stopped: bool,
+        new_stopped: bool,
+        reset_shutdown: bool = False,
+    ) -> "InstanceRecord | None":
+        """Atomic compare-and-swap on a finalized row's `stopped` flag --
+        same ``BEGIN IMMEDIATE`` pattern as ``claim_for_replacement`` above,
+        applied to the pause/resume lifecycle instead of the relaunch one.
+
+        Controller-level pause()/reboot() used to do a plain
+        ``get()`` -> Python-side flip -> ``update()``, each statement
+        auto-committing on its own (``isolation_level=None``), with no
+        transaction spanning the read and the write. The background reaper
+        thread (reaper.py's ``_sweep_due_shutdowns``/``_sweep_idle_instances``,
+        started in main.py, running concurrently with every request thread
+        in the same process) calls ``controller.pause()`` on the same rows
+        a request thread might be resuming/scheduling/extending at that
+        exact instant. Both sides would read the pre-mutation row and
+        whichever ``update()`` committed last silently clobbered the
+        other's fields -- e.g. a resume's Docker-recreate could land, then
+        a stale concurrent pause() commit could still mark the row
+        ``stopped`` even though live containers now exist again, desyncing
+        the store from real Docker state.
+
+        This atomically checks the row's current ``stopped`` flag against
+        `expected_stopped` and, only if it matches, flips it to
+        `new_stopped` (and -- for a pause, via `reset_shutdown` -- clears
+        `shutdown_at`/`extensions_used` too) inside one transaction. Returns
+        the record as it looked *right before* the flip -- so the caller
+        can safely perform the matching Docker side effect (teardown for a
+        pause, recreate for a resume) knowing it's the sole owner of that
+        transition -- or `None` if there is nothing to do (no finalized
+        row, or `stopped` didn't match `expected_stopped`, meaning some
+        other concurrent caller already made this exact transition or the
+        row is in the opposite state).
+        """
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT plan_json, created_at, last_accessed, shutdown_at, extensions_used, stopped "
+                "FROM instances WHERE owner_id = ? AND instance_key = ?",
+                (owner_id, instance_key),
+            ).fetchone()
+            if row is None or row[0] is None or bool(row[5]) != expected_stopped:
+                conn.execute("COMMIT")
+                return None
+            plan_json, created_at, last_accessed, shutdown_at, extensions_used, stopped = row
+            plan_json = _decrypt_plan(self._cipher, plan_json)
+            record = InstanceRecord(
+                plan=_plan_from_json(plan_json),
+                created_at=created_at,
+                last_accessed=last_accessed,
+                shutdown_at=shutdown_at,
+                extensions_used=extensions_used,
+                stopped=bool(stopped),
+            )
+            new_shutdown_at = None if reset_shutdown else shutdown_at
+            new_extensions_used = 0 if reset_shutdown else extensions_used
+            conn.execute(
+                "UPDATE instances SET stopped = ?, shutdown_at = ?, extensions_used = ? "
+                "WHERE owner_id = ? AND instance_key = ?",
+                (int(new_stopped), new_shutdown_at, new_extensions_used, owner_id, instance_key),
+            )
+            conn.execute("COMMIT")
+            return record
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+
     def finalize(self, owner_id: str, instance_key: str, plan: InstancePlan) -> None:
         """Fill in the real plan after a won reservation's Docker resources
         actually got created."""
@@ -507,6 +581,113 @@ class InstanceStore:
                 record.instance_key,
             ),
         )
+
+    def schedule_shutdown(self, owner_id: str, instance_key: str, delay_seconds: int) -> "float | None":
+        """Atomically set ``shutdown_at`` = now + `delay_seconds` and reset
+        ``extensions_used`` for a finalized row -- same ``BEGIN IMMEDIATE``
+        pattern as ``reserve()``/``claim_for_replacement()``/
+        ``transition_stopped()`` above, so this read-then-write can't
+        interleave with a concurrent ``extend_shutdown()``/
+        ``cancel_shutdown()``/``transition_stopped()`` call (e.g. the
+        reaper pausing this same row) racing on the identical row. Returns
+        the new `shutdown_at`, or `None` if there's no such instance."""
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT 1 FROM instances WHERE owner_id = ? AND instance_key = ? AND plan_json IS NOT NULL",
+                (owner_id, instance_key),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            shutdown_at = time.time() + delay_seconds
+            conn.execute(
+                "UPDATE instances SET shutdown_at = ?, extensions_used = 0 WHERE owner_id = ? AND instance_key = ?",
+                (shutdown_at, owner_id, instance_key),
+            )
+            conn.execute("COMMIT")
+            return shutdown_at
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+
+    def extend_shutdown(
+        self, owner_id: str, instance_key: str, extend_seconds: int, max_extensions: int
+    ) -> "tuple[str, float | None]":
+        """Atomically check-then-increment ``extensions_used`` against
+        `max_extensions` and push ``shutdown_at`` forward -- the
+        check-then-act ceiling is the same race class ``reserve()``'s
+        capacity check closes, and the whole read-then-write is wrapped in
+        the same ``BEGIN IMMEDIATE`` pattern so it can't interleave with a
+        concurrent ``schedule_shutdown()``/``cancel_shutdown()``/
+        ``transition_stopped()`` call (e.g. the reaper pausing this same
+        row via ``_sweep_due_shutdowns``) racing on the identical row.
+
+        Returns ``(status, shutdown_at)`` where `status` is one of
+        ``"extended"``, ``"not_found"``, ``"not_pending"``, ``"exhausted"``;
+        `shutdown_at` is the (possibly unchanged) deadline, or `None` when
+        `status` is ``"not_found"``.
+        """
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT shutdown_at, extensions_used FROM instances "
+                "WHERE owner_id = ? AND instance_key = ? AND plan_json IS NOT NULL",
+                (owner_id, instance_key),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return "not_found", None
+            shutdown_at, extensions_used = row
+            if shutdown_at is None:
+                conn.execute("COMMIT")
+                return "not_pending", None
+            if extensions_used >= max_extensions:
+                conn.execute("COMMIT")
+                return "exhausted", shutdown_at
+            new_shutdown_at = time.time() + extend_seconds
+            conn.execute(
+                "UPDATE instances SET shutdown_at = ?, extensions_used = extensions_used + 1 "
+                "WHERE owner_id = ? AND instance_key = ?",
+                (new_shutdown_at, owner_id, instance_key),
+            )
+            conn.execute("COMMIT")
+            return "extended", new_shutdown_at
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+
+    def cancel_shutdown(self, owner_id: str, instance_key: str) -> None:
+        """Atomically clear ``shutdown_at``/``extensions_used`` for a
+        finalized row. See ``schedule_shutdown()``'s docstring for why this
+        needs the same ``BEGIN IMMEDIATE`` wrapping -- a plain
+        ``get()``->mutate->``update()`` here could race a concurrent
+        ``extend_shutdown()`` or the reaper's ``transition_stopped()``
+        pause on the identical row. A no-op (still atomic, just nothing to
+        change) if there's no such instance -- mirrors the previous
+        get()-returns-None-then-no-op behavior."""
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT 1 FROM instances WHERE owner_id = ? AND instance_key = ? AND plan_json IS NOT NULL",
+                (owner_id, instance_key),
+            ).fetchone()
+            if row is not None:
+                conn.execute(
+                    "UPDATE instances SET shutdown_at = NULL, extensions_used = 0 "
+                    "WHERE owner_id = ? AND instance_key = ?",
+                    (owner_id, instance_key),
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
 
     def remove(self, owner_id: str, instance_key: str) -> None:
         self._conn().execute(
