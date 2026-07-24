@@ -96,6 +96,25 @@ esac
 LABEL="app=workspace"
 TYPE_LABEL="workspace-type=${TYPE}"
 
+# ── Capability hardening ─────────────────────────────────────────────────────
+# Mirrors docker/orchestrator/app/instance_types.py's _ATTACKER_CAPS exactly.
+# Without this, plain `docker service create` runs with Docker's full default
+# capability set -- combined with operator/analyst/Dockerfile's `operator
+# ALL=(ALL) NOPASSWD: ALL` sudoers entry, that's a much easier path to
+# root/container-escape than the orchestrator-provisioned equivalent (which
+# has run cap_drop=["ALL"] plus this same narrow cap_add since Phase 6)
+# allows. Both `analyst` and `kali` images here are the same "attacker
+# workstation" role as instance_types.py's plan_range_attacker: SSH/sudo
+# (SYS_CHROOT for sshd's privilege-separation preauth child, SETUID/SETGID/
+# SETFCAP/SETPCAP for chpasswd/su-style per-connection privilege drops) plus
+# NET_RAW/NET_ADMIN for nmap/tcpdump packet capture.
+ATTACKER_CAPS=(
+  CHOWN DAC_OVERRIDE FOWNER FSETID KILL
+  SETGID SETUID SETFCAP SETPCAP
+  NET_BIND_SERVICE AUDIT_WRITE SYS_CHROOT
+  NET_RAW NET_ADMIN
+)
+
 # ── Placement: prefer worker nodes; fall back gracefully on single-node/eval
 # setups where the only node in the swarm is a manager (no --constraint at
 # all in that case, so it still schedules).
@@ -191,7 +210,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     --limit-memory 512m
     --reserve-memory 128m
     --restart-condition on-failure
+    --cap-drop ALL
   )
+  for cap in "${ATTACKER_CAPS[@]}"; do
+    CREATE_ARGS+=(--cap-add "$cap")
+  done
   CREATE_ARGS+=("${PLACEMENT_ARGS[@]}")
 
   if [[ "$TYPE" == "analyst" ]]; then

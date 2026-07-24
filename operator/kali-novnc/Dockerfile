@@ -76,6 +76,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffuf \
     mitmproxy \
     chromium \
+    openssl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -176,6 +177,42 @@ USER root
 # falling back to no password if the orchestrator/spawn script didn't set
 # either one. The single quotes intentionally preserve runtime
 # environment expansion.
+#
+# Also generates a fresh, per-instance self-signed TLS cert/key at every
+# container start and starts a SECOND websockify listener (6443, TLS-only
+# via --cert/--key/--ssl-only) alongside the original plain one (6080),
+# both forwarding to the same VNC server. This closes a real cleartext
+# gap in the orchestrator's documented "no DNS required" fallback path:
+# operator/tcp-gateway is a dumb byte forwarder with no TLS of its own,
+# and the range attacker's gateway service forwards its published noVNC
+# port straight through to this container's noVNC listener (see
+# GATEWAY_NOVNC_PORT's forward target in instance_types.py, now pointed at
+# 6443 instead of 6080) -- with no cert anywhere on that path, a player
+# using the fallback (instance_types.py's novnc_url/novnc_note) sent their
+# VNC password and full remote-desktop session in the clear.
+#
+# The ORIGINAL plain port (6080) is deliberately left untouched and still
+# forwarded to by the gateway's Traefik-labeled port too: that hop is
+# Traefik (TLS at the edge, terminated) -> gateway -> attacker, entirely
+# over the private Docker overlay network, never the public internet, and
+# changing that established, already-live-verified route's backend
+# protocol is out of scope for this fix and would need matching Traefik
+# ServersTransport config to trust a self-signed cert -- real but separate
+# work. The NEW port (6443) exists specifically for the direct/no-DNS
+# fallback, which -- unlike the Traefik hop -- crosses the public network
+# in the clear today, all the way from the player's browser to this
+# container, since tcp-gateway does no TLS of its own.
+#
+# websockify is the correct place to terminate TLS (not tcp-gateway, a
+# deliberately dumb, protocol-agnostic forwarder shared by multiple
+# challenge types with no cert material of its own to manage) -- it
+# already speaks the noVNC/VNC protocol here, so it can wrap exactly the
+# one listener that needs it without touching tcp-gateway or Traefik.
+# --ssl-only on the 6443 listener ensures it refuses a plaintext fallback
+# if the cert/key were ever missing/invalid. The cert is regenerated (not
+# baked into the image) every container start, so it's unique per
+# instance and never shared across teams -- same rationale as the
+# passwords above.
 # hadolint ignore=SC2016
 RUN printf '%s\n' \
       '#!/bin/bash' \
@@ -195,13 +232,17 @@ RUN printf '%s\n' \
       '' \
       'su operator -c "vncserver :1 -geometry 1280x800 -depth 24 -localhost no"' \
       'su operator -c "websockify --web=/usr/share/novnc 6080 localhost:5901" &' \
+      '' \
+      'su operator -c "mkdir -p ~/.config/tigervnc/tls && openssl req -x509 -nodes -newkey rsa:2048 -days 3650 -subj /CN=novnc -keyout ~/.config/tigervnc/tls/key.pem -out ~/.config/tigervnc/tls/cert.pem"' \
+      'su operator -c "chmod 600 ~/.config/tigervnc/tls/key.pem"' \
+      'su operator -c "websockify --web=/usr/share/novnc --cert=/home/operator/.config/tigervnc/tls/cert.pem --key=/home/operator/.config/tigervnc/tls/key.pem --ssl-only 6443 localhost:5901" &' \
       '/usr/sbin/sshd' \
       'tail -f /dev/null' \
       > /start.sh \
     && chmod +x /start.sh \
     && ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 
-EXPOSE 6080 22
+EXPOSE 6080 6443 22
 
 HEALTHCHECK --interval=30s --timeout=10s \
     CMD curl -f http://localhost:6080/ || exit 1
