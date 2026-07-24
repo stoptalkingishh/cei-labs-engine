@@ -1,11 +1,14 @@
 import json
 import csv
+import hmac
 import io
+import os
 from datetime import datetime
 
 from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, url_for
 
 from CTFd.models import Challenges, Solves, Teams, Users, db
+from CTFd.plugins import bypass_csrf_protection
 from CTFd.utils import get_config
 from CTFd.utils.decorators import admins_only, authed_only
 from CTFd.utils.user import get_current_user, is_admin
@@ -14,6 +17,17 @@ from .logic import InvalidTransition, SolveEvent, close_stage, lock_stage, rank_
 from .models import GameStage, GameStageAudit, GameStageChallenge
 
 wargame_stages_bp = Blueprint("wargame_stages", __name__, template_folder="templates", url_prefix="/plugins/wargame-stages")
+
+
+def read_secret(name: str) -> str:
+    """Mirrors instance-launcher/hint-wallet's orchestrator_client.read_secret —
+    duplicated rather than shared across plugins, matching the existing
+    per-plugin convention in this codebase."""
+    path = f"/run/secrets/{name}"
+    if os.path.isfile(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return os.environ.get(name.upper(), "")
 
 
 def _admin_id():
@@ -106,28 +120,86 @@ def export(slug, format):
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={stage.slug}-standings.csv"})
 
 
+def _reconcile_stage(stage):
+    """Map every challenge in `stage.category` to `stage` and force it hidden.
+
+    A no-op for anything past `pending` — once a stage has started, challenge
+    mappings and visibility are frozen (visibility becomes a manual "Start"
+    decision instead). Challenges already mapped to a DIFFERENT stage are
+    left alone (skipped, not an error) rather than aborting the whole
+    reconcile over one bad mapping — this runs unattended (app startup, the
+    deploy-time machine endpoint below), so it must degrade gracefully
+    instead of taking down every other stage's reconciliation.
+
+    Returns the number of challenges mapped into this stage.
+    """
+    if stage.state != "pending":
+        return 0
+    challenges = Challenges.query.filter_by(category=stage.category).order_by(Challenges.id).all()
+    ids = {challenge.id for challenge in challenges}
+    already_elsewhere = {
+        row.challenge_id
+        for row in GameStageChallenge.query.filter(
+            GameStageChallenge.challenge_id.in_(ids), GameStageChallenge.stage_id != stage.id
+        ).all()
+    } if ids else set()
+    own_ids = ids - already_elsewhere
+    GameStageChallenge.query.filter_by(stage_id=stage.id).filter(~GameStageChallenge.challenge_id.in_(own_ids) if own_ids else True).delete(synchronize_session=False)
+    existing = {row.challenge_id for row in GameStageChallenge.query.filter_by(stage_id=stage.id).all()}
+    for challenge in challenges:
+        if challenge.id in already_elsewhere:
+            continue
+        if challenge.id not in existing:
+            db.session.add(GameStageChallenge(stage_id=stage.id, challenge_id=challenge.id))
+        challenge.state = "hidden"
+    return len(own_ids)
+
+
+def reconcile_all_pending():
+    """Hide-by-default enforcement for every stage that hasn't started yet.
+
+    Called (a) at app startup via load(), covering container
+    restarts/redeploys, and (b) from the /machine/reconcile endpoint, which
+    CEI-Labs-Wargames/deploy.sh calls automatically after every content
+    push — so newly-deployed challenges are hidden the moment they land,
+    with no admin click required and no dependency on a container restart.
+    """
+    summary = {}
+    for stage in GameStage.query.filter_by(state="pending").all():
+        mapped = _reconcile_stage(stage)
+        summary[stage.slug] = mapped
+        _audit(stage, "reconcile", {"mapped": mapped, "expected": stage.expected_challenge_count})
+    db.session.commit()
+    return summary
+
+
 @wargame_stages_bp.route("/admin/<slug>/sync", methods=["POST"])
 @admins_only
 def sync(slug):
     stage = GameStage.query.filter_by(slug=slug).first_or_404()
     if stage.state != "pending":
         abort(409, description="challenge mappings cannot change after a game starts")
-    challenges = Challenges.query.filter_by(category=stage.category).order_by(Challenges.id).all()
-    ids = {challenge.id for challenge in challenges}
-    conflicts = GameStageChallenge.query.filter(GameStageChallenge.challenge_id.in_(ids), GameStageChallenge.stage_id != stage.id).count() if ids else 0
-    if conflicts:
-        abort(409, description="one or more challenges already belong to another game stage")
-    GameStageChallenge.query.filter_by(stage_id=stage.id).filter(~GameStageChallenge.challenge_id.in_(ids)).delete(synchronize_session=False)
-    existing = {row.challenge_id for row in GameStageChallenge.query.filter_by(stage_id=stage.id).all()}
-    for challenge in challenges:
-        if challenge.id not in existing:
-            db.session.add(GameStageChallenge(stage_id=stage.id, challenge_id=challenge.id))
-        if stage.state == "pending":
-            challenge.state = "hidden"
-    _audit(stage, "sync", {"mapped": len(ids), "expected": stage.expected_challenge_count})
+    mapped = _reconcile_stage(stage)
+    _audit(stage, "sync", {"mapped": mapped, "expected": stage.expected_challenge_count})
     db.session.commit()
-    flash(f"{stage.name}: mapped {len(ids)} of {stage.expected_challenge_count} expected challenges.", "info")
+    flash(f"{stage.name}: mapped {mapped} of {stage.expected_challenge_count} expected challenges.", "info")
     return redirect(url_for("wargame_stages.admin"))
+
+
+@wargame_stages_bp.route("/machine/reconcile", methods=["POST"])
+@bypass_csrf_protection
+def machine_reconcile():
+    """Non-interactive counterpart to /admin/<slug>/sync, for
+    CEI-Labs-Wargames/deploy.sh to call right after pushing challenge
+    content — same X-Sync-Auth / plugin_shared_secret pattern as
+    instance-launcher's /admin/mappings/sync, so newly-deployed challenges
+    are guaranteed hidden without an admin having to remember to visit this
+    plugin's admin page first. See docs/staggered-wargame-stages.md."""
+    provided = request.headers.get("X-Sync-Auth", "")
+    expected = read_secret("plugin_shared_secret")
+    if not expected or not hmac.compare_digest(provided, expected):
+        abort(401)
+    return jsonify(reconcile_all_pending())
 
 
 @wargame_stages_bp.route("/admin/<slug>/start", methods=["POST"])
