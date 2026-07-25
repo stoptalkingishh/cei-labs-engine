@@ -137,20 +137,17 @@
       return;
     }
 
-    html +=
-      '<p class="mb-2 text-muted"><small>Opening a hint reduces how many of this ' +
-      "challenge's own points you keep if you solve it -- it costs nothing up front.</small></p>";
     html += '<ul class="list-unstyled mb-0">';
     tiers.forEach(function (t) {
       html +=
         '<li class="mb-2" data-tier="' +
         escapeAttr(t.tier) +
         '">' +
-        '<span>Tier ' +
+        "<span>Tier " +
         escapeHtml(t.tier) +
-        " &mdash; keep at most <strong>" +
-        escapeHtml(100 - t.cost) +
-        "%</strong> of this challenge's points if you open this</span> " +
+        " - will cost " +
+        escapeHtml(t.cost) +
+        "% of the points</span> " +
         '<button type="button" class="btn btn-outline-secondary btn-sm me-1" data-action="reveal" data-tier="' +
         escapeAttr(t.tier) +
         '">Reveal hint</button>' +
