@@ -423,3 +423,45 @@ def test_repeated_unlock_is_recorded_exactly_once_across_workers():
 
         for s in stores:
             s.close()
+
+
+# ── schema migration: pre-existing on-disk db predates cost_percent ────────
+
+def test_unlock_hint_works_against_a_wallet_unlocks_table_predating_cost_percent():
+    """Regression test for a real production incident: an orchestrator
+    volume created under an earlier revision had a wallet_unlocks table
+    without the cost_percent column. CREATE TABLE IF NOT EXISTS is a no-op
+    against that pre-existing table, so unlock_hint() raised
+    'sqlite3.OperationalError: no such column: cost_percent' until
+    WalletStore._init_schema() ran the same _add_column_if_missing
+    migration InstanceStore/RangeStore already use for their own
+    schema drift (see store.py)."""
+    import sqlite3
+
+    from app.store import WalletStore
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "wallet.db")
+
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE wallet_unlocks (
+                owner_id TEXT NOT NULL,
+                track TEXT NOT NULL,
+                entry_name TEXT NOT NULL,
+                tier INTEGER NOT NULL,
+                unlocked_at REAL NOT NULL,
+                PRIMARY KEY (owner_id, track, entry_name, tier)
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        store = WalletStore(db_path=db_path)
+        status, cost_percent = store.unlock_hint("team-1", "bandit", "challenge-1", 1, cost_percent=10)
+        assert status == "unlocked"
+        assert cost_percent == 10
+        assert store.highest_unlocked_tier("team-1", "bandit", "challenge-1") == {"tier": 1, "cost_percent": 10}
+        store.close()
