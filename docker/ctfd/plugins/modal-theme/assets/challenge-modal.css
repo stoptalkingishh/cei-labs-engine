@@ -34,6 +34,19 @@
  * (`x-text="response.data.message"`, unchanged), not just its color.
  */
 
+/* CTFd core renders this as a plain Bootstrap .modal-dialog with no
+   .modal-lg/.modal-xl class, so it's capped at Bootstrap's default
+   ~500px regardless of viewport width -- badly wasteful on a wide
+   desktop browser, especially now that hint content renders real
+   <pre><code> blocks (challenge-modal.css above/below) that want more
+   horizontal room to avoid wrapping. Widen it, but keep a sane cap and
+   leave Bootstrap's own responsive side-margins alone below ~768px
+   (its default centering/margin math still applies there) so mobile is
+   unaffected. */
+#challenge-window .modal-dialog {
+  max-width: min(900px, 92vw);
+}
+
 #challenge-window .modal-content {
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-top: 3px solid #2f5f8a;
