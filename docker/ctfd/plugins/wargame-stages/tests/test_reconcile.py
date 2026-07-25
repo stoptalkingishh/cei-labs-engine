@@ -228,8 +228,19 @@ def _clean_tables():
     yield
 
 
-def _stage(slug, category, state="pending"):
-    return GameStage(id=len(ALL_TABLES[GameStage]) + 1, slug=slug, name=slug, category=category, state=state)
+def _stage(slug, category, state="pending", expected_challenge_count=0):
+    # expected_challenge_count must be set explicitly: any field not passed
+    # as a kwarg here falls back to the class-level _Col("...") descriptor
+    # (a mock column stand-in, not an int) rather than a real value, which
+    # then fails to JSON-serialize inside _audit()'s json.dumps() call.
+    return GameStage(
+        id=len(ALL_TABLES[GameStage]) + 1,
+        slug=slug,
+        name=slug,
+        category=category,
+        state=state,
+        expected_challenge_count=expected_challenge_count,
+    )
 
 
 def _challenge(category, state="visible"):
@@ -283,6 +294,8 @@ class TestReconcileStage:
 
         summary = routes_mod.reconcile_all_pending()
 
-        assert summary == {"bandit": 1, "natas": 0}
+        # Only pending stages are iterated at all (see reconcile_all_pending's
+        # docstring) -- started stages get no summary entry, not a 0 entry.
+        assert summary == {"bandit": 1}
         assert pending_challenge.state == "hidden"
         assert started_challenge.state == "visible"
