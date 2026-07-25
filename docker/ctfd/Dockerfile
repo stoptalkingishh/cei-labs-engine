@@ -12,6 +12,7 @@ COPY plugins/instance-launcher /opt/CTFd/CTFd/plugins/instance-launcher
 COPY plugins/wargame-stages /opt/CTFd/CTFd/plugins/wargame-stages
 COPY plugins/hint-wallet /opt/CTFd/CTFd/plugins/hint-wallet
 COPY plugins/modal-theme /opt/CTFd/CTFd/plugins/modal-theme
+COPY plugins/submission-history /opt/CTFd/CTFd/plugins/submission-history
 
 RUN pip install --no-cache-dir -r /opt/CTFd/CTFd/plugins/instance-launcher/requirements.txt \
     && pip install --no-cache-dir -r /opt/CTFd/CTFd/plugins/hint-wallet/requirements.txt
@@ -21,7 +22,8 @@ RUN chmod +x /docker-entrypoint-wrapper.sh \
     && chown -R 1001:1001 /opt/CTFd/CTFd/plugins/instance-launcher \
        /opt/CTFd/CTFd/plugins/wargame-stages \
        /opt/CTFd/CTFd/plugins/hint-wallet \
-       /opt/CTFd/CTFd/plugins/modal-theme
+       /opt/CTFd/CTFd/plugins/modal-theme \
+       /opt/CTFd/CTFd/plugins/submission-history
 
 USER 1001
 
