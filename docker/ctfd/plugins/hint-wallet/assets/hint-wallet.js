@@ -211,8 +211,13 @@
 
         // 200: "unlocked" (first open) or "already_unlocked" (idempotent
         // re-reveal, same content) -- both carry the real hint content.
+        // routes.py now renders this server-side through CTFd's own
+        // cmark-gfm Markdown pipeline (same one challenge descriptions go
+        // through) before it ever reaches this response, so it's already
+        // safe HTML -- set directly, not escaped, or code fences/backticks/
+        // bold would show up as literal text instead of rendering.
         if (contentDiv) {
-          contentDiv.innerHTML = '<p class="mb-0">' + escapeHtml(body.content) + "</p>";
+          contentDiv.innerHTML = body.content;
         }
         btn.remove();
       })

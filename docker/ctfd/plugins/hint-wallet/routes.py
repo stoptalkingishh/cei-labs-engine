@@ -67,6 +67,7 @@ from flask import Blueprint, Response, jsonify, request
 
 from CTFd.models import Challenges, Solves, db
 from CTFd.plugins import bypass_csrf_protection
+from CTFd.utils import markdown
 from CTFd.utils.decorators import authed_only
 from CTFd.utils.user import get_current_user
 
@@ -265,4 +266,15 @@ def api_unlock():
     # case anymore (cei-labs-event#7) -- costs are a percent-of-value score
     # reduction applied at solve time, not a spend.
     status_code = result.pop("status_code", 200)
+
+    # Authored hint text is Markdown (same convention as challenge
+    # descriptions -- backticks, code fences, bold), but the orchestrator
+    # has no CTFd dependency and returns it raw. Render it here, through the
+    # exact same cmark-gfm pipeline CTFd's own Jinja `|markdown` filter uses
+    # for challenge descriptions (CTFd/utils/__init__.py), so a hint's code
+    # blocks/inline code/bold actually render instead of showing up as
+    # literal backticks and run-together prose (the plugin's own JS used to
+    # escape+dump this into a single <p>, with no Markdown handling at all).
+    if result.get("content"):
+        result["content"] = markdown(result["content"])
     return jsonify(result), status_code
