@@ -3,7 +3,7 @@ from CTFd.models import db
 from CTFd.plugins import register_admin_plugin_menu_bar, register_user_page_menu_bar
 
 from .models import GameStage, GameStageAudit, GameStageChallenge
-from .routes import wargame_stages_bp
+from .routes import reconcile_all_pending, wargame_stages_bp
 
 
 DEFAULT_STAGES = (
@@ -25,6 +25,11 @@ def load(app):
                     display_order=order, expected_challenge_count=count,
                 ))
         db.session.commit()
+        # Hide-by-default enforcement on every app start (container restart,
+        # fresh redeploy). Covers content that landed via ctfcli/deploy.sh
+        # without going through /machine/reconcile (e.g. a manual API push,
+        # or a deploy that ran before this plugin's endpoint existed).
+        reconcile_all_pending()
 
     register_admin_plugin_menu_bar("Wargame stages", "/plugins/wargame-stages/admin")
     register_user_page_menu_bar("Game scoreboards", "/plugins/wargame-stages/")

@@ -26,6 +26,15 @@ their exact category and records explicit challenge-to-stage mappings.
 ## State model
 
 - `pending`: not started; mapped challenges are hidden from participants.
+  This is enforced automatically — every challenge in a `pending` stage's
+  category is mapped and forced to CTFd's `hidden` state (a) on every CTFd
+  app start (container restart/redeploy) and (b) via the
+  `/plugins/wargame-stages/machine/reconcile` endpoint, which
+  `CEI-Labs-Wargames/deploy.sh` calls automatically as the last step of
+  every content push. There is no manual step required to keep challenges
+  hidden — the admin "Re-check mapping" button (formerly "Sync") is now
+  just a manual on-demand trigger for the same reconcile logic, useful for
+  confirming mapped counts, not the thing that makes hiding happen.
 - `active`: challenges are visible and eligible solves count toward the
   stage scoreboard.
 - `locked`: challenges remain available for review, but new solves do not
@@ -61,9 +70,13 @@ scoreboard visibility. Multiple stages may be active simultaneously.
 
 ### Before participants arrive
 
-1. Import all Wargames challenges.
-2. Open **Admin → Wargame Stages**.
-3. Synchronize the three categories and verify expected challenge counts.
+1. Import all Wargames challenges — `CEI-Labs-Wargames/deploy.sh`
+   automatically hides everything mapped to a not-yet-started stage as its
+   last step; no separate action is required for this.
+2. Open **Admin → Wargame Stages** (a themed page within the normal CTFd
+   admin interface, not a separate unstyled panel).
+3. Use "Re-check mapping" to verify expected challenge counts if anything
+   looks off — hiding itself already happened during import.
 4. Confirm all three stages are pending and participant scoreboards hidden.
 5. Export a pre-event mapping snapshot.
 
