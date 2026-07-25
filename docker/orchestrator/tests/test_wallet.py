@@ -135,6 +135,29 @@ def test_negative_or_zero_cost_is_schema_error():
         validate_bundle(bundle)
 
 
+def test_cost_of_100_or_more_is_schema_error():
+    # Costs are a percentage of the challenge's own value (cei-labs-event#7)
+    # -- a tier can never cost 100% or more, or a solve could never retain
+    # any of the challenge's points.
+    entries = [{
+        "name": "x",
+        "tiers": [
+            {"tier": 1, "cost": 10, "content": "a"},
+            {"tier": 2, "cost": 50, "content": "b"},
+            {"tier": 3, "cost": 100, "content": "c"},
+        ],
+    }]
+    bundle = _bundle(overrides={0: {"entries": entries}})
+    m = bundle["manifests"][0]
+    raw = json.dumps(
+        {k: m[k] for k in ("schema_version", "track", "entries")},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode()
+    m["digest"] = hashlib.sha256(raw).hexdigest()
+    with pytest.raises(WalletSchemaError):
+        validate_bundle(bundle)
+
+
 # ── track completeness -> 400 incomplete_tracks ─────────────────────────────
 
 def test_missing_track_is_incomplete_tracks():

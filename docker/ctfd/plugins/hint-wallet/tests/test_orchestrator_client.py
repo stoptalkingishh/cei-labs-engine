@@ -65,62 +65,64 @@ def test_proxy_wallet_sync_raises_orchestrator_error_on_network_failure():
             client().proxy_wallet_sync(b"{}", "sig")
 
 
-# ── balance ──────────────────────────────────────────────────────────────
+# ── unlocked ─────────────────────────────────────────────────────────────
+# No shared team-currency balance anymore (cei-labs-event#7) -- `unlocked()`
+# reads back the highest tier an owner opened for one specific challenge.
 
-def test_balance_sends_expected_request_and_returns_body():
+def test_unlocked_sends_expected_request_and_returns_body():
     with patch("hint_wallet_orchestrator_client.requests.get") as mock_get:
-        mock_get.return_value = make_response(200, {"owner_id": "team-1", "balance": 40})
-        result = client().balance("team-1")
+        mock_get.return_value = make_response(200, {"owner_id": "team-1", "track": "bandit", "entry_name": "Bandit 0 -> 1", "tier": 2, "cost_percent": 50})
+        result = client().unlocked("team-1", "bandit", "Bandit 0 -> 1")
 
     args, kwargs = mock_get.call_args
-    assert args[0] == "http://orchestrator:8080/wallet/balance/team-1"
+    assert args[0] == "http://orchestrator:8080/wallet/unlocked/team-1/bandit/Bandit%200%20-%3E%201"
     assert kwargs["headers"]["X-Orchestrator-Auth"] == "s3cr3t"
-    assert result == {"owner_id": "team-1", "balance": 40}
+    assert result["tier"] == 2
+    assert result["cost_percent"] == 50
 
 
-def test_balance_raises_on_error_status():
+def test_unlocked_raises_on_error_status():
     with patch("hint_wallet_orchestrator_client.requests.get") as mock_get:
         mock_get.return_value = make_response(500, {"error": "boom"})
         with pytest.raises(OrchestratorError, match="boom"):
-            client().balance("team-1")
+            client().unlocked("team-1", "bandit", "x")
 
 
-# ── deduct ───────────────────────────────────────────────────────────────
+# ── unlock ───────────────────────────────────────────────────────────────
 
-def test_deduct_sends_expected_payload_and_headers():
+def test_unlock_sends_expected_payload_and_headers():
     with patch("hint_wallet_orchestrator_client.requests.post") as mock_post:
-        mock_post.return_value = make_response(200, {"status": "unlocked", "balance": 30, "cost": 10, "content": "hint text"})
-        result = client().deduct("team-1", "bandit", "Bandit 0 -> 1", 1)
+        mock_post.return_value = make_response(200, {"status": "unlocked", "cost_percent": 10, "content": "hint text"})
+        result = client().unlock("team-1", "bandit", "Bandit 0 -> 1", 1)
 
     args, kwargs = mock_post.call_args
-    assert args[0] == "http://orchestrator:8080/wallet/deduct"
+    assert args[0] == "http://orchestrator:8080/wallet/unlock"
     assert kwargs["json"] == {"owner_id": "team-1", "track": "bandit", "entry_name": "Bandit 0 -> 1", "tier": 1}
     assert kwargs["headers"]["X-Orchestrator-Auth"] == "s3cr3t"
     assert result["success"] is True
     assert result["content"] == "hint text"
 
 
-def test_deduct_insufficient_balance_returns_error_dict_not_success():
-    with patch("hint_wallet_orchestrator_client.requests.post") as mock_post:
-        mock_post.return_value = make_response(402, {"error": "insufficient_balance", "balance": 5, "cost": 10})
-        result = client().deduct("team-1", "bandit", "Bandit 0 -> 1", 1)
-
-    assert result["success"] is False
-    assert result["status_code"] == 402
-    assert result["error"] == "insufficient_balance"
-    assert result["balance"] == 5
-
-
-def test_deduct_hint_not_found_propagates_as_error():
+def test_unlock_hint_not_found_returns_error_dict_not_success():
     with patch("hint_wallet_orchestrator_client.requests.post") as mock_post:
         mock_post.return_value = make_response(404, {"error": "hint_not_found"})
-        result = client().deduct("team-1", "bandit", "does-not-exist", 1)
+        result = client().unlock("team-1", "bandit", "does-not-exist", 1)
 
     assert result["success"] is False
     assert result["status_code"] == 404
+    assert result["error"] == "hint_not_found"
 
 
-def test_deduct_raises_orchestrator_error_on_network_failure():
+def test_unlock_no_active_catalog_propagates_as_error():
+    with patch("hint_wallet_orchestrator_client.requests.post") as mock_post:
+        mock_post.return_value = make_response(409, {"error": "no_active_catalog"})
+        result = client().unlock("team-1", "bandit", "x", 1)
+
+    assert result["success"] is False
+    assert result["status_code"] == 409
+
+
+def test_unlock_raises_orchestrator_error_on_network_failure():
     with patch("hint_wallet_orchestrator_client.requests.post", side_effect=requests.Timeout("slow")):
         with pytest.raises(OrchestratorError, match="unreachable"):
-            client().deduct("team-1", "bandit", "x", 1)
+            client().unlock("team-1", "bandit", "x", 1)

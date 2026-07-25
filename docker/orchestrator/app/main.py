@@ -10,9 +10,17 @@ mount from the same Docker secret. /admin/* routes use X-Admin-Auth instead.
 called by the Wargames release pipeline, not the CTFd plugin, and
 authenticates itself with an HMAC-SHA256 body signature (X-Hint-Wallet-
 Signature) against a dedicated secret instead -- see
-docs/P0-FIX-LOG-2026-07-23.md for the full contract. /wallet/deduct and
-/wallet/balance are CTFd-plugin-facing and use the normal
-X-Orchestrator-Auth check like /instances*.
+docs/P0-FIX-LOG-2026-07-23.md for the full contract. /wallet/unlock and
+/wallet/unlocked/<owner_id>/<track>/<entry_name> are CTFd-plugin-facing and
+use the normal X-Orchestrator-Auth check like /instances*.
+
+Hint-wallet cost model (cei-labs-event#7): tiers are priced as a percentage
+of the challenge's own point value, and unlocking a tier is pure
+record-keeping (no shared team-currency balance exists anywhere in this
+service -- see app/store.py's WalletStore docstring). The percentage is
+applied as a reduction of that challenge's own score award at solve time,
+CTFd-side (docker/ctfd/plugins/hint-wallet/solve_hook.py), which reads back
+the highest tier a team opened via /wallet/unlocked/....
 """
 import hashlib
 import hmac
@@ -380,8 +388,8 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
         # point of view (idempotent retry of an already-applied revision).
         return jsonify(status=result, revision=revision, digest=catalog_digest), 200
 
-    @app.post("/wallet/deduct")
-    def wallet_deduct():
+    @app.post("/wallet/unlock")
+    def wallet_unlock():
         body = request.get_json(silent=True) or {}
         owner_id = body.get("owner_id")
         track = body.get("track")
@@ -393,30 +401,24 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
         catalog = wallet_store.get_catalog()
         if catalog is None:
             return jsonify(error="no_active_catalog"), 409
-        cost = wallet.find_hint_cost(catalog["manifests"], track, entry_name, tier)
-        if cost is None:
+        cost_percent = wallet.find_hint_cost(catalog["manifests"], track, entry_name, tier)
+        if cost_percent is None:
             return jsonify(error="hint_not_found"), 404
 
-        status, balance = wallet_store.unlock_hint(owner_id, track, entry_name, tier, cost)
-        if status == "insufficient_balance":
-            return jsonify(error="insufficient_balance", balance=balance, cost=cost), 402
-
+        status, cost_percent = wallet_store.unlock_hint(owner_id, track, entry_name, tier, cost_percent)
         content = wallet.find_hint_content(catalog["manifests"], track, entry_name, tier)
-        return jsonify(status=status, balance=balance, cost=cost, content=content), 200
+        return jsonify(status=status, cost_percent=cost_percent, content=content), 200
 
-    @app.get("/wallet/balance/<owner_id>")
-    def wallet_balance(owner_id: str):
-        return jsonify(owner_id=owner_id, balance=wallet_store.get_balance(owner_id)), 200
-
-    @app.post("/wallet/credit")
-    def wallet_credit():
-        body = request.get_json(silent=True) or {}
-        owner_id = body.get("owner_id")
-        amount = body.get("amount")
-        if not owner_id or not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
-            return jsonify(error="'owner_id' and a positive integer 'amount' are required"), 400
-        new_balance = wallet_store.credit(owner_id, amount)
-        return jsonify(owner_id=owner_id, balance=new_balance), 200
+    @app.get("/wallet/unlocked/<owner_id>/<track>/<path:entry_name>")
+    def wallet_unlocked(owner_id: str, track: str, entry_name: str):
+        """The highest tier `owner_id` has opened for this specific
+        challenge, if any -- used by CTFd's hint-wallet solve_hook to decide
+        how much of that challenge's award to keep. Never 404s: "nothing
+        opened" is a normal, common state (full value retained)."""
+        result = wallet_store.highest_unlocked_tier(owner_id, track, entry_name)
+        if result is None:
+            return jsonify(owner_id=owner_id, track=track, entry_name=entry_name, tier=None, cost_percent=None), 200
+        return jsonify(owner_id=owner_id, track=track, entry_name=entry_name, **result), 200
 
     # ── Admin ────────────────────────────────────────────────────────────────
     @app.get("/admin/instances")

@@ -1,11 +1,18 @@
 /* docker/ctfd/plugins/hint-wallet/assets/hint-wallet.js
  *
- * Injects a hint-wallet panel (wallet balance + per-tier "Reveal hint"
- * buttons) into CTFd's own challenge modal, for the currently-open
- * challenge. Before this file, hint-wallet had a complete, working backend
- * (routes.py's /machine/sync, /api/tiers/<track>/<entry_name>,
- * /api/balance, /api/unlock) but nothing on the CTFd side ever called it --
- * players had no way to see or unlock a hint.
+ * Injects a hint panel (per-tier "Reveal hint" buttons, priced as a percent
+ * of THIS challenge's own point value) into CTFd's own challenge modal, for
+ * the currently-open challenge. Backend: routes.py's /machine/sync,
+ * /api/tiers/<track>/<entry_name>, /api/unlock.
+ *
+ * cei-labs-event#7: there is no shared team-currency wallet anymore -- a
+ * tier's cost is a percentage of the challenge's own value, applied as a
+ * reduction of that challenge's own score award at solve time
+ * (solve_hook.py), not a spend from a pool. Opening a hint is always free
+ * up front; the cost is realized later, only if/when this challenge is
+ * solved. /api/unlock can also reject with 409 progression_locked (this
+ * challenge is outside the player's current unlock window for its track --
+ * see progression.py) instead of the old 402 insufficient-balance case.
  *
  * Modeled structurally on
  * ../../instance-launcher/assets/challenge-launch.js -- same
@@ -56,12 +63,13 @@
  *
  * 3. Response handling. /api/unlock returns a bare JSON body plus a real
  *    HTTP status code (200 success -- including a free idempotent re-reveal
- *    of an already-unlocked tier, 402 insufficient balance, 404
- *    hint_not_found, 409 no_active_catalog, 502 orchestrator_unreachable --
- *    see routes.py/orchestrator_client.py), NOT challenge-launch.js's
+ *    of an already-unlocked tier, 404 hint_not_found, 409 no_active_catalog
+ *    or progression_locked, 502 orchestrator_unreachable -- see
+ *    routes.py/orchestrator_client.py), NOT challenge-launch.js's
  *    "always-200, branch on data.success" shape. So this branches on
- *    resp.status/resp.ok instead, and 402 specifically gets its own clear
- *    "not enough hint credits" message rather than a generic error.
+ *    resp.status/resp.ok instead, and 409 progression_locked specifically
+ *    gets its own clear "not available yet" message rather than a generic
+ *    error.
  *
  * 4. No "is this tier already unlocked" state is fetched up front --
  *    /api/tiers deliberately only ever returns {tier, cost}, never content
@@ -118,25 +126,10 @@
 
   // ── Rendering ─────────────────────────────────────────────────────────
 
-  function balanceHtml(balance) {
-    return (
-      '<p class="mb-2 hint-wallet-balance"><small>Wallet balance: <strong>' +
-      (balance === null || balance === undefined ? "&mdash;" : escapeHtml(balance)) +
-      "</strong> hint credits</small></p>"
-    );
-  }
-
-  function updateBalanceDisplay(panel, balance) {
-    var el = panel.querySelector(".hint-wallet-balance");
-    if (el && balance !== undefined) {
-      el.outerHTML = balanceHtml(balance);
-    }
-  }
-
-  function renderHintPanel(panel, tiers, balance) {
+  function renderHintPanel(panel, tiers) {
     panel.style.display = "";
 
-    var html = '<h6 class="mb-2">Hints</h6>' + balanceHtml(balance);
+    var html = '<h6 class="mb-2">Hints</h6>';
 
     if (!tiers.length) {
       html += '<p class="mb-0 text-muted"><small>No hints available for this challenge.</small></p>';
@@ -144,6 +137,9 @@
       return;
     }
 
+    html +=
+      '<p class="mb-2 text-muted"><small>Opening a hint reduces how many of this ' +
+      "challenge's own points you keep if you solve it -- it costs nothing up front.</small></p>";
     html += '<ul class="list-unstyled mb-0">';
     tiers.forEach(function (t) {
       html +=
@@ -152,9 +148,9 @@
         '">' +
         '<span>Tier ' +
         escapeHtml(t.tier) +
-        " &mdash; <strong>" +
-        escapeHtml(t.cost) +
-        '</strong> hint credits</span> ' +
+        " &mdash; keep at most <strong>" +
+        escapeHtml(100 - t.cost) +
+        "%</strong> of this challenge's points if you open this</span> " +
         '<button type="button" class="btn btn-outline-secondary btn-sm me-1" data-action="reveal" data-tier="' +
         escapeAttr(t.tier) +
         '">Reveal hint</button>' +
@@ -193,18 +189,14 @@
         if (!document.body.contains(panel)) return; // modal moved on mid-request
         var body = result.body || {};
 
-        if (result.status === 402) {
+        if (result.status === 409 && body.error === "progression_locked") {
           btn.disabled = false;
           btn.textContent = originalLabel;
           if (contentDiv) {
             contentDiv.innerHTML =
-              '<p class="text-danger mb-0"><small>Not enough hint credits: this tier costs ' +
-              escapeHtml(body.cost) +
-              ", you have " +
-              escapeHtml(body.balance) +
-              ".</small></p>";
+              '<p class="text-danger mb-0"><small>This challenge\'s hints aren\'t available yet -- ' +
+              "solve your way closer to it first.</small></p>";
           }
-          updateBalanceDisplay(panel, body.balance);
           return;
         }
 
@@ -220,13 +212,12 @@
           return;
         }
 
-        // 200: "unlocked" (first spend) or "already_unlocked" (free,
-        // idempotent re-reveal) -- both carry the real hint content.
+        // 200: "unlocked" (first open) or "already_unlocked" (idempotent
+        // re-reveal, same content) -- both carry the real hint content.
         if (contentDiv) {
           contentDiv.innerHTML = '<p class="mb-0">' + escapeHtml(body.content) + "</p>";
         }
         btn.remove();
-        updateBalanceDisplay(panel, body.balance);
       })
       .catch(function () {
         if (!document.body.contains(panel)) return;
@@ -238,20 +229,15 @@
       });
   }
 
-  function loadTiersAndBalance(panel, challengeId) {
+  function loadTiers(panel, challengeId) {
     var track = panel.dataset.track;
     var entryName = panel.dataset.entryName;
     var tiersUrl = "/plugins/hint-wallet/api/tiers/" + encodeURIComponent(track) + "/" + encodeURIComponent(entryName);
 
-    return Promise.all([
-      window.CTFd.fetch(tiersUrl).then(parseJsonWithStatus),
-      window.CTFd.fetch("/plugins/hint-wallet/api/balance").then(parseJsonWithStatus),
-    ])
-      .then(function (results) {
+    return window.CTFd.fetch(tiersUrl)
+      .then(parseJsonWithStatus)
+      .then(function (tiersResult) {
         if (!document.body.contains(panel) || panel.dataset.challengeId !== String(challengeId)) return;
-
-        var tiersResult = results[0];
-        var balanceResult = results[1];
 
         if (tiersResult.status === 409) {
           // No hint-wallet catalog has ever been synced yet -- a transient
@@ -269,8 +255,7 @@
           return;
         }
 
-        var balance = balanceResult.ok ? balanceResult.body.balance : null;
-        renderHintPanel(panel, tiersResult.body.tiers || [], balance);
+        renderHintPanel(panel, tiersResult.body.tiers || []);
       })
       .catch(function () {
         if (!document.body.contains(panel) || panel.dataset.challengeId !== String(challengeId)) return;
@@ -301,7 +286,7 @@
 
         panel.dataset.track = track;
         panel.dataset.entryName = json.data.name;
-        return loadTiersAndBalance(panel, challengeId);
+        return loadTiers(panel, challengeId);
       })
       .catch(function () {
         if (!document.body.contains(panel) || panel.dataset.challengeId !== String(challengeId)) return;

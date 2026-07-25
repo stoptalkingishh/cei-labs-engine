@@ -47,6 +47,98 @@ class HintWalletCatalog:
         self.revision = None
 
 
+# ── Fake CTFd.models.Challenges / Solves (progression-window gating) ───────
+
+class _FakeChallengeRow:
+    def __init__(self, id, name, category):
+        self.id = id
+        self.name = name
+        self.category = category
+
+
+class _FakeSolveRow:
+    def __init__(self, account_id, challenge_id):
+        self.account_id = account_id
+        self.challenge_id = challenge_id
+
+
+class _FakeQuery:
+    """Minimal stand-in for a SQLAlchemy Query supporting the subset
+    routes.py actually calls: .filter(...)/.filter_by(...) with predicate
+    functions built by _Column below, plus .order_by(...).all()/.first().
+    Deliberately simple (no real SQL) -- same house style as
+    instance-launcher/tests' hand-rolled fakes."""
+
+    def __init__(self, rows, predicates=None):
+        self._rows = rows
+        self._predicates = predicates or []
+
+    def filter(self, *predicates):
+        return _FakeQuery(self._rows, self._predicates + list(predicates))
+
+    def filter_by(self, **kwargs):
+        preds = [(lambda row, k=k, v=v: getattr(row, k, None) == v) for k, v in kwargs.items()]
+        return _FakeQuery(self._rows, self._predicates + preds)
+
+    def order_by(self, *_a, **_kw):
+        return self
+
+    def _matched(self):
+        return [row for row in self._rows if all(p(row) for p in self._predicates)]
+
+    def all(self):
+        rows = self._matched()
+        if all(hasattr(r, "id") for r in rows):
+            rows = sorted(rows, key=lambda r: r.id)
+        return rows
+
+    def first(self):
+        matched = self._matched()
+        return matched[0] if matched else None
+
+
+class _Column:
+    """Stands in for a SQLAlchemy InstrumentedAttribute -- just enough of
+    its comparison-operator protocol for routes.py's own usage
+    (`Column == value`, `Column.in_(values)`, `Column.asc()`,
+    `db.func.lower(Column) == value`) to build a row-predicate function
+    instead of a real SQL clause."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __eq__(self, other):
+        return lambda row: getattr(row, self.name, None) == other
+
+    def in_(self, values):
+        values = set(values)
+        return lambda row: getattr(row, self.name, None) in values
+
+    def asc(self):
+        return self
+
+
+class _LowerFn:
+    def __init__(self, column: _Column):
+        self._column = column
+
+    def __eq__(self, other):
+        return lambda row: str(getattr(row, self._column.name, "")).lower() == other
+
+
+class Challenges:
+    id = _Column("id")
+    name = _Column("name")
+    category = _Column("category")
+    query = None  # set per-test via _install_fake_data
+
+
+class Solves:
+    account_id = _Column("account_id")
+    challenge_id = _Column("challenge_id")
+    query = None
+
+
 class _FakeSession:
     def __init__(self):
         self.added = []
@@ -63,8 +155,15 @@ class _FakeSession:
         pass
 
 
+class _FakeFunc:
+    @staticmethod
+    def lower(column):
+        return _LowerFn(column)
+
+
 class _FakeDb:
     session = _FakeSession()
+    func = _FakeFunc
 
     class Model:
         pass
@@ -78,6 +177,8 @@ def _install_stubs():
     ctfd = types.ModuleType("CTFd")
     ctfd_models = types.ModuleType("CTFd.models")
     ctfd_models.db = _FakeDb
+    ctfd_models.Challenges = Challenges
+    ctfd_models.Solves = Solves
 
     ctfd_plugins = types.ModuleType("CTFd.plugins")
     ctfd_plugins.bypass_csrf_protection = lambda f: f
@@ -123,6 +224,23 @@ def _install_stubs():
 
 OrchestratorError = _install_stubs()
 
+# progression.py and track_mapping.py have zero CTFd imports (see their own
+# header comments), so they're loaded for real -- routes.py's
+# `from .progression import is_unlockable` / `from .track_mapping import
+# category_for_track` need the genuine modules registered under the
+# package name, not stubs.
+def _load_real_submodule(name):
+    path = Path(__file__).resolve().parents[1] / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"hint_wallet.{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[f"hint_wallet.{name}"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+progression = _load_real_submodule("progression")
+track_mapping = _load_real_submodule("track_mapping")
+
 module_path = Path(__file__).resolve().parents[1] / "routes.py"
 spec = importlib.util.spec_from_file_location("hint_wallet.routes", module_path)
 routes = importlib.util.module_from_spec(spec)
@@ -137,7 +255,22 @@ def app_client():
     _FakeCatalogTable.reset()
     routes.db = _FakeDb
     routes.db.session = _FakeSession()
+    Challenges.query = _FakeQuery([])
+    Solves.query = _FakeQuery([])
     return app.test_client()
+
+
+def _set_track_challenges(*rows):
+    """rows: _FakeChallengeRow(id, name, category) tuples, this track's
+    challenges in sequence order (mirrors what a real deployment's
+    Challenges table looks like after the Wargames builders create levels
+    0, 1, 2, ... in ascending id order)."""
+    Challenges.query = _FakeQuery(list(rows))
+
+
+def _set_solves(*rows):
+    """rows: _FakeSolveRow(account_id, challenge_id) tuples."""
+    Solves.query = _FakeQuery(list(rows))
 
 
 def _fake_orch_response(status_code, body: dict):
@@ -314,36 +447,23 @@ def test_machine_sync_does_not_cache_on_orchestrator_rejection(app_client, monke
     assert _FakeCatalogTable.row is None
 
 
-# ── /api/balance ─────────────────────────────────────────────────────────
-
-def test_api_balance_forwards_authenticated_owner_id(app_client, monkeypatch):
-    monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=42))
-    captured = {}
-
-    def fake_balance(owner_id):
-        captured["owner_id"] = owner_id
-        return {"owner_id": owner_id, "balance": 100}
-
-    _install_fake_client(monkeypatch, balance=fake_balance)
-
-    resp = app_client.get("/plugins/hint-wallet/api/balance")
-
-    assert resp.status_code == 200
-    assert captured["owner_id"] == "42"
-    assert resp.get_json()["balance"] == 100
-
-
 # ── /api/unlock ──────────────────────────────────────────────────────────
+# No /api/balance anymore (cei-labs-event#7 -- no shared team-currency
+# wallet exists in this system). /api/unlock now also enforces the
+# progression-window gate (progression.py) before ever calling the
+# orchestrator, on top of forwarding the hint selection.
 
-def test_api_unlock_forwards_owner_id_and_hint_selection(app_client, monkeypatch):
+def test_api_unlock_forwards_owner_id_and_hint_selection_when_in_window(app_client, monkeypatch):
     monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
+    _set_track_challenges(_FakeChallengeRow(1, "Bandit 0 -> 1", "Linux Basics"))
+    _set_solves()  # nothing solved yet -> challenge 1 is the fresh window
     captured = {}
 
-    def fake_deduct(owner_id, track, entry_name, tier):
+    def fake_unlock(owner_id, track, entry_name, tier):
         captured.update(owner_id=owner_id, track=track, entry_name=entry_name, tier=tier)
-        return {"success": True, "status": "unlocked", "balance": 20, "cost": 10, "content": "use ssh -h"}
+        return {"success": True, "status": "unlocked", "cost_percent": 10, "content": "use ssh -h"}
 
-    _install_fake_client(monkeypatch, deduct=fake_deduct)
+    _install_fake_client(monkeypatch, unlock=fake_unlock)
 
     resp = app_client.post(
         "/plugins/hint-wallet/api/unlock",
@@ -355,27 +475,87 @@ def test_api_unlock_forwards_owner_id_and_hint_selection(app_client, monkeypatch
     assert resp.get_json()["content"] == "use ssh -h"
 
 
-def test_api_unlock_insufficient_balance_propagates_as_error_not_silent_success(app_client, monkeypatch):
+def test_api_unlock_outside_progression_window_is_409_without_calling_orchestrator(app_client, monkeypatch):
     monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
-    _install_fake_client(
-        monkeypatch,
-        deduct=lambda *a, **kw: {"success": False, "status_code": 402, "error": "insufficient_balance", "balance": 5, "cost": 10},
+    _set_track_challenges(
+        _FakeChallengeRow(1, "Bandit 0 -> 1", "Linux Basics"),
+        _FakeChallengeRow(2, "Bandit 1 -> 2", "Linux Basics"),
+        _FakeChallengeRow(40, "Bandit 39 -> 40", "Linux Basics"),
     )
+    _set_solves()  # nothing solved -- window is {1, 2}, challenge 40 is locked
+    called = []
+    _install_fake_client(monkeypatch, unlock=lambda *a, **kw: called.append(1))
 
     resp = app_client.post(
         "/plugins/hint-wallet/api/unlock",
-        json={"track": "bandit", "entry_name": "Bandit 0 -> 1", "tier": 3},
+        json={"track": "bandit", "entry_name": "Bandit 39 -> 40", "tier": 1},
     )
 
-    assert resp.status_code == 402, "an orchestrator rejection must not come back as a 200"
-    body = resp.get_json()
-    assert body["success"] is False
-    assert body["error"] == "insufficient_balance"
+    assert resp.status_code == 409
+    assert resp.get_json()["error"] == "progression_locked"
+    assert called == [], "the orchestrator must never be called for a progression-locked hint"
 
 
-def test_api_unlock_missing_fields_rejected_before_calling_orchestrator(app_client, monkeypatch):
+def test_api_unlock_window_shifts_as_challenges_are_solved(app_client, monkeypatch):
+    monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
+    _set_track_challenges(
+        *[_FakeChallengeRow(i, f"Bandit {i}", "Linux Basics") for i in range(1, 13)]
+    )
+    # This owner has solved challenges 1-10 -- window is now {11, 12}.
+    _set_solves(*[_FakeSolveRow(7, i) for i in range(1, 11)])
+    _install_fake_client(monkeypatch, unlock=lambda *a, **kw: {"success": True, "status": "unlocked", "cost_percent": 10, "content": "hi"})
+
+    resp = app_client.post(
+        "/plugins/hint-wallet/api/unlock",
+        json={"track": "bandit", "entry_name": "Bandit 11", "tier": 1},
+    )
+    assert resp.status_code == 200
+
+    resp = app_client.post(
+        "/plugins/hint-wallet/api/unlock",
+        json={"track": "bandit", "entry_name": "Bandit 1", "tier": 1},
+    )
+    assert resp.status_code == 409, "already-solved-and-passed challenge 1 must not be unlockable anymore"
+
+
+def test_api_unlock_progression_window_is_independent_per_track(app_client, monkeypatch):
+    monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
+    _set_track_challenges(
+        _FakeChallengeRow(1, "Bandit 0 -> 1", "Linux Basics"),
+        _FakeChallengeRow(2, "Bandit 1 -> 2", "Linux Basics"),
+        _FakeChallengeRow(101, "Krypton 0 -> 1", "Cryptography"),
+        _FakeChallengeRow(102, "Krypton 1 -> 2", "Cryptography"),
+    )
+    # Bandit fully solved, Krypton untouched -- Krypton's own window must
+    # still be its own first two challenges regardless of Bandit progress.
+    _set_solves(_FakeSolveRow(7, 1), _FakeSolveRow(7, 2))
+    _install_fake_client(monkeypatch, unlock=lambda *a, **kw: {"success": True, "status": "unlocked", "cost_percent": 10, "content": "hi"})
+
+    resp = app_client.post(
+        "/plugins/hint-wallet/api/unlock",
+        json={"track": "krypton", "entry_name": "Krypton 0 -> 1", "tier": 1},
+    )
+    assert resp.status_code == 200
+
+
+def test_api_unlock_for_a_challenge_ctfd_does_not_know_about_is_404(app_client, monkeypatch):
+    monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
+    _set_track_challenges()  # empty -- track has no challenges in CTFd at all
     called = []
-    _install_fake_client(monkeypatch, deduct=lambda *a, **kw: called.append(1))
+    _install_fake_client(monkeypatch, unlock=lambda *a, **kw: called.append(1))
+
+    resp = app_client.post(
+        "/plugins/hint-wallet/api/unlock",
+        json={"track": "bandit", "entry_name": "does not exist", "tier": 1},
+    )
+
+    assert resp.status_code == 404
+    assert called == []
+
+
+def test_api_unlock_missing_fields_rejected_before_progression_check_or_orchestrator(app_client, monkeypatch):
+    called = []
+    _install_fake_client(monkeypatch, unlock=lambda *a, **kw: called.append(1))
 
     resp = app_client.post("/plugins/hint-wallet/api/unlock", json={"track": "bandit"})
 

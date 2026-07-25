@@ -1,16 +1,17 @@
 """docker/ctfd/plugins/hint-wallet/models.py
 
 A single cached copy of the most recently *accepted* hint-wallet catalog
-bundle (the orchestrator is the source of truth and the only place balances
-and unlocks are recorded -- see wallet.py's WalletStore) -- kept here purely
-so /api/tiers/<track>/<entry_name> can list a hint's tier numbers and costs
-to a player WITHOUT exposing tier content and without needing a browse-only
-endpoint on the orchestrator (it doesn't have one: /wallet/deduct both
-reads and spends in the same call, by design, so it can't be used for a
-free preview). machine_sync() in routes.py writes this row only after the
-orchestrator's own /wallet/sync has accepted the bundle (status 200) --
-never before, so this cache can't get ahead of what the orchestrator would
-actually honor a deduct against.
+bundle (the orchestrator is the source of truth and the only place unlocks
+are recorded -- see store.py's WalletStore; there is no balance anymore,
+see cei-labs-event#7) -- kept here purely so /api/tiers/<track>/<entry_name>
+can list a hint's tier numbers and percent costs to a player WITHOUT
+exposing tier content and without needing a browse-only endpoint on the
+orchestrator (it doesn't have one: /wallet/unlock both reads and records in
+the same call, by design, so it can't be used for a free preview).
+machine_sync() in routes.py writes this row only after the orchestrator's
+own /wallet/sync has accepted the bundle (status 200) -- never before, so
+this cache can't get ahead of what the orchestrator would actually honor an
+unlock against.
 
 A brand-new table, created the same create-if-missing way __init__.py
 already uses for every other plugin table in this repo (see
