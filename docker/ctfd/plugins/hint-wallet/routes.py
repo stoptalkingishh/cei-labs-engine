@@ -28,30 +28,52 @@ Two audiences:
                             /admin/mappings/sync route needs it -- this is
                             deliberately called without a CTFd session.
   - /api/tiers/<track>/<entry_name>,
-    /api/balance,
     /api/unlock                participant, session-authed (CTFd login,
-                            @authed_only) -- browse a hint's tier costs
-                            (content withheld until unlocked), check wallet
-                            balance, and spend points to unlock a tier.
-                            owner_id is str(get_current_user().account_id),
-                            the SAME convention instance-launcher/routes.py
-                            already uses (team id in team mode, user id in
-                            user mode) -- reused exactly, not reinvented,
-                            so a team's instance-launcher usage and
-                            hint-wallet balance are keyed identically.
+                            @authed_only) -- browse a hint's tier percent
+                            costs (content withheld until unlocked) and open
+                            a tier. owner_id is
+                            str(get_current_user().account_id), the SAME
+                            convention instance-launcher/routes.py already
+                            uses (team id in team mode, user id in user
+                            mode) -- reused exactly, not reinvented, so a
+                            team's instance-launcher usage and hint-wallet
+                            unlocks are keyed identically.
+
+Cost model (cei-labs-event#7): there is no shared team-currency balance
+anywhere in this system -- see orchestrator_client.py and the
+orchestrator's app/store.py WalletStore docstring. A tier's cost is a
+percentage of ITS OWN CHALLENGE's point value, applied as a reduction of
+that challenge's own score award at solve time (solve_hook.py), not a
+spend from a pool. api_unlock() therefore never rejects for
+"insufficient balance" -- the only rejections are an unknown hint
+(404 hint_not_found), no catalog yet (409 no_active_catalog), and the
+progression-window gate below.
+
+Progression-window gating (cei-labs-event#7): api_unlock() also refuses to
+open a hint for a challenge outside this owner's current unlock window for
+that challenge's track -- see progression.py for the pure window logic.
+The window is anchored on the next challenge in that track's sequence this
+owner has NOT yet solved: that challenge, plus the one immediately after
+it. A track's sequence is CTFd's own Challenges rows filtered to that
+track's category, ordered by id (matching the order the Wargames builders
+already create them in). This mirrors solve_hook.py's existing convention
+of deriving everything from CTFd.models.Solves filtered by account_id
+rather than a separate progress table.
 """
 import json
 import logging
 
 from flask import Blueprint, Response, jsonify, request
 
-from CTFd.models import db
+from CTFd.models import Challenges, Solves, db
 from CTFd.plugins import bypass_csrf_protection
 from CTFd.utils.decorators import authed_only
 from CTFd.utils.user import get_current_user
 
 from .models import HintWalletCatalog
 from .orchestrator_client import OrchestratorClient, OrchestratorError
+from .progression import is_unlockable
+from .track_mapping import category_for_track
 
 logger = logging.getLogger(__name__)
 
@@ -157,18 +179,32 @@ def api_tiers(track: str, entry_name: str):
     return jsonify(error="hint_not_found"), 404
 
 
-@hint_wallet_bp.route("/api/balance", methods=["GET"])
-@authed_only
-def api_balance():
-    user = get_current_user()
-    owner_id = str(user.account_id)
-    client = OrchestratorClient.from_env()
+def _track_ordered_challenge_ids(track: str) -> list:
+    """This track's challenges in sequence order, ordered by challenge id --
+    matches the order the build_*.py scripts create them in (level 0, 1,
+    2, ...). See progression.py for what this feeds into, and
+    track_mapping.py for the track->category resolution."""
+    category = category_for_track(track)
+    if category is None:
+        return []
+    rows = Challenges.query.filter(Challenges.category == category).order_by(Challenges.id.asc()).all()
+    return [row.id for row in rows]
 
-    try:
-        result = client.balance(owner_id)
-    except OrchestratorError as exc:
-        return jsonify(error=str(exc)), 502
-    return jsonify(result), 200
+
+def _resolve_challenge(track: str, entry_name: str):
+    """The CTFd Challenges row for this track+entry_name (entry_name is the
+    challenge's own `name`, exactly as the Wargames build scripts write it
+    into the hint-wallet manifest -- see deploy.sh/build_*.py), or None."""
+    category = category_for_track(track)
+    if category is None:
+        return None
+    return (
+        Challenges.query.filter(
+            Challenges.category == category,
+            Challenges.name == entry_name,
+        )
+        .first()
+    )
 
 
 @hint_wallet_bp.route("/api/unlock", methods=["POST"])
@@ -186,16 +222,38 @@ def api_unlock():
 
     user = get_current_user()
     owner_id = str(user.account_id)
+
+    # Progression-window gate (cei-labs-event#7): a hint can only be opened
+    # for a challenge inside this owner's current unlock window for that
+    # challenge's track -- see progression.py. A challenge this plugin
+    # can't resolve to a real CTFd row is treated as locked rather than
+    # falling through to the orchestrator (which would 404 anyway, but
+    # failing here keeps the gate fail-closed even for a track this
+    # deployment hasn't wired into CTFd's challenge set at all).
+    challenge = _resolve_challenge(track, entry_name)
+    if challenge is None:
+        return jsonify(error="hint_not_found"), 404
+
+    ordered_ids = _track_ordered_challenge_ids(track)
+    solved_ids = {
+        row.challenge_id
+        for row in Solves.query.filter(Solves.challenge_id.in_(ordered_ids)).all()
+        if str(row.account_id) == owner_id
+    }
+    if not is_unlockable(challenge.id, ordered_ids, solved_ids):
+        return jsonify(error="progression_locked"), 409
     client = OrchestratorClient.from_env()
 
     try:
-        result = client.deduct(owner_id, track, entry_name, tier)
+        result = client.unlock(owner_id, track, entry_name, tier)
     except OrchestratorError as exc:
         return jsonify(error=str(exc)), 502
 
-    # deduct() returns success=False with the orchestrator's exact
-    # status_code (402 insufficient_balance, 404 hint_not_found,
-    # 409 no_active_catalog) for expected rejections -- relayed as-is so a
-    # rejection reaches the player as a real error response, never a 200.
+    # unlock() returns success=False with the orchestrator's exact
+    # status_code (404 hint_not_found, 409 no_active_catalog) for expected
+    # rejections -- relayed as-is so a rejection reaches the player as a
+    # real error response, never a 200. There is no "insufficient balance"
+    # case anymore (cei-labs-event#7) -- costs are a percent-of-value score
+    # reduction applied at solve time, not a spend.
     status_code = result.pop("status_code", 200)
     return jsonify(result), status_code

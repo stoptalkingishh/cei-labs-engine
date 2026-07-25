@@ -10,6 +10,15 @@ Kept separate from main.py so the schema/economic rules -- independent of
 HTTP, HMAC, or revision/digest state -- can be unit tested directly and so
 the mapping from "what's wrong with this payload" to "which fail-closed
 status code" stays in one place.
+
+Cost model (see cei-labs-event#7): each tier's "cost" is a cumulative
+PERCENTAGE of the challenge's own point value (1-99), not a flat/absolute
+number of points spent from a shared team currency. There is no team wallet
+balance anywhere in this system -- opening a tier just records that this
+owner peeked at it for that specific challenge; the percent is applied as a
+reduction of that challenge's own award at solve time (see
+docker/ctfd/plugins/hint-wallet/solve_hook.py), never debited from a shared
+pool.
 """
 import hashlib
 import json
@@ -83,8 +92,8 @@ def validate_bundle(bundle) -> list:
                 _require(
                     isinstance(tier_obj.get("cost"), int)
                     and not isinstance(tier_obj.get("cost"), bool)
-                    and tier_obj["cost"] > 0,
-                    "tier cost must be a positive integer",
+                    and 0 < tier_obj["cost"] < 100,
+                    "tier cost must be an integer percent of the challenge's value, strictly between 0 and 100",
                 )
                 _require(isinstance(tier_obj.get("content"), str) and tier_obj["content"], "tier content must be a non-empty string")
         _require(isinstance(manifest.get("digest"), str) and manifest["digest"], "manifest digest must be a non-empty string")

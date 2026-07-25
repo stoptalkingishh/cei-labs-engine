@@ -1,13 +1,15 @@
 """HTTP-level tests for the hint-wallet endpoints (POST /wallet/sync,
-POST /wallet/deduct, GET /wallet/balance/<owner_id>, POST /wallet/credit).
+POST /wallet/unlock, GET /wallet/unlocked/<owner_id>/<track>/<entry_name>).
 
 Covers the fail-closed contract from docs/P0-FIX-LOG-2026-07-23.md: HMAC
 signature auth (including secret rotation overlap), the revision/digest
 state machine, all-or-nothing three-track schema/track/economic validation,
 and that a rejected sync never disturbs the previously accepted catalog.
-Also covers deduct/balance/credit and a concurrency test proving double-
-spend is impossible under gunicorn's multi-worker model, matching the rigor
-of tests/test_store_concurrency.py for InstanceStore.
+Also covers unlock/unlocked (percent-of-value cost model, no shared team
+balance -- see cei-labs-event#7 and app/store.py's WalletStore docstring)
+and a concurrency test proving a repeated unlock is recorded exactly once
+under gunicorn's multi-worker model, matching the rigor of
+tests/test_store_concurrency.py for InstanceStore.
 """
 import hashlib
 import hmac
@@ -225,15 +227,16 @@ def test_rejected_sync_leaves_previous_catalog_active(client):
     bad_resp = _sync(client, SECRET, 2, manifests=[_manifest("bandit"), _manifest("krypton")])
     assert bad_resp.status_code == 400
 
-    # Deduct still resolves against the revision-1 catalog, proving the
-    # rejected revision-2 sync never touched stored state.
+    # Unlock still resolves against the revision-1 catalog, proving the
+    # rejected revision-2 sync never touched stored state -- a 404
+    # hint_not_found here would mean the catalog was lost/replaced.
     resp = client.post(
-        "/wallet/deduct",
+        "/wallet/unlock",
         json={"owner_id": "team-1", "track": "bandit", "entry_name": "bandit challenge 1", "tier": 1},
         headers=PLUGIN_HEADERS,
     )
-    assert resp.status_code == 402  # insufficient balance, but hint_not_found would mean catalog was lost
-    assert resp.get_json()["error"] == "insufficient_balance"
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "unlocked"
 
 
 # ── revision / digest state machine ─────────────────────────────────────────
@@ -282,11 +285,11 @@ def test_no_rollback_via_same_revision_lower_content(client):
     assert resp.status_code == 200
 
 
-# ── deduct / balance / credit ────────────────────────────────────────────────
+# ── unlock / unlocked (percent-of-value cost, no shared balance) ───────────
 
-def test_deduct_without_catalog_is_409(client):
+def test_unlock_without_catalog_is_409(client):
     resp = client.post(
-        "/wallet/deduct",
+        "/wallet/unlock",
         json={"owner_id": "team-1", "track": "bandit", "entry_name": "x", "tier": 1},
         headers=PLUGIN_HEADERS,
     )
@@ -294,105 +297,117 @@ def test_deduct_without_catalog_is_409(client):
     assert resp.get_json()["error"] == "no_active_catalog"
 
 
-def test_deduct_unknown_hint_is_404(client):
+def test_unlock_unknown_hint_is_404(client):
     _sync(client, SECRET, 1)
     resp = client.post(
-        "/wallet/deduct",
+        "/wallet/unlock",
         json={"owner_id": "team-1", "track": "bandit", "entry_name": "does not exist", "tier": 1},
         headers=PLUGIN_HEADERS,
     )
     assert resp.status_code == 404
 
 
-def test_deduct_requires_orchestrator_auth(client):
+def test_unlock_requires_orchestrator_auth(client):
     _sync(client, SECRET, 1)
     resp = client.post(
-        "/wallet/deduct",
+        "/wallet/unlock",
         json={"owner_id": "team-1", "track": "bandit", "entry_name": "bandit challenge 1", "tier": 1},
     )
     assert resp.status_code == 401
 
 
-def test_credit_then_deduct_then_balance(client):
-    _sync(client, SECRET, 1)
-    resp = client.post("/wallet/credit", json={"owner_id": "team-1", "amount": 100}, headers=PLUGIN_HEADERS)
-    assert resp.status_code == 200
-    assert resp.get_json()["balance"] == 100
+def test_unlock_then_unlocked_reflects_highest_tier(client):
+    _sync(client, SECRET, 1)  # default manifest costs: tier1=10%, tier2=20%, tier3=30%
 
     resp = client.post(
-        "/wallet/deduct",
+        "/wallet/unlock",
         json={"owner_id": "team-1", "track": "bandit", "entry_name": "bandit challenge 1", "tier": 1},
         headers=PLUGIN_HEADERS,
     )
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["status"] == "unlocked"
-    assert body["balance"] == 90
+    assert body["cost_percent"] == 10
     assert body["content"] == "nudge"
 
-    resp = client.get("/wallet/balance/team-1", headers=PLUGIN_HEADERS)
+    resp = client.get("/wallet/unlocked/team-1/bandit/bandit%20challenge%201", headers=PLUGIN_HEADERS)
     assert resp.status_code == 200
-    assert resp.get_json()["balance"] == 90
+    assert resp.get_json() == {
+        "owner_id": "team-1", "track": "bandit", "entry_name": "bandit challenge 1",
+        "tier": 1, "cost_percent": 10,
+    }
+
+    # Opening tier 2 raises the highest-unlocked tier to 2.
+    client.post(
+        "/wallet/unlock",
+        json={"owner_id": "team-1", "track": "bandit", "entry_name": "bandit challenge 1", "tier": 2},
+        headers=PLUGIN_HEADERS,
+    )
+    resp = client.get("/wallet/unlocked/team-1/bandit/bandit%20challenge%201", headers=PLUGIN_HEADERS)
+    body = resp.get_json()
+    assert body["tier"] == 2
+    assert body["cost_percent"] == 20
 
 
-def test_deduct_is_idempotent_on_retry(client):
+def test_unlock_is_idempotent_on_retry(client):
     _sync(client, SECRET, 1)
-    client.post("/wallet/credit", json={"owner_id": "team-1", "amount": 100}, headers=PLUGIN_HEADERS)
     payload = {"owner_id": "team-1", "track": "bandit", "entry_name": "bandit challenge 1", "tier": 1}
-    first = client.post("/wallet/deduct", json=payload, headers=PLUGIN_HEADERS)
-    second = client.post("/wallet/deduct", json=payload, headers=PLUGIN_HEADERS)
-    assert first.get_json()["balance"] == 90
+    first = client.post("/wallet/unlock", json=payload, headers=PLUGIN_HEADERS)
+    second = client.post("/wallet/unlock", json=payload, headers=PLUGIN_HEADERS)
+    assert first.get_json()["status"] == "unlocked"
     assert second.status_code == 200
     assert second.get_json()["status"] == "already_unlocked"
-    assert second.get_json()["balance"] == 90  # not double-charged
+    assert second.get_json()["cost_percent"] == 10  # not re-recorded with a different value
 
 
-def test_deduct_insufficient_balance(client):
+def test_unlocked_for_a_team_that_never_opened_a_hint_is_null_not_404(client):
     _sync(client, SECRET, 1)
-    resp = client.post(
-        "/wallet/deduct",
+    resp = client.get("/wallet/unlocked/never-seen/bandit/bandit%20challenge%201", headers=PLUGIN_HEADERS)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["tier"] is None
+    assert body["cost_percent"] is None
+
+
+def test_unlocked_is_independent_per_challenge_entry(client):
+    _sync(client, SECRET, 1, manifests=[
+        _manifest("bandit", entry_name="bandit challenge 1"),
+        _manifest("krypton"),
+        _manifest("natas"),
+    ])
+    client.post(
+        "/wallet/unlock",
         json={"owner_id": "team-1", "track": "bandit", "entry_name": "bandit challenge 1", "tier": 3},
         headers=PLUGIN_HEADERS,
     )
-    assert resp.status_code == 402
-    assert resp.get_json()["error"] == "insufficient_balance"
+    # A different track/entry for the same owner is untouched.
+    resp = client.get("/wallet/unlocked/team-1/krypton/krypton%20challenge%201", headers=PLUGIN_HEADERS)
+    assert resp.get_json()["tier"] is None
 
 
-def test_balance_for_unknown_team_defaults_to_zero(client):
-    resp = client.get("/wallet/balance/never-seen", headers=PLUGIN_HEADERS)
-    assert resp.status_code == 200
-    assert resp.get_json()["balance"] == 0
+# ── concurrency: a repeated unlock is recorded exactly once across workers ─
 
-
-def test_credit_rejects_non_positive_amount(client):
-    resp = client.post("/wallet/credit", json={"owner_id": "team-1", "amount": 0}, headers=PLUGIN_HEADERS)
-    assert resp.status_code == 400
-    resp = client.post("/wallet/credit", json={"owner_id": "team-1", "amount": -5}, headers=PLUGIN_HEADERS)
-    assert resp.status_code == 400
-
-
-# ── concurrency: no double-spend across independent WalletStore objects ────
-
-def test_deduct_double_spend_is_impossible_across_workers():
+def test_repeated_unlock_is_recorded_exactly_once_across_workers():
     """Same shape as test_store_concurrency.py: many independent WalletStore
     objects sharing one on-disk file (standing in for gunicorn worker
-    processes) all racing unlock_hint() for the same team/hint at once.
-    Exactly one may spend the balance; the rest must see "already_unlocked"
-    once the balance-holder wins, with the final balance debited exactly
-    once."""
+    processes) all racing unlock_hint() for the same owner/hint/tier at
+    once. There's no balance to double-spend anymore (cei-labs-event#7 --
+    percent-of-value cost, no shared team currency), but the idempotency
+    guarantee itself must still hold under real concurrency: exactly one
+    caller gets "unlocked", the rest see "already_unlocked", and only one
+    row is ever written."""
     from app.store import WalletStore
 
     n_workers = 20
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         db_path = os.path.join(tmp_dir, "wallet.db")
         stores = [WalletStore(db_path=db_path) for _ in range(n_workers)]
-        stores[0].credit("team-1", 100)
         results = [None] * n_workers
         barrier = threading.Barrier(n_workers)
 
         def race(i):
             barrier.wait()
-            results[i] = stores[i].unlock_hint("team-1", "bandit", "challenge-1", 1, cost=10)
+            results[i] = stores[i].unlock_hint("team-1", "bandit", "challenge-1", 1, cost_percent=10)
 
         threads = [threading.Thread(target=race, args=(i,)) for i in range(n_workers)]
         for t in threads:
@@ -403,7 +418,8 @@ def test_deduct_double_spend_is_impossible_across_workers():
         statuses = [status for status, _ in results]
         assert statuses.count("unlocked") == 1
         assert statuses.count("already_unlocked") == n_workers - 1
-        assert stores[0].get_balance("team-1") == 90
+        assert all(cost_percent == 10 for _, cost_percent in results)
+        assert stores[0].highest_unlocked_tier("team-1", "bandit", "challenge-1") == {"tier": 1, "cost_percent": 10}
 
         for s in stores:
             s.close()

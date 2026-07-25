@@ -20,6 +20,7 @@ that endpoint is to forward the raw bytes and the signature header
 unchanged, not to re-sign or duplicate that secret material here.
 """
 import os
+from urllib.parse import quote
 
 import requests
 
@@ -83,26 +84,29 @@ class OrchestratorClient:
             raise OrchestratorError(f"orchestrator unreachable: {exc}") from exc
 
     # ── Player-facing wallet actions ─────────────────────────────────────
+    #
+    # There is no shared team-currency balance anywhere in this system (see
+    # cei-labs-event#7 and the orchestrator's app/store.py WalletStore
+    # docstring) -- costs are a percentage of the challenge's OWN point
+    # value, applied as a score reduction at solve time
+    # (docker/ctfd/plugins/hint-wallet/solve_hook.py), not a spend from a
+    # pool. `unlock()` therefore only ever records that a tier was opened;
+    # `unlocked()` reads that record back (used by solve_hook.py to decide
+    # how much of a challenge's award to keep).
 
-    def balance(self, owner_id: str) -> dict:
-        resp = requests.get(f"{self.base_url}/wallet/balance/{owner_id}", headers=self._headers(), timeout=self.timeout)
-        if resp.status_code != 200:
-            self._raise_for_error(resp)
-        return resp.json()
-
-    def deduct(self, owner_id: str, track: str, entry_name: str, tier: int) -> dict:
-        """Spends a hint tier's cost for owner_id. Unlike most of this
+    def unlock(self, owner_id: str, track: str, entry_name: str, tier: int) -> dict:
+        """Records that owner_id opened this hint tier. Unlike most of this
         client's methods, a non-200 status here is an ordinary, expected
-        outcome (insufficient balance, unknown hint, no catalog yet) --
-        not an exceptional one -- so it's returned as a normal dict with
-        success=False and the orchestrator's exact status_code/body rather
-        than raised, letting the caller (routes.py's /api/unlock) relay the
-        precise error and status code to the player instead of collapsing
-        every failure into one generic message. Only a genuine transport
-        failure (orchestrator unreachable) raises OrchestratorError."""
+        outcome (unknown hint, no catalog yet) -- not an exceptional one --
+        so it's returned as a normal dict with success=False and the
+        orchestrator's exact status_code/body rather than raised, letting
+        the caller (routes.py's /api/unlock) relay the precise error and
+        status code to the player instead of collapsing every failure into
+        one generic message. Only a genuine transport failure (orchestrator
+        unreachable) raises OrchestratorError."""
         try:
             resp = requests.post(
-                f"{self.base_url}/wallet/deduct",
+                f"{self.base_url}/wallet/unlock",
                 json={"owner_id": owner_id, "track": track, "entry_name": entry_name, "tier": tier},
                 headers=self._headers(),
                 timeout=self.timeout,
@@ -118,3 +122,18 @@ class OrchestratorClient:
         if resp.status_code == 200:
             return {"success": True, **body}
         return {"success": False, "status_code": resp.status_code, **body}
+
+    def unlocked(self, owner_id: str, track: str, entry_name: str) -> dict:
+        """The highest tier owner_id has opened for this specific challenge,
+        or {"tier": None, "cost_percent": None} if they never opened one.
+        Used by solve_hook.py at solve time, and safe to call speculatively
+        (never raises for "nothing opened", only for real transport
+        failures)."""
+        resp = requests.get(
+            f"{self.base_url}/wallet/unlocked/{quote(owner_id, safe='')}/{quote(track, safe='')}/{quote(entry_name, safe='')}",
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        if resp.status_code != 200:
+            self._raise_for_error(resp)
+        return resp.json()

@@ -905,14 +905,23 @@ class RangeStore:
 class WalletStore:
     """SQLite-backed hint-wallet state: the accepted three-track catalog
     (`wallet_catalog`, a singleton row -- see the revision/digest contract in
-    docs/P0-FIX-LOG-2026-07-23.md), per-team credit balances
-    (`team_balance`), and a record of which (owner, track, entry, tier)
-    hints have already been unlocked (`wallet_unlocks`), so a retried
-    /wallet/deduct call is idempotent instead of double-charging.
+    docs/P0-FIX-LOG-2026-07-23.md) and a record of which (owner, track,
+    entry, tier) hints have already been unlocked (`wallet_unlocks`), so a
+    retried /wallet/unlock call is idempotent instead of re-recording.
+
+    There is deliberately no shared team-currency balance here (no
+    `team_balance` table, no credit/deduct) -- see cei-labs-event#7. The old
+    model spent a flat point cost out of a shared per-team pool; the current
+    model prices each tier as a percentage of the CHALLENGE'S OWN point
+    value and applies that percentage as a reduction of that challenge's own
+    award at solve time (docker/ctfd/plugins/hint-wallet/solve_hook.py), so
+    there is nothing to debit and nothing to credit -- unlocking a tier is
+    pure record-keeping of "did this owner peek at this tier for this
+    challenge," not a spend.
 
     Same cross-process-safety rationale as InstanceStore/RangeStore above:
     gunicorn workers are separate processes, so state that must never race
-    (accepting a catalog, spending a balance) is done inside a `BEGIN
+    (accepting a catalog, recording an unlock) is done inside a `BEGIN
     IMMEDIATE` transaction on the one shared SQLite file rather than in
     Python-level locking that only covers one process.
     """
@@ -965,20 +974,12 @@ class WalletStore:
         )
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS team_balance (
-                owner_id TEXT PRIMARY KEY,
-                balance INTEGER NOT NULL DEFAULT 0
-            )
-            """
-        )
-        conn.execute(
-            """
             CREATE TABLE IF NOT EXISTS wallet_unlocks (
                 owner_id TEXT NOT NULL,
                 track TEXT NOT NULL,
                 entry_name TEXT NOT NULL,
                 tier INTEGER NOT NULL,
-                cost INTEGER NOT NULL,
+                cost_percent INTEGER NOT NULL,
                 unlocked_at REAL NOT NULL,
                 PRIMARY KEY (owner_id, track, entry_name, tier)
             )
@@ -1046,79 +1047,56 @@ class WalletStore:
                 conn.execute("ROLLBACK")
             raise
 
-    # ── Balances ─────────────────────────────────────────────────────────
-    def get_balance(self, owner_id: str) -> int:
-        row = self._conn().execute(
-            "SELECT balance FROM team_balance WHERE owner_id = ?", (owner_id,)
-        ).fetchone()
-        return row[0] if row is not None else 0
+    # ── Unlocks (record-keeping only, no balance/spend) ─────────────────────
+    def unlock_hint(self, owner_id: str, track: str, entry_name: str, tier: int, cost_percent: int):
+        """Atomically record that `owner_id` opened this hint tier, unless it
+        was already recorded (idempotent retry -- a plugin request that
+        timed out client-side after server-side success must not
+        double-record on retry).
 
-    def credit(self, owner_id: str, amount: int) -> int:
-        """Atomically add `amount` (must be > 0) to a team's balance,
-        creating the row on first credit. Returns the new balance."""
-        conn = self._conn()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                "INSERT INTO team_balance (owner_id, balance) VALUES (?, ?) "
-                "ON CONFLICT(owner_id) DO UPDATE SET balance = balance + excluded.balance",
-                (owner_id, amount),
-            )
-            (new_balance,) = conn.execute(
-                "SELECT balance FROM team_balance WHERE owner_id = ?", (owner_id,)
-            ).fetchone()
-            conn.execute("COMMIT")
-            return new_balance
-        except Exception:
-            if conn.in_transaction:
-                conn.execute("ROLLBACK")
-            raise
-
-    def unlock_hint(self, owner_id: str, track: str, entry_name: str, tier: int, cost: int):
-        """Atomically spend `cost` against `owner_id`'s balance to unlock one
-        hint tier, unless it was already unlocked (idempotent retry -- a
-        plugin request that timed out client-side after server-side success
-        must not double-charge on retry).
-
-        Returns (status, balance) where status is one of "unlocked",
-        "already_unlocked", "insufficient_balance". The whole
-        check-balance-then-spend sequence runs inside one BEGIN IMMEDIATE
-        transaction so concurrent deduct calls for the same team can't both
-        read the same starting balance and both succeed past a check that
-        should only let one of them through -- the double-spend race this
-        table exists to close.
+        Returns (status, cost_percent) where status is one of "unlocked",
+        "already_unlocked". There is no balance to check or spend -- see
+        this class's docstring. The check-then-insert still runs inside one
+        BEGIN IMMEDIATE transaction so two concurrent unlock calls for the
+        same (owner, track, entry, tier) can't both observe "not yet
+        recorded" and both try to insert.
         """
         conn = self._conn()
         try:
             conn.execute("BEGIN IMMEDIATE")
             already = conn.execute(
-                "SELECT cost FROM wallet_unlocks WHERE owner_id = ? AND track = ? AND entry_name = ? AND tier = ?",
+                "SELECT cost_percent FROM wallet_unlocks WHERE owner_id = ? AND track = ? AND entry_name = ? AND tier = ?",
                 (owner_id, track, entry_name, tier),
             ).fetchone()
             if already is not None:
                 conn.execute("COMMIT")
-                return "already_unlocked", self.get_balance(owner_id)
-            row = conn.execute(
-                "SELECT balance FROM team_balance WHERE owner_id = ?", (owner_id,)
-            ).fetchone()
-            balance = row[0] if row is not None else 0
-            if balance < cost:
-                conn.execute("COMMIT")
-                return "insufficient_balance", balance
-            new_balance = balance - cost
+                return "already_unlocked", already[0]
             conn.execute(
-                "INSERT INTO team_balance (owner_id, balance) VALUES (?, ?) "
-                "ON CONFLICT(owner_id) DO UPDATE SET balance = excluded.balance",
-                (owner_id, new_balance),
-            )
-            conn.execute(
-                "INSERT INTO wallet_unlocks (owner_id, track, entry_name, tier, cost, unlocked_at) "
+                "INSERT INTO wallet_unlocks (owner_id, track, entry_name, tier, cost_percent, unlocked_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (owner_id, track, entry_name, tier, cost, time.time()),
+                (owner_id, track, entry_name, tier, cost_percent, time.time()),
             )
             conn.execute("COMMIT")
-            return "unlocked", new_balance
+            return "unlocked", cost_percent
         except Exception:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
+
+    def highest_unlocked_tier(self, owner_id: str, track: str, entry_name: str):
+        """The highest hint tier `owner_id` has opened for this specific
+        challenge (track+entry_name), or None if they never opened one.
+        Since tiers are cumulative (opening tier 3 implies you saw
+        everything up through tier 3), the highest recorded tier is the one
+        whose cost_percent applies at solve time -- see
+        docker/ctfd/plugins/hint-wallet/solve_hook.py."""
+        row = self._conn().execute(
+            "SELECT tier, cost_percent FROM wallet_unlocks "
+            "WHERE owner_id = ? AND track = ? AND entry_name = ? "
+            "ORDER BY tier DESC LIMIT 1",
+            (owner_id, track, entry_name),
+        ).fetchone()
+        if row is None:
+            return None
+        tier, cost_percent = row
+        return {"tier": tier, "cost_percent": cost_percent}
