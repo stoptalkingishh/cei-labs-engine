@@ -184,6 +184,12 @@ def _install_stubs():
     ctfd_plugins.bypass_csrf_protection = lambda f: f
 
     ctfd_utils = types.ModuleType("CTFd.utils")
+    # Identity stub -- real CTFd (and its cmark-gfm dependency) isn't
+    # installed in this test environment (see this file's docstring), so
+    # existing tests that assert exact hint `content` strings stay valid.
+    # test_api_unlock_renders_hint_content_as_markdown below swaps this for
+    # a fake that proves routes.py actually calls it on the content.
+    ctfd_utils.markdown = lambda text: text
     ctfd_decorators = types.ModuleType("CTFd.utils.decorators")
     ctfd_decorators.authed_only = lambda f: f
     ctfd_user = types.ModuleType("CTFd.utils.user")
@@ -473,6 +479,59 @@ def test_api_unlock_forwards_owner_id_and_hint_selection_when_in_window(app_clie
     assert resp.status_code == 200
     assert captured == {"owner_id": "7", "track": "bandit", "entry_name": "Bandit 0 -> 1", "tier": 1}
     assert resp.get_json()["content"] == "use ssh -h"
+
+
+def test_api_unlock_renders_hint_content_as_markdown(app_client, monkeypatch):
+    """routes.py must render `content` through CTFd's own Markdown pipeline
+    (same one challenge descriptions use) before it reaches the player --
+    see this file's identity stub for `CTFd.utils.markdown` above. Without
+    this, a hint's code fences/backticks/bold show up as literal text
+    instead of rendering, since the orchestrator has no CTFd dependency and
+    returns the authored Markdown source completely unrendered."""
+    monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
+    monkeypatch.setattr(routes, "markdown", lambda text: f"<p>RENDERED:{text}</p>")
+    _set_track_challenges(_FakeChallengeRow(1, "Bandit 0 -> 1", "Linux Basics"))
+    _set_solves()
+
+    _install_fake_client(
+        monkeypatch,
+        unlock=lambda *a, **kw: {"success": True, "status": "unlocked", "cost_percent": 10, "content": "`ssh -h`"},
+    )
+
+    resp = app_client.post(
+        "/plugins/hint-wallet/api/unlock",
+        json={"track": "bandit", "entry_name": "Bandit 0 -> 1", "tier": 1},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["content"] == "<p>RENDERED:`ssh -h`</p>"
+
+
+def test_api_unlock_never_calls_markdown_on_a_missing_or_empty_content(app_client, monkeypatch):
+    """A rejection (progression_locked, hint_not_found, etc.) never carries a
+    `content` field -- markdown() must not be called on None/absent content,
+    which would blow up (or worse, silently stringify it as `'None'`)."""
+    monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
+
+    def fail_if_called(_text):
+        raise AssertionError("markdown() must not be called when there is no content")
+
+    monkeypatch.setattr(routes, "markdown", fail_if_called)
+    _set_track_challenges(_FakeChallengeRow(1, "Bandit 0 -> 1", "Linux Basics"))
+    _set_solves()
+
+    _install_fake_client(
+        monkeypatch,
+        unlock=lambda *a, **kw: {"success": False, "status_code": 404, "error": "hint_not_found"},
+    )
+
+    resp = app_client.post(
+        "/plugins/hint-wallet/api/unlock",
+        json={"track": "bandit", "entry_name": "Bandit 0 -> 1", "tier": 1},
+    )
+
+    assert resp.status_code == 404
+    assert "content" not in resp.get_json()
 
 
 def test_api_unlock_outside_progression_window_is_409_without_calling_orchestrator(app_client, monkeypatch):
