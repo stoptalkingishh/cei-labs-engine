@@ -166,7 +166,16 @@ def _install_stubs():
     ctfd_decorators.admins_only = lambda f: f
     ctfd_decorators.authed_only = lambda f: f
     ctfd_user = types.ModuleType("CTFd.utils.user")
-    ctfd_user.get_current_user = lambda: None
+    def _raise_outside_request_context():
+        # Matches real CTFd/Flask: get_current_user() touches the session
+        # proxy, which raises RuntimeError outside an HTTP request context
+        # rather than just returning None. reconcile_all_pending() is called
+        # from load() at app startup -- no request context exists there --
+        # so the stub must raise here too, or this exact bug (a crash on
+        # every container start) can't be caught by these tests.
+        raise RuntimeError("Working outside of request context.")
+
+    ctfd_user.get_current_user = _raise_outside_request_context
     ctfd_user.is_admin = lambda: True
 
     flask_stub = types.ModuleType("flask")

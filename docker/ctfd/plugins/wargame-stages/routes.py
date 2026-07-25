@@ -31,7 +31,18 @@ def read_secret(name: str) -> str:
 
 
 def _admin_id():
-    user = get_current_user()
+    # reconcile_all_pending() (see below) is also called from load() at app
+    # startup -- outside any HTTP request/session context -- e.g. on every
+    # container restart/redeploy, not just from the authenticated
+    # /machine/reconcile route or an admin's browser session. get_current_user()
+    # touches Flask's session proxy, which raises RuntimeError("Working
+    # outside of request context") in that case rather than just returning
+    # falsy, so this must be caught explicitly instead of relying on a bare
+    # `if user` check.
+    try:
+        user = get_current_user()
+    except RuntimeError:
+        return None
     return user.id if user else None
 
 
