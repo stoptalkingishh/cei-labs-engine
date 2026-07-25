@@ -985,6 +985,20 @@ class WalletStore:
             )
             """
         )
+        # Same rationale as _add_column_if_missing's docstring above --
+        # wallet_unlocks shipped in an earlier revision without cost_percent,
+        # and CREATE TABLE IF NOT EXISTS is a no-op against a pre-existing
+        # on-disk table, so a volume created under that revision never picks
+        # up the column without this.
+        self._add_column_if_missing("wallet_unlocks", "cost_percent", "INTEGER NOT NULL DEFAULT 0")
+
+    def _add_column_if_missing(self, table: str, column: str, coltype: str) -> None:
+        """See InstanceStore._add_column_if_missing's docstring."""
+        try:
+            self._conn().execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     # ── Catalog sync ─────────────────────────────────────────────────────
     def get_catalog(self) -> "dict | None":
