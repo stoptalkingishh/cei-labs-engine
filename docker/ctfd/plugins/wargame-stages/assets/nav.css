@@ -1,0 +1,25 @@
+/* docker/ctfd/plugins/wargame-stages/assets/nav.css
+ *
+ * Hides CTFd core's native "Scoreboard" nav link (a team-aggregate score
+ * across every track combined, hardcoded into
+ * CTFd/themes/core/templates/components/navbar.html with no override
+ * mechanism available to plugins) so it doesn't sit alongside this
+ * plugin's own scoreboard entry as two confusingly similar links.
+ *
+ * This event's actual win condition is per-track INDIVIDUAL ranking, not
+ * team-aggregate score -- that's exactly what this plugin's own
+ * scoreboard (routes.py's rank_solves, scoped per game stage) already
+ * provides. __init__.py renames this plugin's own nav entry from "Game
+ * scoreboards" to "Scoreboard" so exactly one link with that label
+ * exists, pointing at the scoreboard that reflects the real win
+ * condition.
+ *
+ * `/scoreboard` is CTFd core's fixed route (CTFd/scoreboard.py:
+ * `@scoreboard.route("/scoreboard")`, blueprint "scoreboard", endpoint
+ * "scoreboard.listing") -- confirmed against the vendored CTFd source,
+ * stable across the 3.8.2->3.8.6 bump (scoreboard.py did not change
+ * between those versions).
+ */
+.navbar-nav a.nav-link[href="/scoreboard"] {
+  display: none !important;
+}

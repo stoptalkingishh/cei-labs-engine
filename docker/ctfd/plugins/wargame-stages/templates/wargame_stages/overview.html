@@ -1,3 +1,3 @@
-{% extends "base.html" %}{% block content %}<div class="container"><h1>Game scoreboards</h1><p>Each game is timed and ranked from its own administrator-controlled start.</p><div class="row">
+{% extends "base.html" %}{% block content %}<div class="container"><h1>Scoreboard</h1><p>Each track is timed and ranked individually from its own administrator-controlled start -- pick a track below to see its standings.</p><div class="row">
 {% for stage in stages %}<div class="col-md-4"><div class="card mb-3"><div class="card-body"><h2 class="h4">{{ stage.name }}</h2><p>Status: {{ stage.state }}</p>{% if stage.scoreboard_visible %}<a class="btn btn-primary" href="{{ url_for('wargame_stages.scoreboard',slug=stage.slug) }}">View scoreboard</a>{% else %}<span class="text-muted">Scoreboard hidden</span>{% endif %}</div></div></div>{% endfor %}
 </div></div>{% endblock %}
