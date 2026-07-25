@@ -240,7 +240,16 @@ def api_unlock():
         for row in Solves.query.filter(Solves.challenge_id.in_(ordered_ids)).all()
         if str(row.account_id) == owner_id
     }
-    if not is_unlockable(challenge.id, ordered_ids, solved_ids):
+    # A challenge this owner has ALREADY solved is always unlockable,
+    # regardless of the window: the moment it's solved, unlockable_window()
+    # shifts past it (the window only ever covers the next unsolved
+    # challenge and the one after), so without this a player revisiting a
+    # challenge they just solved would immediately get "progression_locked"
+    # on something they already answered correctly. This is also safe
+    # scoring-wise -- solve_hook.py only applies the hint-tier penalty at
+    # solve time, so opening a hint after already solving has no effect on
+    # the score already recorded.
+    if challenge.id not in solved_ids and not is_unlockable(challenge.id, ordered_ids, solved_ids):
         return jsonify(error="progression_locked"), 409
     client = OrchestratorClient.from_env()
 

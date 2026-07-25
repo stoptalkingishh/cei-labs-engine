@@ -515,7 +515,7 @@ def test_api_unlock_window_shifts_as_challenges_are_solved(app_client, monkeypat
         "/plugins/hint-wallet/api/unlock",
         json={"track": "bandit", "entry_name": "Bandit 1", "tier": 1},
     )
-    assert resp.status_code == 409, "already-solved-and-passed challenge 1 must not be unlockable anymore"
+    assert resp.status_code == 200, "an already-solved challenge stays unlockable even after the window moves past it"
 
 
 def test_api_unlock_progression_window_is_independent_per_track(app_client, monkeypatch):
