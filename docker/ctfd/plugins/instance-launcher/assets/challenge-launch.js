@@ -54,15 +54,30 @@
     }
 
     if (access.attacker_url) {
-      html +=
-        '<p class="mb-2"><a class="btn btn-primary btn-sm" href="' +
-        escapeAttr(access.attacker_url) +
-        '" target="_blank" rel="noopener">Open Attacker Workstation</a></p>';
+      // This venue has no DNS server for *.apps.<base_domain> -- the
+      // hostname-based link below reliably NXDOMAINs for every player.
+      // novnc_url (a direct IP:port, no hostname involved) is the one
+      // that actually works here, so it's the primary button; the
+      // hostname link is demoted to a labeled fallback for venues that
+      // DO have DNS, rather than silently being the only/first thing a
+      // player clicks.
       if (access.novnc_url) {
         html +=
-          '<p class="mb-2"><a class="btn btn-outline-primary btn-sm" href="' +
+          '<p class="mb-2"><a class="btn btn-primary btn-sm" href="' +
           escapeAttr(access.novnc_url) +
-          '" target="_blank" rel="noopener">Open Attacker Workstation (direct link)</a></p>';
+          '" target="_blank" rel="noopener">Open Attacker Workstation</a></p>';
+        html +=
+          '<p class="mb-2"><a class="btn btn-outline-primary btn-sm" href="' +
+          escapeAttr(access.attacker_url) +
+          '" target="_blank" rel="noopener">Open Attacker Workstation (hostname link -- only works if your network has DNS for it)</a></p>';
+      } else {
+        html +=
+          '<p class="mb-2"><a class="btn btn-primary btn-sm" href="' +
+          escapeAttr(access.attacker_url) +
+          '" target="_blank" rel="noopener">Open Attacker Workstation</a></p>';
+      }
+      if (access.novnc_note) {
+        html += '<p class="mb-2"><small class="text-muted">' + escapeHtml(access.novnc_note) + "</small></p>";
       }
       if (access.attacker_username) {
         html += '<p class="mb-1">Username: <code>' + escapeHtml(access.attacker_username) + "</code></p>";
