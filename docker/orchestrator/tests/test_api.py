@@ -9,6 +9,12 @@ from .fakes import FakeDockerOrchestratorClient
 
 class FakeConfig(Config):
     BASE_DOMAIN = "ctf.local"
+    # Explicit, not "auto" -- tests must never trigger resolve_offline_mode()'s
+    # real DNS probe (slow, non-deterministic, and BASE_DOMAIN="ctf.local"
+    # won't resolve in a sandboxed test environment anyway, which would
+    # otherwise make every test here hit the OFFLINE_HOST-required error).
+    OFFLINE_MODE_SETTING = False
+    OFFLINE_HOST = ""
     CHALLENGE_NETWORK = "cei-labs_challenge-edge"
     MAX_INSTANCES = 30
     MAX_INSTANCES_PER_OWNER = 3
@@ -332,6 +338,12 @@ def test_create_app_refuses_to_start_in_production_with_an_invalid_credential_en
 
 def test_create_app_starts_fine_in_production_with_a_valid_credential_encryption_key(monkeypatch):
     monkeypatch.setattr(Config, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
+    # This test's real Config has OFFLINE_MODE_SETTING="auto" by default,
+    # which would otherwise make create_app() perform a real DNS probe
+    # against BASE_DOMAIN ("ctf.local") -- unrelated to what this test
+    # actually checks (the credential-key startup gate), and would fail
+    # in any sandboxed/CI network where that domain doesn't resolve.
+    monkeypatch.setattr(Config, "OFFLINE_MODE_SETTING", False)
 
     app = create_app(docker_client=FakeDockerOrchestratorClient(), start_reaper=False)
     app.testing = True

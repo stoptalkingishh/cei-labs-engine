@@ -262,7 +262,7 @@ def plan_single_target(
     `connect_host` below is just as DNS-dependent as the attacker links
     plan_range_attacker() fixes -- `base_domain` (e.g. "ctf.local") only
     resolves for players if a real DNS server (or cei-labs-net's own)
-    actually answers for it. `offline_mode` (Config.OFFLINE_MODE) swaps in
+    actually answers for it. `offline_mode` (the resolved value from config.resolve_offline_mode()) swaps in
     `offline_host` (Config.OFFLINE_HOST, the venue's current bare LAN IP)
     instead, for the same reason and via the same flag as the attacker
     links -- one venue-level "we have no DNS" switch, not two."""
@@ -364,7 +364,7 @@ def plan_range_attacker(
     (which only ever used a bare published port to begin with) there was no
     fallback. This mirrors the SSH fix exactly, for the same reason.
 
-    `offline_mode` (Config.OFFLINE_MODE) collapses this to a single link:
+    `offline_mode` (the resolved value from config.resolve_offline_mode()) collapses this to a single link:
     when true, the hostname-based route isn't emitted at all and the
     direct-IP noVNC address becomes access["attacker_url"] outright,
     instead of a novnc_url fallback sitting alongside a permanently

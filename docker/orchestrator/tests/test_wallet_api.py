@@ -31,6 +31,10 @@ PREVIOUS_SECRET = "b" * 32
 
 class FakeConfig(Config):
     BASE_DOMAIN = "ctf.local"
+    # Explicit, not "auto" -- see test_api.py's FakeConfig for why tests
+    # must never trigger resolve_offline_mode()'s real DNS probe.
+    OFFLINE_MODE_SETTING = False
+    OFFLINE_HOST = ""
     CHALLENGE_NETWORK = "cei-labs_challenge-edge"
     MAX_INSTANCES = 30
     MAX_INSTANCES_PER_OWNER = 3

@@ -4,6 +4,7 @@ Environment-driven configuration. Secrets are read from Docker Swarm secret
 files (mounted under /run/secrets/<name>) rather than plain env vars.
 """
 import os
+import socket
 
 
 def _read_secret(name: str, default: str = "") -> str:
@@ -12,6 +13,28 @@ def _read_secret(name: str, default: str = "") -> str:
         with open(path, "r", encoding="utf-8") as f:
             return f.read().strip()
     return default
+
+
+def _parse_offline_mode_setting(raw: str) -> "bool | str":
+    """ORCHESTRATOR_OFFLINE_MODE is tri-state, not a plain bool: 'true'/
+    'false' (however spelled) force a value; anything else -- including
+    unset -- means 'auto', decided at startup by resolve_offline_mode()
+    actually probing whether BASE_DOMAIN resolves. Parsed eagerly (so a
+    typo fails the container at startup, loud, not silently as
+    always-"auto") but the network probe itself is deliberately NOT done
+    here at import time -- that would make every import of this module a
+    network call, including in tests."""
+    normalized = raw.strip().lower()
+    if normalized in ("true", "1", "yes"):
+        return True
+    if normalized in ("false", "0", "no"):
+        return False
+    if normalized in ("", "auto"):
+        return "auto"
+    raise RuntimeError(
+        f"ORCHESTRATOR_OFFLINE_MODE={raw!r} is not recognized -- use 'auto' "
+        "(the default: probes whether BASE_DOMAIN resolves), 'true', or 'false'."
+    )
 
 
 class Config:
@@ -23,35 +46,32 @@ class Config:
     # Domain used to build per-team access URLs, e.g. <owner>-<key>.apps.<BASE_DOMAIN>
     BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "ctf.local")
 
-    # Set true at venues with no DNS server resolving *.apps.<BASE_DOMAIN>
-    # (e.g. the hostname route Traefik expects never works there). When
-    # true, instance_types.plan_range_attacker() stops generating the
+    # True/False/"auto" -- see resolve_offline_mode() below for how "auto"
+    # gets decided. When the effective value is True,
+    # instance_types.plan_range_attacker() stops generating the
     # hostname-based attacker link at all and returns the direct-IP noVNC
-    # address as the one and only `attacker_url` -- one link that always
-    # works, instead of a primary/fallback pair where the primary is
-    # permanently broken. Off by default because most deployments (a real
-    # DNS server, or cei-labs-net's own) do have working wildcard DNS and
-    # should keep the hostname-based route as the primary link.
-    OFFLINE_MODE = os.environ.get("ORCHESTRATOR_OFFLINE_MODE", "false").strip().lower() in ("1", "true", "yes")
+    # address as the one and only `attacker_url` (and plan_single_target's
+    # SSH connect_host does the equivalent) -- one link that always works,
+    # instead of a primary/fallback pair where the primary is permanently
+    # broken. "auto" is the default because most deployments (a real DNS
+    # server, or cei-labs-net's own) do have working wildcard DNS and
+    # should keep the hostname-based route as the primary link -- and
+    # because a venue's DNS situation is exactly the kind of fact a fresh
+    # deploy shouldn't require a human to remember to declare correctly.
+    OFFLINE_MODE_SETTING = _parse_offline_mode_setting(os.environ.get("ORCHESTRATOR_OFFLINE_MODE", "auto"))
 
     # The bare, DNS-independent host (the venue's current LAN IP, in
     # practice) that replaces BASE_DOMAIN in every player-facing connect
-    # string when OFFLINE_MODE is on -- SSH connect_host (plan_single_target,
-    # plan_range_attacker) and the noVNC fallback URL alike. There is no
-    # safe default: a hostname-shaped one would silently reintroduce the
-    # exact DNS dependency this flag exists to remove, and a hardcoded IP
-    # would risk becoming the same kind of stale player-facing address
-    # docs/network-prerequisites.md's "Stable access endpoint" section
-    # already warns about -- it must be supplied fresh, per venue, per
-    # event. Required together with OFFLINE_MODE; see the check below.
+    # string when the effective offline mode is True -- SSH connect_host
+    # (plan_single_target, plan_range_attacker) and the noVNC fallback URL
+    # alike. There is no safe default: a hostname-shaped one would
+    # silently reintroduce the exact DNS dependency offline mode exists to
+    # remove, and a hardcoded IP would risk becoming the same kind of
+    # stale player-facing address docs/network-prerequisites.md's "Stable
+    # access endpoint" section already warns about -- it must be supplied
+    # fresh, per venue, per event. resolve_offline_mode() below fails
+    # fast if this is missing and needed.
     OFFLINE_HOST = os.environ.get("ORCHESTRATOR_OFFLINE_HOST", "").strip()
-
-    if OFFLINE_MODE and not OFFLINE_HOST:
-        raise RuntimeError(
-            "ORCHESTRATOR_OFFLINE_MODE=true requires ORCHESTRATOR_OFFLINE_HOST "
-            "(the venue's current bare LAN IP) to be set too -- there is no "
-            "safe default for it."
-        )
 
     # Hard cap on total concurrent instances (mirrors MultiJuicer's maxInstances).
     MAX_INSTANCES = int(os.environ.get("ORCHESTRATOR_MAX_INSTANCES", "30"))
@@ -143,3 +163,49 @@ class Config:
     SHUTDOWN_DELAY_SECONDS = int(os.environ.get("ORCHESTRATOR_SHUTDOWN_DELAY_SECONDS", "30"))
     SHUTDOWN_EXTEND_SECONDS = int(os.environ.get("ORCHESTRATOR_SHUTDOWN_EXTEND_SECONDS", "300"))
     SHUTDOWN_MAX_EXTENSIONS = int(os.environ.get("ORCHESTRATOR_SHUTDOWN_MAX_EXTENSIONS", "3"))
+
+
+def probe_dns_resolves(hostname: str, timeout_seconds: float = 2.0) -> bool:
+    """Best-effort check for whether `hostname` resolves via whatever
+    resolver this process sees -- normally the container's
+    /etc/resolv.conf, which Docker populates from the host's own resolver
+    config by default. That makes this a reasonable proxy for "does this
+    venue have DNS", even though the check technically runs from inside a
+    container rather than from an actual player's laptop; it is NOT a
+    guarantee those stay identical in every possible network setup
+    (custom container DNS overrides, split-horizon DNS, etc.) -- venues
+    where the two genuinely differ should set ORCHESTRATOR_OFFLINE_MODE
+    explicitly rather than rely on "auto"."""
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout_seconds)
+    try:
+        socket.getaddrinfo(hostname, None)
+        return True
+    except OSError:
+        return False
+    finally:
+        socket.setdefaulttimeout(old_timeout)
+
+
+def resolve_offline_mode(cfg=Config, probe_dns=probe_dns_resolves) -> bool:
+    """Effective offline-mode value: Config.OFFLINE_MODE_SETTING's explicit
+    True/False always wins; "auto" (the default) is decided by actually
+    probing whether cfg.BASE_DOMAIN resolves, once, here, at startup --
+    not on every request, and not at module-import time (see
+    _parse_offline_mode_setting's docstring for why import-time was ruled
+    out). `probe_dns` is injectable purely so tests can simulate both
+    outcomes without touching a real network or DNS server.
+
+    Fails fast, the same way the old always-eager check did, if the
+    resolved value is True but OFFLINE_HOST isn't set -- there's still no
+    safe default for it, auto-detected offline mode or not."""
+    setting = cfg.OFFLINE_MODE_SETTING
+    offline = setting if isinstance(setting, bool) else not probe_dns(cfg.BASE_DOMAIN)
+    if offline and not cfg.OFFLINE_HOST:
+        raise RuntimeError(
+            f"Offline mode is active (BASE_DOMAIN={cfg.BASE_DOMAIN!r} did not resolve, "
+            "or ORCHESTRATOR_OFFLINE_MODE=true was set explicitly) but "
+            "ORCHESTRATOR_OFFLINE_HOST (the venue's current bare LAN IP) is not set -- "
+            "there is no safe default for it."
+        )
+    return offline

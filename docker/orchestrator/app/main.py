@@ -32,7 +32,7 @@ from flask import Flask, jsonify, request
 
 from . import instance_types
 from . import wallet
-from .config import Config
+from .config import Config, resolve_offline_mode
 from .controller import (
     CapacityError,
     ExtensionsExhaustedError,
@@ -134,6 +134,16 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             'python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
         )
 
+    # Resolved exactly once here at startup, not per-request -- "auto"
+    # means a real DNS probe against cfg.BASE_DOMAIN (see
+    # config.resolve_offline_mode's docstring), which is deliberately not
+    # something every request or every test run should trigger.
+    offline_mode = resolve_offline_mode(cfg)
+    logger.info(
+        "offline_mode resolved to %s (setting=%r, base_domain=%r)",
+        offline_mode, cfg.OFFLINE_MODE_SETTING, cfg.BASE_DOMAIN,
+    )
+
     docker_client = docker_client or DockerOrchestratorClient(cfg.DOCKER_SOCKET)
     # Shared between both stores so a single deployment's persisted
     # instances and ranges are encrypted (and decryptable) under the same
@@ -164,7 +174,7 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             memory_reservation_bytes=cfg.WORKLOAD_MEMORY_RESERVATION_BYTES,
             cpu_limit_nanos=cfg.WORKLOAD_CPU_LIMIT_NANOS,
         ),
-        offline_mode=cfg.OFFLINE_MODE,
+        offline_mode=offline_mode,
         offline_host=cfg.OFFLINE_HOST,
     )
     reaper = Reaper(

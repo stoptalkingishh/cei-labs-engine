@@ -82,7 +82,7 @@ class InstanceController:
         )
         self.workload_quota = workload_quota or instance_types.DEFAULT_WORKLOAD_QUOTA
         self.shutdown_max_extensions = shutdown_max_extensions
-        # See Config.OFFLINE_MODE/OFFLINE_HOST -- collapses
+        # See config.resolve_offline_mode()/Config.OFFLINE_HOST -- collapses
         # plan_range_attacker()'s dual hostname/noVNC links down to the one
         # that actually works at venues with no DNS server, and swaps
         # base_domain for a bare LAN IP in every SSH connect_host too
