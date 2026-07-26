@@ -54,6 +54,18 @@
     }
 
     if (access.attacker_url) {
+      // Everything in this block logs you into the shared ATTACKER
+      // workstation itself (noVNC desktop or SSH, same account, two
+      // different passwords -- see below). It is a completely separate
+      // login from any per-level login the target's own web page might
+      // ask for (HTTP Basic Auth, a login form, etc.) -- that credential,
+      // if the level has one, is always given in the challenge
+      // description text above, never here. Visually grouped under one
+      // heading so the two don't get mixed up -- confirmed live that
+      // without a heading here, a player mistook this block's Host field
+      // (the attacker's own SSH address) for the Target field below it.
+      html += '<p class="mb-1"><strong>Attacker workstation login</strong></p>';
+
       // This venue has no DNS server for *.apps.<base_domain> -- the
       // hostname-based link below reliably NXDOMAINs for every player.
       // novnc_url (a direct IP:port, no hostname involved) is the one
@@ -100,11 +112,32 @@
           escapeHtml(access.novnc_password) +
           '</code><br><small class="text-muted">Unique to your team — these are two different passwords for the same account.</small></p>';
       }
-      if (access.target_hostname) {
-        html += '<p class="mb-1">Target (from inside the attacker only): <code>' + escapeHtml(access.target_hostname) + "</code></p>";
+      // The attacker's OWN SSH connect info lives in this same "attacker
+      // workstation login" group -- it is not the target's address.
+      if (access.connect_port) {
+        html +=
+          '<p class="mb-1">Host: <code>' +
+          escapeHtml(access.connect_host) +
+          "</code><br>Port: <code>" +
+          escapeHtml(access.connect_port) +
+          "</code></p>";
       }
+
+      if (access.target_hostname) {
+        html += '<hr class="my-2">';
+        html += '<p class="mb-1"><strong>Target</strong></p>';
+        html +=
+          '<p class="mb-1">Reachable only from a terminal/browser <em>inside</em> the attacker workstation above -- not from your own machine: <code>' +
+          escapeHtml(access.target_hostname) +
+          "</code></p>";
+        html +=
+          '<p class="mb-0"><small class="text-muted">This is a hostname, not a login. If the target itself asks for a username/password, that credential is given in the challenge description above -- it is unrelated to the attacker login above.</small></p>';
+      }
+      return html;
     }
 
+    // single-target challenges (no shared attacker workstation): this IS
+    // the whole connection, so it gets no "Attacker workstation" heading.
     if (access.connect_port) {
       html +=
         '<p class="mb-1">Host: <code>' +
