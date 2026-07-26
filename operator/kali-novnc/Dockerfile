@@ -116,11 +116,24 @@ RUN command -v chromium \
 # (exo-open -> sensible-browser -> x-www-browser, and the
 # /usr/local/bin/www-browser symlink above) already resolves to this
 # path, so the flag is picked up with no other launcher change needed.
+#
+# --no-sandbox: confirmed live -- Chromium's own internal renderer
+# sandbox needs unprivileged user namespaces (CLONE_NEWUSER), which this
+# container's cap_drop=["ALL"] + explicit-allowlist policy
+# (instance_types.py's _ATTACKER_CAPS -- deliberately no CAP_SYS_ADMIN)
+# doesn't grant, so Chromium refused to start at all ("No usable
+# sandbox!"), not merely running less securely. This is the standard,
+# widely-used tradeoff for containerized Chromium (the same one most
+# headless-Chrome-in-Docker/CI setups make): the container itself is
+# already the isolation boundary here -- a dedicated airgapped per-team
+# network, dropped capabilities, single ephemeral throwaway session --
+# so Chromium's own additional internal sandbox is redundant defense,
+# not the only thing standing between untrusted content and the host.
 COPY natas-theme-extension/ /opt/cei-natas-theme-extension/
 RUN mv /usr/bin/chromium /usr/bin/chromium.real \
     && printf '%s\n' \
        '#!/bin/bash' \
-       'exec /usr/bin/chromium.real --load-extension=/opt/cei-natas-theme-extension "$@"' \
+       'exec /usr/bin/chromium.real --no-sandbox --load-extension=/opt/cei-natas-theme-extension "$@"' \
        > /usr/bin/chromium \
     && chmod +x /usr/bin/chromium \
     && chown -R root:root /opt/cei-natas-theme-extension \
