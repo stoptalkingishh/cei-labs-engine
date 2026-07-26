@@ -84,6 +84,17 @@ def test_single_target_isolated_behind_published_gateway():
     assert plan.access["protocol"] == "ssh"
 
 
+def test_single_target_offline_mode_uses_offline_host_not_base_domain():
+    # connect_host is exactly as DNS-dependent as the attacker links --
+    # offline_mode must swap in the bare LAN IP here too, not just there.
+    plan = it.plan_single_target(
+        "team-1", "otw", {"image": "some/target"}, allocated_port=32000, base_domain=BASE_DOMAIN,
+        offline_mode=True, offline_host="192.0.2.10",
+    )
+    assert plan.access["connect_host"] == "192.0.2.10"
+    assert plan.access["connect_host"] != BASE_DOMAIN
+
+
 def test_single_target_custom_target_port():
     plan = it.plan_single_target(
         "team-1", "otw", {"image": "some/target", "target_port": 2222}, allocated_port=32001, base_domain=BASE_DOMAIN
@@ -192,6 +203,42 @@ def test_range_attacker_isolated_behind_gateway():
         (32100, it.GATEWAY_NOVNC_PORT),
     ]
     assert plan.access["attacker_url"] == "https://team-1-attacker.apps.ctf.local"
+
+
+def test_range_attacker_offline_mode_collapses_to_one_working_link():
+    # ORCHESTRATOR_OFFLINE_MODE=true venues have no DNS resolving
+    # *.apps.<base_domain> at all -- the hostname link would NXDOMAIN for
+    # every player, every time. offline_mode=True must skip emitting it
+    # entirely rather than leaving it for the frontend to demote. And
+    # base_domain itself (used bare, not as a subdomain) is exactly as
+    # unresolvable -- both the noVNC URL and the SSH connect_host must use
+    # offline_host instead, not just skip the hostname route.
+    plan = it.plan_range_attacker(
+        "team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET,
+        offline_mode=True, offline_host="192.0.2.10",
+    )
+
+    assert plan.access["attacker_url"] == "https://192.0.2.10:32100/vnc.html"
+    assert "novnc_url" not in plan.access
+    assert "team-1-attacker.apps.ctf.local" not in plan.access["attacker_url"]
+    assert BASE_DOMAIN not in plan.access["attacker_url"]
+    assert plan.access["connect_host"] == "192.0.2.10"
+    assert plan.access["connect_host"] != BASE_DOMAIN
+    # The self-signed-cert warning still has to reach the player somehow
+    # even with only one button -- challenge-launch.js renders novnc_note
+    # underneath whichever button(s) are present, regardless of whether
+    # novnc_url itself is also present.
+    assert "certificate-warning" in plan.access["novnc_note"]
+
+
+def test_range_attacker_online_mode_is_unchanged_default():
+    # offline_mode defaults to False -- existing DNS-having deployments
+    # must keep getting both links, hostname primary.
+    plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
+
+    assert plan.access["attacker_url"] == "https://team-1-attacker.apps.ctf.local"
+    assert plan.access["novnc_url"] == "https://ctf.local:32100/vnc.html"
+    assert "doesn't resolve" in plan.access["novnc_note"]
 
 
 def test_range_attacker_hostname_has_no_instance_key_component():
