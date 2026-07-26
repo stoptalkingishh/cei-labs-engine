@@ -1,0 +1,43 @@
+<svg viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Natas desktop wallpaper: NATAS wordmark reflecting into SATAN below a waterline, on a cool navy-teal background">
+  <title>CEI Labs Natas wallpaper</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a1626"/>
+      <stop offset="55%" stop-color="#0e2438"/>
+      <stop offset="100%" stop-color="#0a1626"/>
+    </linearGradient>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ff6b6b" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#ff6b6b" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+
+  <!-- scattered inverted / chaotic markup+header glyphs, referencing manipulated web inputs/headers -->
+  <g fill="#2a5570" font-family="Consolas,monospace" font-size="26" opacity="0.55">
+    <text x="90" y="120" transform="rotate(180 90 120)">&lt;/script&gt;</text>
+    <text x="150" y="900">X-Forwarded-For:</text>
+    <text x="1620" y="150" transform="rotate(180 1620 150)">Referer:</text>
+    <text x="110" y="420">&amp;lt;!--</text>
+    <text x="1700" y="940" transform="rotate(180 1700 940)">?id=1' OR '1</text>
+    <text x="1660" y="420">Cookie:</text>
+    <text x="90" y="720" transform="rotate(180 90 720)">&lt;?php</text>
+    <text x="1720" y="700">Set-Cookie:</text>
+    <text x="140" y="1000" transform="rotate(180 140 1000)">User-Agent:</text>
+  </g>
+
+  <!-- waterline the reflection sits below -->
+  <line x1="360" y1="540" x2="1560" y2="540" stroke="#2fb8d8" stroke-width="1.5" opacity="0.5"/>
+
+  <!-- upright wordmark: this is the flag text -->
+  <text x="960" y="480" text-anchor="middle" fill="#eafcff" font-family="'Segoe UI',Helvetica,Arial,sans-serif" font-size="150" font-weight="800" letter-spacing="24">NATAS</text>
+  <text x="960" y="555" text-anchor="middle" fill="#5fd8ea" font-family="'Segoe UI',Helvetica,Arial,sans-serif" font-size="30" letter-spacing="10">WELCOME TO NATAS</text>
+  <text x="960" y="600" text-anchor="middle" fill="#3a7f97" font-family="'Segoe UI',Helvetica,Arial,sans-serif" font-size="20" letter-spacing="8">CEI LABS CYBER RANGE</text>
+
+  <!-- mirrored, dimmer, upside-down reflection reading "SATAN" -->
+  <g transform="translate(960,540) scale(1,-1) translate(-960,-540)" opacity="0.5">
+    <text x="960" y="480" text-anchor="middle" fill="#ff8f7a" font-family="'Segoe UI',Helvetica,Arial,sans-serif" font-size="150" font-weight="800" letter-spacing="24">SATAN</text>
+  </g>
+  <rect x="300" y="546" width="1320" height="260" fill="url(#fade)"/>
+</svg>

@@ -77,6 +77,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mitmproxy \
     chromium \
     openssl \
+    librsvg2-bin \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -138,6 +139,49 @@ RUN mv /usr/bin/chromium /usr/bin/chromium.real \
     && chmod +x /usr/bin/chromium \
     && chown -R root:root /opt/cei-natas-theme-extension \
     && chmod -R a+rX /opt/cei-natas-theme-extension
+
+# Desktop wallpaper: rendered at build time from a checked-in SVG source
+# (wallpaper/natas-wallpaper.svg -- edit that file, not this step, to
+# change the actual artwork) via librsvg2-bin's rsvg-convert, so the
+# image asset itself never needs to be a binary blob in git history.
+# Written into XFCE's own system-wide DEFAULT config
+# (/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml, not
+# ~/.config) because this account is created fresh on every image build
+# with no pre-existing per-user xfconf state -- XFCE reads this file as
+# the default the first time a session starts for a user who has never
+# configured xfce4-desktop themselves, which is every session here.
+# "monitor0"/"workspace0" (not a real detected monitor name) is the
+# standard fallback xfdesktop uses under Xvnc/TigerVNC, which exposes no
+# RandR monitor names of its own for a real name to be discovered from.
+COPY wallpaper/natas-wallpaper.svg /usr/share/backgrounds/cei-labs/natas-wallpaper.svg
+RUN mkdir -p /etc/xdg/xfce4/xfconf/xfce-perchannel-xml \
+    && rsvg-convert -w 1920 -h 1080 \
+       /usr/share/backgrounds/cei-labs/natas-wallpaper.svg \
+       -o /usr/share/backgrounds/cei-labs/natas-wallpaper.png \
+    && chmod 644 /usr/share/backgrounds/cei-labs/natas-wallpaper.png \
+    && printf '%s\n' \
+       '<?xml version="1.0" encoding="UTF-8"?>' \
+       '<channel name="xfce4-desktop" version="1.0">' \
+       '  <property name="backdrop" type="empty">' \
+       '    <property name="screen0" type="empty">' \
+       '      <property name="monitor0" type="empty">' \
+       '        <property name="workspace0" type="empty">' \
+       '          <property name="last-image" type="string" value="/usr/share/backgrounds/cei-labs/natas-wallpaper.png"/>' \
+       '          <property name="image-style" type="int" value="5"/>' \
+       '          <property name="color-style" type="int" value="0"/>' \
+       '        </property>' \
+       '      </property>' \
+       '      <property name="monitorVNC-0" type="empty">' \
+       '        <property name="workspace0" type="empty">' \
+       '          <property name="last-image" type="string" value="/usr/share/backgrounds/cei-labs/natas-wallpaper.png"/>' \
+       '          <property name="image-style" type="int" value="5"/>' \
+       '          <property name="color-style" type="int" value="0"/>' \
+       '        </property>' \
+       '      </property>' \
+       '    </property>' \
+       '  </property>' \
+       '</channel>' \
+       > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml
 
 # Multiple ways to interact with this box, deliberately (this is a
 # web-exploitation-focused attacker workstation as well as a general
