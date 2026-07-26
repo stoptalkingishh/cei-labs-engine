@@ -68,6 +68,7 @@ class InstanceController:
         max_instances_per_owner: "int | None" = None,
         workload_quota: "instance_types.WorkloadQuota | None" = None,
         offline_mode: bool = False,
+        offline_host: "str | None" = None,
     ):
         self.docker = docker_client
         self.store = store
@@ -81,10 +82,14 @@ class InstanceController:
         )
         self.workload_quota = workload_quota or instance_types.DEFAULT_WORKLOAD_QUOTA
         self.shutdown_max_extensions = shutdown_max_extensions
-        # See Config.OFFLINE_MODE -- collapses plan_range_attacker()'s
-        # dual hostname/noVNC links down to the one that actually works
-        # at venues with no DNS server.
+        # See Config.OFFLINE_MODE/OFFLINE_HOST -- collapses
+        # plan_range_attacker()'s dual hostname/noVNC links down to the one
+        # that actually works at venues with no DNS server, and swaps
+        # base_domain for a bare LAN IP in every SSH connect_host too
+        # (plan_single_target, plan_range_attacker) -- base_domain is just
+        # as DNS-dependent as the links being fixed.
         self.offline_mode = offline_mode
+        self.offline_host = offline_host
 
     # ── Create / reuse ───────────────────────────────────────────────────────
     def create_or_get(self, instance_type: str, owner_id: str, instance_key: str, spec: dict, force_relaunch: bool = False):
@@ -195,7 +200,8 @@ class InstanceController:
         plan = None
         try:
             plan = instance_types.plan_single_target(
-                owner_id, instance_key, spec, port, self.base_domain, self.workload_quota
+                owner_id, instance_key, spec, port, self.base_domain, self.workload_quota,
+                offline_mode=self.offline_mode, offline_host=self.offline_host,
             )
             self.docker.ensure_network(plan.network, internal=True)
             self._create_services(plan.services)
@@ -240,6 +246,7 @@ class InstanceController:
                         self.challenge_network,
                         self.workload_quota,
                         offline_mode=self.offline_mode,
+                        offline_host=self.offline_host,
                     )
                     self.docker.ensure_network(range_plan.network, internal=True)
                     self._create_services([range_plan.attacker_service, range_plan.gateway_service])

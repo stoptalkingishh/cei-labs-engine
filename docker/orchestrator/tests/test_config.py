@@ -12,6 +12,8 @@ here, which would reintroduce the exact failure mode from scratch.
 import importlib
 import re
 
+import pytest
+
 _IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
@@ -41,14 +43,17 @@ def test_base_domain_is_still_overridable_via_env(monkeypatch):
 
 def test_offline_mode_defaults_false(monkeypatch):
     monkeypatch.delenv("ORCHESTRATOR_OFFLINE_MODE", raising=False)
+    monkeypatch.delenv("ORCHESTRATOR_OFFLINE_HOST", raising=False)
     from app import config as config_module
     importlib.reload(config_module)
 
     assert config_module.Config.OFFLINE_MODE is False
+    assert config_module.Config.OFFLINE_HOST == ""
 
 
 def test_offline_mode_accepts_common_truthy_strings(monkeypatch):
     from app import config as config_module
+    monkeypatch.setenv("ORCHESTRATOR_OFFLINE_HOST", "192.0.2.10")
 
     for truthy in ("true", "True", "1", "yes", "YES"):
         monkeypatch.setenv("ORCHESTRATOR_OFFLINE_MODE", truthy)
@@ -60,4 +65,23 @@ def test_offline_mode_accepts_common_truthy_strings(monkeypatch):
     assert config_module.Config.OFFLINE_MODE is False
 
     monkeypatch.delenv("ORCHESTRATOR_OFFLINE_MODE", raising=False)
+    monkeypatch.delenv("ORCHESTRATOR_OFFLINE_HOST", raising=False)
     importlib.reload(config_module)
+
+
+def test_offline_mode_without_offline_host_fails_fast(monkeypatch):
+    # A hostname-shaped or hardcoded default for OFFLINE_HOST would silently
+    # reintroduce the exact DNS dependency OFFLINE_MODE exists to remove --
+    # this must be a loud startup failure, not a quiet fallback.
+    from app import config as config_module
+    monkeypatch.setenv("ORCHESTRATOR_OFFLINE_MODE", "true")
+    monkeypatch.delenv("ORCHESTRATOR_OFFLINE_HOST", raising=False)
+
+    try:
+        with pytest.raises(RuntimeError, match="ORCHESTRATOR_OFFLINE_HOST"):
+            importlib.reload(config_module)
+    finally:
+        # Leave the module in a re-importable state for later tests.
+        monkeypatch.setenv("ORCHESTRATOR_OFFLINE_MODE", "false")
+        importlib.reload(config_module)
+        monkeypatch.delenv("ORCHESTRATOR_OFFLINE_MODE", raising=False)

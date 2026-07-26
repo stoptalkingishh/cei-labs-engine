@@ -34,6 +34,25 @@ class Config:
     # should keep the hostname-based route as the primary link.
     OFFLINE_MODE = os.environ.get("ORCHESTRATOR_OFFLINE_MODE", "false").strip().lower() in ("1", "true", "yes")
 
+    # The bare, DNS-independent host (the venue's current LAN IP, in
+    # practice) that replaces BASE_DOMAIN in every player-facing connect
+    # string when OFFLINE_MODE is on -- SSH connect_host (plan_single_target,
+    # plan_range_attacker) and the noVNC fallback URL alike. There is no
+    # safe default: a hostname-shaped one would silently reintroduce the
+    # exact DNS dependency this flag exists to remove, and a hardcoded IP
+    # would risk becoming the same kind of stale player-facing address
+    # docs/network-prerequisites.md's "Stable access endpoint" section
+    # already warns about -- it must be supplied fresh, per venue, per
+    # event. Required together with OFFLINE_MODE; see the check below.
+    OFFLINE_HOST = os.environ.get("ORCHESTRATOR_OFFLINE_HOST", "").strip()
+
+    if OFFLINE_MODE and not OFFLINE_HOST:
+        raise RuntimeError(
+            "ORCHESTRATOR_OFFLINE_MODE=true requires ORCHESTRATOR_OFFLINE_HOST "
+            "(the venue's current bare LAN IP) to be set too -- there is no "
+            "safe default for it."
+        )
+
     # Hard cap on total concurrent instances (mirrors MultiJuicer's maxInstances).
     MAX_INSTANCES = int(os.environ.get("ORCHESTRATOR_MAX_INSTANCES", "30"))
 

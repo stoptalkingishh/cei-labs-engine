@@ -165,6 +165,7 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             cpu_limit_nanos=cfg.WORKLOAD_CPU_LIMIT_NANOS,
         ),
         offline_mode=cfg.OFFLINE_MODE,
+        offline_host=cfg.OFFLINE_HOST,
     )
     reaper = Reaper(
         controller,

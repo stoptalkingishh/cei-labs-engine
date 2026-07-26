@@ -251,11 +251,21 @@ def plan_single_target(
     allocated_port: int,
     base_domain: str,
     workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
+    offline_mode: bool = False,
+    offline_host: "str | None" = None,
 ) -> InstancePlan:
     """No Traefik involvement — a dedicated airgapped network plus a directly
     published port (e.g. for SSH). `allocated_port` is acquired by the
     caller (controller.py) from a PortAllocator, since that's inherently
-    stateful and doesn't belong in this otherwise-pure planning module."""
+    stateful and doesn't belong in this otherwise-pure planning module.
+
+    `connect_host` below is just as DNS-dependent as the attacker links
+    plan_range_attacker() fixes -- `base_domain` (e.g. "ctf.local") only
+    resolves for players if a real DNS server (or cei-labs-net's own)
+    actually answers for it. `offline_mode` (Config.OFFLINE_MODE) swaps in
+    `offline_host` (Config.OFFLINE_HOST, the venue's current bare LAN IP)
+    instead, for the same reason and via the same flag as the attacker
+    links -- one venue-level "we have no DNS" switch, not two."""
     image = _require_str(spec, "image")
     target_port = int(spec.get("target_port", 22))
     protocol = spec.get("protocol", "ssh")
@@ -309,10 +319,14 @@ def plan_single_target(
         services=[service, gateway],
         network=net_name,
         access={
-            "connect_host": base_domain,
+            "connect_host": offline_host if offline_mode else base_domain,
             "connect_port": allocated_port,
             "protocol": protocol,
-            "note": "Connects via any swarm node — this hostname routes to whichever node the target actually landed on.",
+            "note": (
+                "Connects via any swarm node — this IP routes to whichever node the target actually landed on."
+                if offline_mode else
+                "Connects via any swarm node — this hostname routes to whichever node the target actually landed on."
+            ),
             **track_secrets,
         },
     )
@@ -327,6 +341,7 @@ def plan_range_attacker(
     challenge_network: str,
     workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
     offline_mode: bool = False,
+    offline_host: "str | None" = None,
 ) -> RangePlan:
     """Called once per team, the first time they launch any target-attacker
     challenge. Subsequent challenges reuse this range (see plan_range_target).
@@ -353,7 +368,13 @@ def plan_range_attacker(
     when true, the hostname-based route isn't emitted at all and the
     direct-IP noVNC address becomes access["attacker_url"] outright,
     instead of a novnc_url fallback sitting alongside a permanently
-    unreachable primary link."""
+    unreachable primary link. That direct-IP address, and the SSH
+    connect_host below, both use `offline_host` (Config.OFFLINE_HOST, the
+    venue's current bare LAN IP) instead of `base_domain` when offline_mode
+    is on -- base_domain itself is exactly as DNS-dependent as the
+    hostname route being removed, so leaving it in either of those two
+    fields would silently reintroduce the same unreachable-link problem
+    this flag exists to fix."""
     attacker_image = _require_str(spec, "attacker_image")
     attacker_port = int(spec.get("attacker_port", 6080))
     # Separate, TLS-only websockify listener (operator/kali-novnc/Dockerfile's
@@ -435,7 +456,11 @@ def plan_range_attacker(
     # encrypted instead of silently carrying the VNC password and full
     # desktop session in cleartext, the way it would over the plain
     # listener the Traefik-fronted primary route still uses.
-    novnc_url = f"https://{base_domain}:{allocated_novnc_port}/vnc.html"
+    # base_domain itself is exactly as DNS-dependent as the hostname route
+    # this fallback exists to route around -- offline_host (a bare LAN IP)
+    # replaces it here whenever offline_mode is on.
+    novnc_host = offline_host if offline_mode else base_domain
+    novnc_url = f"https://{novnc_host}:{allocated_novnc_port}/vnc.html"
     novnc_cert_warning = (
         "This connects over TLS with a self-signed certificate (unique to "
         "your instance), so your browser will show a certificate-warning "
@@ -476,10 +501,14 @@ def plan_range_attacker(
             # separately rather than presenting one credential for both.
             "ssh_password": ssh_password,
             "novnc_password": novnc_password,
-            "connect_host": base_domain,
+            "connect_host": offline_host if offline_mode else base_domain,
             "connect_port": allocated_port,
             "protocol": "ssh",
-            "note": "SSH connects via any swarm node — this hostname routes to whichever node the attacker actually landed on.",
+            "note": (
+                "SSH connects via any swarm node — this IP routes to whichever node the attacker actually landed on."
+                if offline_mode else
+                "SSH connects via any swarm node — this hostname routes to whichever node the attacker actually landed on."
+            ),
             "novnc_port": allocated_novnc_port,
         },
     )
