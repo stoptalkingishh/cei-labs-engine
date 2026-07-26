@@ -194,6 +194,35 @@ def test_range_attacker_isolated_behind_gateway():
     assert plan.access["attacker_url"] == "https://team-1-attacker.apps.ctf.local"
 
 
+def test_range_attacker_offline_mode_collapses_to_one_working_link():
+    # ORCHESTRATOR_OFFLINE_MODE=true venues have no DNS resolving
+    # *.apps.<base_domain> at all -- the hostname link would NXDOMAIN for
+    # every player, every time. offline_mode=True must skip emitting it
+    # entirely rather than leaving it for the frontend to demote.
+    plan = it.plan_range_attacker(
+        "team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET, offline_mode=True,
+    )
+
+    assert plan.access["attacker_url"] == "https://ctf.local:32100/vnc.html"
+    assert "novnc_url" not in plan.access
+    assert "team-1-attacker.apps.ctf.local" not in plan.access["attacker_url"]
+    # The self-signed-cert warning still has to reach the player somehow
+    # even with only one button -- challenge-launch.js renders novnc_note
+    # underneath whichever button(s) are present, regardless of whether
+    # novnc_url itself is also present.
+    assert "certificate-warning" in plan.access["novnc_note"]
+
+
+def test_range_attacker_online_mode_is_unchanged_default():
+    # offline_mode defaults to False -- existing DNS-having deployments
+    # must keep getting both links, hostname primary.
+    plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
+
+    assert plan.access["attacker_url"] == "https://team-1-attacker.apps.ctf.local"
+    assert plan.access["novnc_url"] == "https://ctf.local:32100/vnc.html"
+    assert "doesn't resolve" in plan.access["novnc_note"]
+
+
 def test_range_attacker_hostname_has_no_instance_key_component():
     # Two different challenges for the same team must resolve to the SAME
     # attacker hostname/network — that's the whole point of the range model.

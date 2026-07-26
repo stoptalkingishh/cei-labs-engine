@@ -37,3 +37,27 @@ def test_base_domain_is_still_overridable_via_env(monkeypatch):
 
     monkeypatch.delenv("BASE_DOMAIN", raising=False)
     importlib.reload(config_module)
+
+
+def test_offline_mode_defaults_false(monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_OFFLINE_MODE", raising=False)
+    from app import config as config_module
+    importlib.reload(config_module)
+
+    assert config_module.Config.OFFLINE_MODE is False
+
+
+def test_offline_mode_accepts_common_truthy_strings(monkeypatch):
+    from app import config as config_module
+
+    for truthy in ("true", "True", "1", "yes", "YES"):
+        monkeypatch.setenv("ORCHESTRATOR_OFFLINE_MODE", truthy)
+        importlib.reload(config_module)
+        assert config_module.Config.OFFLINE_MODE is True, f"{truthy!r} should parse as True"
+
+    monkeypatch.setenv("ORCHESTRATOR_OFFLINE_MODE", "false")
+    importlib.reload(config_module)
+    assert config_module.Config.OFFLINE_MODE is False
+
+    monkeypatch.delenv("ORCHESTRATOR_OFFLINE_MODE", raising=False)
+    importlib.reload(config_module)

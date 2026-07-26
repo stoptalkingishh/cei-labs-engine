@@ -67,6 +67,7 @@ class InstanceController:
         shutdown_max_extensions: int,
         max_instances_per_owner: "int | None" = None,
         workload_quota: "instance_types.WorkloadQuota | None" = None,
+        offline_mode: bool = False,
     ):
         self.docker = docker_client
         self.store = store
@@ -80,6 +81,10 @@ class InstanceController:
         )
         self.workload_quota = workload_quota or instance_types.DEFAULT_WORKLOAD_QUOTA
         self.shutdown_max_extensions = shutdown_max_extensions
+        # See Config.OFFLINE_MODE -- collapses plan_range_attacker()'s
+        # dual hostname/noVNC links down to the one that actually works
+        # at venues with no DNS server.
+        self.offline_mode = offline_mode
 
     # ── Create / reuse ───────────────────────────────────────────────────────
     def create_or_get(self, instance_type: str, owner_id: str, instance_key: str, spec: dict, force_relaunch: bool = False):
@@ -234,6 +239,7 @@ class InstanceController:
                         self.base_domain,
                         self.challenge_network,
                         self.workload_quota,
+                        offline_mode=self.offline_mode,
                     )
                     self.docker.ensure_network(range_plan.network, internal=True)
                     self._create_services([range_plan.attacker_service, range_plan.gateway_service])

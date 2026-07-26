@@ -326,6 +326,7 @@ def plan_range_attacker(
     base_domain: str,
     challenge_network: str,
     workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
+    offline_mode: bool = False,
 ) -> RangePlan:
     """Called once per team, the first time they launch any target-attacker
     challenge. Subsequent challenges reuse this range (see plan_range_target).
@@ -346,7 +347,13 @@ def plan_range_attacker(
     other wildcard DNS aimed at the swarm) — with no wildcard DNS available
     at all, that route is simply unreachable, and unlike single-target
     (which only ever used a bare published port to begin with) there was no
-    fallback. This mirrors the SSH fix exactly, for the same reason."""
+    fallback. This mirrors the SSH fix exactly, for the same reason.
+
+    `offline_mode` (Config.OFFLINE_MODE) collapses this to a single link:
+    when true, the hostname-based route isn't emitted at all and the
+    direct-IP noVNC address becomes access["attacker_url"] outright,
+    instead of a novnc_url fallback sitting alongside a permanently
+    unreachable primary link."""
     attacker_image = _require_str(spec, "attacker_image")
     attacker_port = int(spec.get("attacker_port", 6080))
     # Separate, TLS-only websockify listener (operator/kali-novnc/Dockerfile's
@@ -418,13 +425,49 @@ def plan_range_attacker(
         labels=_traefik_labels(gateway_name, hostname, GATEWAY_HTTP_PORT, challenge_network),
         published_ports=[(allocated_port, GATEWAY_SSH_PORT), (allocated_novnc_port, GATEWAY_NOVNC_PORT)],
     )
+    # https, not http: this URL reaches operator/tcp-gateway (a zero-TLS
+    # byte-forwarding proxy) straight through to kali-novnc's dedicated TLS
+    # websockify listener (attacker_novnc_tls_port above), with no Traefik
+    # hop in between -- it's the whole reason this fallback exists (works
+    # with no wildcard DNS). websockify terminates TLS itself there with a
+    # self-signed cert generated fresh per container at boot (see
+    # operator/kali-novnc/Dockerfile's /start.sh), so this path is
+    # encrypted instead of silently carrying the VNC password and full
+    # desktop session in cleartext, the way it would over the plain
+    # listener the Traefik-fronted primary route still uses.
+    novnc_url = f"https://{base_domain}:{allocated_novnc_port}/vnc.html"
+    novnc_cert_warning = (
+        "This connects over TLS with a self-signed certificate (unique to "
+        "your instance), so your browser will show a certificate-warning "
+        "page first — click through it (e.g. \"Advanced\" -> \"Proceed\"). "
+        "That warning is expected here, not a sign of a problem."
+    )
+    if offline_mode:
+        # No DNS at this venue at all -- don't even emit the hostname link
+        # for the frontend to demote to a labeled fallback. attacker_url
+        # IS the direct-IP noVNC address, so challenge-launch.js's existing
+        # "no novnc_url present" branch renders exactly one button, and it
+        # always works.
+        attacker_url_fields = {
+            "attacker_url": novnc_url,
+            "novnc_note": novnc_cert_warning,
+        }
+    else:
+        attacker_url_fields = {
+            "attacker_url": f"https://{hostname}",
+            "novnc_url": novnc_url,
+            "novnc_note": (
+                "Direct noVNC access, no DNS required — use this if the link "
+                "above doesn't resolve. " + novnc_cert_warning
+            ),
+        }
     return RangePlan(
         owner_id=owner_id,
         network=range_network,
         attacker_service=attacker_service,
         gateway_service=gateway_service,
         access={
-            "attacker_url": f"https://{hostname}",
+            **attacker_url_fields,
             "attacker_username": "operator",
             # Two distinct fields, deliberately -- never a single shared
             # "password" -- since ssh_password and novnc_password are two
@@ -438,26 +481,6 @@ def plan_range_attacker(
             "protocol": "ssh",
             "note": "SSH connects via any swarm node — this hostname routes to whichever node the attacker actually landed on.",
             "novnc_port": allocated_novnc_port,
-            # https, not http: this URL reaches operator/tcp-gateway (a
-            # zero-TLS byte-forwarding proxy) straight through to
-            # kali-novnc's dedicated TLS websockify listener
-            # (attacker_novnc_tls_port above), with no Traefik hop in
-            # between -- it's the whole reason this fallback exists (works
-            # with no wildcard DNS). websockify terminates TLS itself there
-            # with a self-signed cert generated fresh per container at boot
-            # (see operator/kali-novnc/Dockerfile's /start.sh), so this path
-            # is encrypted instead of silently carrying the VNC password and
-            # full desktop session in cleartext, the way it would over the
-            # plain listener the Traefik-fronted primary route still uses.
-            "novnc_url": f"https://{base_domain}:{allocated_novnc_port}/vnc.html",
-            "novnc_note": (
-                "Direct noVNC access, no DNS required — use this if the link "
-                "above doesn't resolve. This connects over TLS with a "
-                "self-signed certificate (unique to your instance), so your "
-                "browser will show a certificate-warning page first — click "
-                "through it (e.g. \"Advanced\" -> \"Proceed\"). That warning "
-                "is expected here, not a sign of a problem."
-            ),
         },
     )
 

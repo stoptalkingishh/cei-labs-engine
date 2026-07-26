@@ -23,6 +23,17 @@ class Config:
     # Domain used to build per-team access URLs, e.g. <owner>-<key>.apps.<BASE_DOMAIN>
     BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "ctf.local")
 
+    # Set true at venues with no DNS server resolving *.apps.<BASE_DOMAIN>
+    # (e.g. the hostname route Traefik expects never works there). When
+    # true, instance_types.plan_range_attacker() stops generating the
+    # hostname-based attacker link at all and returns the direct-IP noVNC
+    # address as the one and only `attacker_url` -- one link that always
+    # works, instead of a primary/fallback pair where the primary is
+    # permanently broken. Off by default because most deployments (a real
+    # DNS server, or cei-labs-net's own) do have working wildcard DNS and
+    # should keep the hostname-based route as the primary link.
+    OFFLINE_MODE = os.environ.get("ORCHESTRATOR_OFFLINE_MODE", "false").strip().lower() in ("1", "true", "yes")
+
     # Hard cap on total concurrent instances (mirrors MultiJuicer's maxInstances).
     MAX_INSTANCES = int(os.environ.get("ORCHESTRATOR_MAX_INSTANCES", "30"))
 
