@@ -525,9 +525,29 @@ def plan_range_target(
     """A single challenge's target within an existing (or about-to-exist)
     range. Joins ONLY the range's network — never challenge_network, never
     Traefik — so it is unreachable from anywhere except its range's own
-    attacker."""
+    attacker.
+
+    Per-team level secrets: same mechanism as plan_single_target (see its
+    docstring) -- generated here and never before, since this function
+    previously ignored spec["secret_keys"]/alpha/fixed entirely. That
+    silently broke every per_team_dynamic flag on every target-attacker
+    track (confirmed live: Natas's natas0 page served the literal
+    unsubstituted "__NATAS1_SECRET__" placeholder to every team, since
+    LEVEL_SECRETS was never set) -- CTFd's routes.py._spec_with_secret_keys
+    already aggregates every sibling challenge's flag data across the
+    whole instance_group correctly; this function just never consumed
+    what it was handed."""
     target_image = _require_str(spec, "target_image")
     target_env = spec.get("target_env") or {}
+
+    secret_keys = spec.get("secret_keys") or []
+    alpha_secret_keys = spec.get("alpha_secret_keys") or []
+    fixed_secret_keys = spec.get("fixed_secret_keys") or []
+    track_secrets = generate_track_secrets(secret_keys) if secret_keys else {}
+    track_secrets.update(generate_alpha_track_secrets(alpha_secret_keys) if alpha_secret_keys else {})
+    track_secrets.update(generate_fixed_length_track_secrets(fixed_secret_keys) if fixed_secret_keys else {})
+    if track_secrets:
+        target_env = {**target_env, "LEVEL_SECRETS": json.dumps(track_secrets)}
 
     target_name = naming.range_target_service_name(owner_id, instance_key)
     target_service = ServiceSpec(
@@ -549,5 +569,6 @@ def plan_range_target(
             **range_access,
             "target_hostname": target_name,
             "target_note": "Target is reachable only from your attacker workstation, at the hostname above.",
+            **track_secrets,
         },
     )
