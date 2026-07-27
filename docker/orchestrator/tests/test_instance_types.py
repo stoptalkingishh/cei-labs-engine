@@ -350,3 +350,54 @@ def test_range_target_requires_target_image():
     range_plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
     with pytest.raises(it.InvalidInstanceRequestError):
         it.plan_range_target("team-1", "otw", {}, range_plan.network, range_plan.access)
+
+
+def test_range_target_no_secret_keys_means_no_level_secrets_env():
+    range_plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
+    plan = it.plan_range_target("team-1", "natas-00", {"target_image": "t"}, range_plan.network, range_plan.access)
+    assert "LEVEL_SECRETS" not in plan.services[0].env
+
+
+def test_range_target_generates_per_team_level_secrets():
+    # Regression test for a real bug found live: plan_range_target()
+    # silently ignored spec["secret_keys"] entirely (unlike
+    # plan_single_target, which has always handled this) -- every
+    # target-attacker track's per_team_dynamic flags (all of Natas)
+    # never got real secrets generated or injected via LEVEL_SECRETS, so
+    # every team's target served the literal unsubstituted
+    # "__NATAS1_SECRET__"-style placeholder text instead of a real,
+    # per-team-unique value.
+    range_plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
+    plan = it.plan_range_target(
+        "team-1", "natas-00",
+        {"target_image": "t", "secret_keys": ["natas1", "natas2"]},
+        range_plan.network, range_plan.access,
+    )
+    svc = plan.services[0]
+    assert "LEVEL_SECRETS" in svc.env
+    secrets_blob = json.loads(svc.env["LEVEL_SECRETS"])
+    assert set(secrets_blob.keys()) == {"natas1", "natas2"}
+    assert secrets_blob["natas1"] != secrets_blob["natas2"]
+    # Also surfaced in access (transport back to CTFd -- routes.py is
+    # responsible for scrubbing these before a player ever sees them).
+    assert plan.access["natas1"] == secrets_blob["natas1"]
+    assert plan.access["natas2"] == secrets_blob["natas2"]
+    # Existing range-level access fields (attacker_url etc.) must still
+    # pass through untouched alongside the new secret keys.
+    assert plan.access["attacker_url"] == range_plan.access["attacker_url"]
+
+
+def test_range_target_generates_alpha_and_fixed_length_secrets_too():
+    range_plan = it.plan_range_attacker("team-1", {"attacker_image": "k"}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET)
+    plan = it.plan_range_target(
+        "team-1", "natas-00",
+        {
+            "target_image": "t",
+            "alpha_secret_keys": ["natas3"],
+            "fixed_secret_keys": ["natas4"],
+        },
+        range_plan.network, range_plan.access,
+    )
+    secrets_blob = json.loads(plan.services[0].env["LEVEL_SECRETS"])
+    assert secrets_blob["natas3"].isalpha() and secrets_blob["natas3"].isupper()
+    assert len(secrets_blob["natas4"]) == 32  # generate_fixed_length_track_secrets' default
