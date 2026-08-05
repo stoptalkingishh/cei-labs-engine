@@ -77,7 +77,9 @@ participant-facing document and it was never revisited.
   `10.10.32.0/22` and does not host Swarm nodes. As of 2026-08-05,
   `192.168.10.192` is the confirmed SSH-reachable server candidate (Docker
   engine / Swarm ports not yet open); `192.168.10.235` is a DHCP/lease
-  candidate whose OS is unconfirmed. See
+  candidate whose OS is unconfirmed. The operator laptop at
+  `192.168.10.120` is explicitly excluded from the Swarm stack; do not count
+  Docker Desktop on that laptop as CEI Labs capacity. See
   `ansible/inventory-fedora-live.ini` for the live inventory template.
   Verify each node's OS identity and SSH credentials before relying on any
   address, and re-verify with `ip addr` / `hostname -I` on the manager node
