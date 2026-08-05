@@ -104,8 +104,9 @@ The current intended local Fedora server pool is:
   advertises `192.168.1.98`
 - `192.168.10.192` (`cei-xeon-e3-8g-swarm03`) - worker candidate; Xeon
   E3-1240 v2, 7.7 GiB RAM, Docker not installed
-- `192.168.10.112` - not yet accepted; SSH refuses connections and proposed
-  static target `192.168.10.12` is not reachable yet
+- `192.168.10.112` (`cei-ryzen5-15g-swarm04`) - worker candidate; Ryzen 5
+  1600X, 15 GiB RAM, Docker not installed. Proposed static target
+  `192.168.10.12` is not reachable yet.
 
 Do not mark the Swarm deployable until:
 
