@@ -92,22 +92,30 @@ participant-facing document and it was never revisited.
 
 ### Live Fedora pool update - 2026-08-05
 
+This section supersedes the earlier point-in-time candidate notes above.
+
 The current intended local Fedora server pool is:
 
-- `192.168.10.192` (`fedora-2.local`) - initial manager candidate
-- `192.168.10.235` (`host.local`) - worker candidate
-- `192.168.10.112` (`fedora.local`) - worker candidate
-- `192.168.10.67` (`fedora3.local`) - worker candidate
+- `192.168.10.13` (`cei-ryzen5-61g-swarm01`) - primary manager candidate;
+  Ryzen 5 7600, 61 GiB RAM, Docker installed, stale one-node Swarm currently
+  advertises `192.168.1.173`
+- `192.168.10.11` (`cei-i7-31g-swarm02`) - worker candidate; Intel
+  i7-10750H, 31 GiB RAM, Docker installed, stale one-node Swarm currently
+  advertises `192.168.1.98`
+- `192.168.10.192` (`cei-xeon-e3-8g-swarm03`) - worker candidate; Xeon
+  E3-1240 v2, 7.7 GiB RAM, Docker not installed
+- `192.168.10.112` - not yet accepted; SSH refuses connections and proposed
+  static target `192.168.10.12` is not reachable yet
 
-From the operator workstation, all four hosts answer ping on
-`192.168.10.0/24`, but SSH and Docker/Swarm ports were not reachable during
-the latest check. Do not mark the Swarm deployable until:
+Do not mark the Swarm deployable until:
 
 - Luna has configured static DHCP reservations or static addressing for these
   four hosts in OPNsense.
 - Outbound IPv4 internet works from each Fedora host.
-- SSH from the deployment workstation works for the Fedora admin user.
-- CPU/RAM/OS inventory has been captured and hostnames have been set.
+- Existing stale one-node Swarms are reset/reinitialized with current
+  `192.168.10.x` advertise addresses.
+- Docker is installed on `cei-xeon-e3-8g-swarm03`.
+- SSH from the deployment workstation works for any additional accepted host.
 
 ## TLS
 
