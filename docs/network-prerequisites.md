@@ -69,17 +69,54 @@ participant-facing document and it was never revisited.
   handout. Re-check and re-document it immediately before each event,
   every time, from the actual running station — never reuse a value from
   a previous event's notes.
-- **Current value for this station, confirmed live 2026-07-23:**
-  `192.168.1.173` (SSH and the Docker Swarm manager both answer there).
-  This will go stale the same way `192.168.1.131` did if the station's
-  network configuration changes — re-verify with `ip addr` / `hostname -I`
-  on the manager node before relying on it, do not assume this document is
-  current.
+- **Current deployment network, confirmed live 2026-08-05:** the live
+  Fedora Swarm nodes now live on the OPNsense LAN/server network
+  `192.168.10.0/24`, gateway `192.168.10.1` (OPNsense). This replaces the
+  earlier `192.168.1.0/24` station network and is **not** the older
+  five-VLAN / VLAN-20 reference topology. Player Wi-Fi stays separate on
+  `10.10.32.0/22` and does not host Swarm nodes. As of 2026-08-05,
+  `192.168.10.192` is the confirmed SSH-reachable server candidate (Docker
+  engine / Swarm ports not yet open); `192.168.10.235` is a DHCP/lease
+  candidate whose OS is unconfirmed. The operator laptop at
+  `192.168.10.120` is explicitly excluded from the Swarm stack; do not count
+  Docker Desktop on that laptop as CEI Labs capacity. See
+  `ansible/inventory-fedora-live.ini` for the live inventory template.
+  Verify each node's OS identity and SSH credentials before relying on any
+  address, and re-verify with `ip addr` / `hostname -I` on the manager node
+  before each event — do not assume this document is current.
 - Before an event: from a clean client on the player network, confirm the
   documented hostname (or, if unavoidable, IP) actually resolves/reaches
   CTFd, SSH, and noVNC — this is the acceptance check called out in the
   P1 fix notes. Reboot or reconnect the station and re-run the same check;
   update the documented endpoint immediately if it changed.
+
+### Live Fedora pool update - 2026-08-05
+
+This section supersedes the earlier point-in-time candidate notes above.
+
+The current intended local Fedora server pool is:
+
+- `192.168.10.13` (`cei-ryzen5-61g-swarm01`) - primary manager candidate;
+  Ryzen 5 7600, 61 GiB RAM, Docker installed, stale one-node Swarm currently
+  advertises `192.168.1.173`
+- `192.168.10.11` (`cei-i7-31g-swarm02`) - worker candidate; Intel
+  i7-10750H, 31 GiB RAM, Docker installed, stale one-node Swarm currently
+  advertises `192.168.1.98`
+- `192.168.10.192` (`cei-xeon-e3-8g-swarm03`) - worker candidate; Xeon
+  E3-1240 v2, 7.7 GiB RAM, Docker not installed
+- `192.168.10.112` (`cei-ryzen5-15g-swarm04`) - worker candidate; Ryzen 5
+  1600X, 15 GiB RAM, Docker not installed. Proposed static target
+  `192.168.10.12` is not reachable yet.
+
+Do not mark the Swarm deployable until:
+
+- Luna has configured static DHCP reservations or static addressing for these
+  four hosts in OPNsense.
+- Outbound IPv4 internet works from each Fedora host.
+- Existing stale one-node Swarms are reset/reinitialized with current
+  `192.168.10.x` advertise addresses.
+- Docker is installed on `cei-xeon-e3-8g-swarm03`.
+- SSH from the deployment workstation works for any additional accepted host.
 
 ## TLS
 
