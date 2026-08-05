@@ -90,6 +90,25 @@ participant-facing document and it was never revisited.
   P1 fix notes. Reboot or reconnect the station and re-run the same check;
   update the documented endpoint immediately if it changed.
 
+### Live Fedora pool update - 2026-08-05
+
+The current intended local Fedora server pool is:
+
+- `192.168.10.192` (`fedora-2.local`) - initial manager candidate
+- `192.168.10.235` (`host.local`) - worker candidate
+- `192.168.10.112` (`fedora.local`) - worker candidate
+- `192.168.10.67` (`fedora3.local`) - worker candidate
+
+From the operator workstation, all four hosts answer ping on
+`192.168.10.0/24`, but SSH and Docker/Swarm ports were not reachable during
+the latest check. Do not mark the Swarm deployable until:
+
+- Luna has configured static DHCP reservations or static addressing for these
+  four hosts in OPNsense.
+- Outbound IPv4 internet works from each Fedora host.
+- SSH from the deployment workstation works for the Fedora admin user.
+- CPU/RAM/OS inventory has been captured and hostnames have been set.
+
 ## TLS
 
 LAN/air-gapped default (`USE_LETSENCRYPT=false`): Traefik presents a
