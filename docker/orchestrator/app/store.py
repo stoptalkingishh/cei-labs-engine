@@ -299,6 +299,22 @@ class InstanceStore:
             """
         )
         self._add_column_if_missing("instances", "stopped", "INTEGER NOT NULL DEFAULT 0")
+        # Outlives `instances` rows on purpose -- see get_vaulted_secrets()'s
+        # docstring. A row here is the one thing an absolute-lifetime reap
+        # (teardown() + a later fresh create_or_get()) must NOT erase, since
+        # doing so is exactly what silently rotated every team's flags out
+        # from under them on a real station (see docs/credential-lifecycle.md).
+        self._conn().execute(
+            """
+            CREATE TABLE IF NOT EXISTS instance_secret_vault (
+                owner_id TEXT NOT NULL,
+                instance_key TEXT NOT NULL,
+                secrets_json TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (owner_id, instance_key)
+            )
+            """
+        )
 
     def _add_column_if_missing(self, table: str, column: str, coltype: str) -> None:
         """Migrates a pre-existing on-disk db (the `orchestrator_data`
@@ -694,6 +710,56 @@ class InstanceStore:
             "DELETE FROM instances WHERE owner_id = ? AND instance_key = ?", (owner_id, instance_key)
         )
 
+    # ── Secret vault (per-team flags/passwords that outlive a reap) ─────────
+    def get_vaulted_secrets(self, owner_id: str, instance_key: str) -> dict:
+        """Every value this team has ever been issued for this instance_key
+        -- level flags (instance_types.generate_*_track_secrets) keyed by
+        level key. Callers (controller.py's _create_single_target) merge
+        this INTO a freshly-generated dict rather than the other way
+        around, so a value already vaulted here always wins over a new
+        random one for the same key. Returns {} (never None) so call sites
+        can unconditionally treat the result as a base dict to update()."""
+        row = self._conn().execute(
+            "SELECT secrets_json FROM instance_secret_vault WHERE owner_id = ? AND instance_key = ?",
+            (owner_id, instance_key),
+        ).fetchone()
+        if row is None:
+            return {}
+        return json.loads(_decrypt_plan(self._cipher, row[0]))
+
+    def merge_vaulted_secrets(self, owner_id: str, instance_key: str, secrets: dict) -> None:
+        """Adds any NEW keys from `secrets` to what's already vaulted for
+        this (owner_id, instance_key) -- never overwrites an existing key's
+        value. Safe to call with a dict that's a mix of freshly-generated
+        and already-vaulted values (exactly what _create_single_target
+        passes): re-writing an already-vaulted key back with its own
+        unchanged value is a no-op. Only one caller ever reaches this for a
+        given (owner_id, instance_key) at a time -- the same store.reserve()
+        atomic reservation controller.create_or_get() already uses to
+        guarantee only the winning request calls plan_single_target() at
+        all -- so this doesn't need its own read-then-write transaction."""
+        if not secrets:
+            return
+        existing = self.get_vaulted_secrets(owner_id, instance_key)
+        merged = {**secrets, **existing}  # existing values win on key overlap
+        self._conn().execute(
+            "INSERT INTO instance_secret_vault (owner_id, instance_key, secrets_json, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(owner_id, instance_key) DO UPDATE SET secrets_json=excluded.secrets_json, updated_at=excluded.updated_at",
+            (owner_id, instance_key, _encrypt_plan(self._cipher, json.dumps(merged)), time.time()),
+        )
+
+    def purge_vaulted_secrets(self, owner_id: str, instance_key: str) -> None:
+        """The one path allowed to actually rotate a team's flags/passwords:
+        an explicit relaunch/reset (create_or_get(force_relaunch=True)),
+        called before the replacement plan is generated. Idle pause/resume,
+        plain teardown, and absolute-lifetime reap-expiry all deliberately
+        never call this -- see instance_secret_vault's schema comment."""
+        self._conn().execute(
+            "DELETE FROM instance_secret_vault WHERE owner_id = ? AND instance_key = ?",
+            (owner_id, instance_key),
+        )
+
     def all(self) -> list:
         rows = self._conn().execute(
             "SELECT plan_json, created_at, last_accessed, shutdown_at, extensions_used, stopped "
@@ -786,6 +852,17 @@ class RangeStore:
             """
         )
         self._add_column_if_missing("ranges", "stopped", "INTEGER NOT NULL DEFAULT 0")
+        # See InstanceStore's instance_secret_vault -- same purpose, for the
+        # shared per-team attacker's ssh_password/novnc_password.
+        self._conn().execute(
+            """
+            CREATE TABLE IF NOT EXISTS range_secret_vault (
+                owner_id TEXT PRIMARY KEY,
+                secrets_json TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
 
     def _add_column_if_missing(self, table: str, column: str, coltype: str) -> None:
         """See InstanceStore._add_column_if_missing's docstring."""
@@ -885,6 +962,34 @@ class RangeStore:
 
     def remove(self, owner_id: str) -> None:
         self._conn().execute("DELETE FROM ranges WHERE owner_id = ?", (owner_id,))
+
+    # ── Secret vault (per-team attacker credentials that outlive a reap) ────
+    def get_vaulted_secrets(self, owner_id: str) -> dict:
+        """See InstanceStore.get_vaulted_secrets -- same contract, for the
+        shared range attacker's ssh_password/novnc_password."""
+        row = self._conn().execute(
+            "SELECT secrets_json FROM range_secret_vault WHERE owner_id = ?", (owner_id,)
+        ).fetchone()
+        if row is None:
+            return {}
+        return json.loads(_decrypt_plan(self._cipher, row[0]))
+
+    def merge_vaulted_secrets(self, owner_id: str, secrets: dict) -> None:
+        """See InstanceStore.merge_vaulted_secrets -- existing values win."""
+        if not secrets:
+            return
+        existing = self.get_vaulted_secrets(owner_id)
+        merged = {**secrets, **existing}
+        self._conn().execute(
+            "INSERT INTO range_secret_vault (owner_id, secrets_json, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(owner_id) DO UPDATE SET secrets_json=excluded.secrets_json, updated_at=excluded.updated_at",
+            (owner_id, _encrypt_plan(self._cipher, json.dumps(merged)), time.time()),
+        )
+
+    def purge_vaulted_secrets(self, owner_id: str) -> None:
+        """See InstanceStore.purge_vaulted_secrets -- only an explicit
+        relaunch/reset calls this."""
+        self._conn().execute("DELETE FROM range_secret_vault WHERE owner_id = ?", (owner_id,))
 
     def all(self) -> list:
         rows = self._conn().execute(

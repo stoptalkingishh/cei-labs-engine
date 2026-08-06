@@ -265,9 +265,15 @@ def test_sweep_enforces_absolute_lifetime_even_when_instance_is_active():
 
 
 def test_sweep_absolute_lifetime_also_destroys_an_already_paused_instance():
-    """Absolute lifetime is a real, one-way expiration -- it must still fire
-    (and actually delete the row/credentials) even for an instance that's
-    currently paused, so credentials don't become permanently sticky."""
+    """Absolute lifetime is a real, one-way expiration for the running
+    *instance* -- it must still fire (and delete the store row/Docker
+    resources) even for an instance that's currently paused. It no longer
+    means the team's credentials/flags themselves are gone for good: see
+    test_reap_expiry_recreate_reuses_same_track_secrets below -- the
+    durable vault hands the same team back the same values on their next
+    create_or_get(), which is what actually stops flags from rotating out
+    from under an active event (station incident, see
+    docs/credential-lifecycle.md)."""
     reaper, controller, docker, store, _ = make_reaper(
         grace_minutes=1, max_lifetime_minutes=2
     )
@@ -284,6 +290,30 @@ def test_sweep_absolute_lifetime_also_destroys_an_already_paused_instance():
 
     assert reaper.sweep() == 1
     assert store.get("team-1", "juice") is None
+
+
+def test_reap_expiry_recreate_reuses_same_track_secrets():
+    """The actual station incident this fix closes: a real event ran past
+    ORCHESTRATOR_MAX_INSTANCE_LIFETIME_MINUTES while teams were still
+    actively playing, and every reap-expiry recreate silently handed them
+    a brand-new flag. Same team, same instance_key, across a real reaper
+    sweep -> must get the same flag back."""
+    reaper, controller, docker, store, _ = make_reaper(grace_minutes=120, max_lifetime_minutes=1)
+    spec = {"image": "img", "secret_keys": ["level1"]}
+    plan, _ = controller.create_or_get(it.SINGLE_TARGET, "team-1", "otw", spec)
+    original_secret = plan.access["level1"]
+
+    record = store.get("team-1", "otw")
+    record.created_at -= 120  # past the 1-minute absolute lifetime ceiling
+    store.put(record)
+
+    assert reaper.sweep() == 1
+    assert store.get("team-1", "otw") is None  # instance really was torn down
+
+    recreated_plan, created = controller.create_or_get(it.SINGLE_TARGET, "team-1", "otw", spec)
+
+    assert created is True
+    assert recreated_plan.access["level1"] == original_secret
 
 
 def test_sweep_releases_stale_reservation_and_removes_its_orphans():
