@@ -161,6 +161,68 @@ The automated agent approach to OPNsense repair was abandoned after repeated san
 | 9 | Worker `.12` (swarm04) never joined | Docker install failures during setup | Excluded from swarm; ships as 3-node | P2 |
 | 10 | Portainer detected on manager port 9000 | Pre-existing service, not CI-related | Noted; no action taken | Info |
 
+## Pre-Event Build & PR History (cei-labs-engine)
+
+This repository is the deployment/engine half of the platform. All of the
+following PRs merged on `main` in the run-up to event day, building the
+infrastructure the event actually ran on. Consolidated from merge history
+`git log --merges` on `origin/main`.
+
+### 2026-07-10 — Security & image hardening (early foundation)
+
+- `fix/shared-vnc-password` — stop baking a shared VNC/operator password into images
+- `fix/pin-kali-base-digest` — pin `kali-rolling` base to a digest for reproducibility
+- `fix/csrf-admin-mappings` — add missing CSRF nonce to admin mapping forms
+- `docs/security-audit-status` — add security audit findings summary
+
+### 2026-07-14 — Staggered administration
+
+- `staggered-wargame-administration` — support rolling/controlled game rollout
+
+### 2026-07-15 — Ansible foundation
+
+- **PR #2** `codex/issue-1-fedora-common-role` — Fedora common base role for provisioning
+
+### 2026-07-22 — Resilience, quotas, and docs
+
+- **PR #3** `participant-quotas` — per-participant resource quotas
+- **PR #4** `stack-healthchecks` — Docker stack healthchecks
+- **PR #5** `worker-failure-recovery` — worker failure recovery handling
+- **PR #6** `crypto-flag-variant-acceptance` — accept crypto flag variants
+- **PR #7** `clean-station-restore` — clean-station restore path
+- **PR #8** `docs/local-testing-deployment` — local testing/deployment docs
+- **PR #9** `docs/offline-install-bundle` — offline install bundle docs
+
+### 2026-07-23 — P0/P1 hardening + feature work (largest day)
+
+- **PR #11** `fix/p0-credential-lifecycle` — credential lifecycle hardening
+- **PR #12** `fix/p0-vnc-ssh-password` — VNC/SSH password fix
+- **PR #13** `fix/p0-hint-wallet-endpoint` — hint-wallet endpoint fix
+- **PR #14** `fix/p0-credential-encryption` — credential encryption fix
+- **PR #15** `fix/p1-image-pinning` — image pinning
+- **PR #16** `fix/p1-browser-launcher` — browser launcher fix
+- **PR #17** `fix/p0-hint-wallet-ctfd-plugin` — hint-wallet CTFd plugin fix
+- **PR #18** `hardening/external-hint-wallet-secret` — external hint-wallet secret
+- **PR #19** `feature/ctfd-modal-theming` — CTFd modal theming
+- **PR #20** `feature/chromium-natas-theming` — Chromium/Natas theming
+- **PR #22** `fix/ci-test-wiring` — CI test wiring
+- **PR #23** `fix/attacker-tls-fallback` — attacker TLS fallback
+- **PR #24** `fix/reaper-atomicity` — reaper atomicity fix
+- **PR #25** `fix/spawn-workspaces-hardening` — spawn-workspaces hardening
+- **PR #26** `fix/stage-gating` — stage gating fix
+- **PR #27** `fix/modal-theme-hint-wallet-consistency` — theme/hint-wallet consistency
+- **PR #28** `fix/hint-wallet-frontend` — hint-wallet frontend fixes
+- **PR #29** `fix/secrets-and-ci` — secrets & CI fixes
+- **PR #30** `fix/offline-install-unused-step-note` — offline-install doc cleanup
+
+### 2026-08-04 — Final pre-event merge
+
+- **PR #49** `kimi/docs-index` — docs index separating living docs from dated session logs
+
+**Total: ~33 merged PRs** between 2026-07-10 and event day. The last committed
+engine state the event deployed from was `engine-31a6471` (the PR #49 merge),
+redeployed on the Swarm after the subnet re-home (see Timeline).
+
 ## Channel Communications
 
 All operational coordination for this event occurred in the **CEI-LABS** channel (`#ac7f6bcc-5f6f-4f75-a811-8459c8954a37`) on the Buzz platform. Key participants:
