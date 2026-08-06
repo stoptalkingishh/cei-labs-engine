@@ -178,6 +178,89 @@ def test_single_target_pause_resume_keeps_same_port_and_secrets():
     assert len(docker.services) == 2  # target + gateway recreated
 
 
+# ── secret vault (reap-expiry recreate must not rotate flags) ─────────────────
+# Real station incident: ORCHESTRATOR_MAX_INSTANCE_LIFETIME_MINUTES fires on
+# an active team mid-event (see reaper._sweep_expired_instances), tearing
+# down and recreating their instance. Unlike pause/resume (same store row,
+# same plan_json survives), a reap-expiry teardown deletes the row entirely
+# -- so the *next* create_or_get() used to call plan_single_target() with no
+# memory of what this team's flags/passwords already were, handing back
+# freshly randomized values. These tests pin the fix: a durable vault
+# (store.py's instance_secret_vault/range_secret_vault) outlives that
+# teardown and is consulted on the way back in.
+
+def test_teardown_then_recreate_for_same_team_reuses_vaulted_track_secrets():
+    controller, docker, store, _ = make_controller()
+    spec = {"image": "img", "secret_keys": ["level1"]}
+    plan, _ = controller.create_or_get(it.SINGLE_TARGET, "team-1", "otw", spec)
+    original_secret = plan.access["level1"]
+
+    # Simulates reaper._sweep_expired_instances: a genuine, destructive
+    # teardown (not pause) of an active instance.
+    assert controller.teardown("team-1", "otw") is True
+    assert store.get("team-1", "otw") is None  # row really is gone
+
+    recreated_plan, created = controller.create_or_get(it.SINGLE_TARGET, "team-1", "otw", spec)
+
+    assert created is True
+    assert recreated_plan.access["level1"] == original_secret
+
+
+def test_different_team_gets_a_different_vaulted_secret():
+    controller, docker, store, _ = make_controller()
+    spec = {"image": "img", "secret_keys": ["level1"]}
+    plan_a, _ = controller.create_or_get(it.SINGLE_TARGET, "team-1", "otw", spec)
+    plan_b, _ = controller.create_or_get(it.SINGLE_TARGET, "team-2", "otw", spec)
+
+    assert plan_a.access["level1"] != plan_b.access["level1"]
+
+
+def test_force_relaunch_still_rotates_track_secrets():
+    """The one deliberate exception: an explicit relaunch/reset is still
+    allowed to change a team's flags -- see
+    InstanceStore.purge_vaulted_secrets' docstring."""
+    controller, docker, store, _ = make_controller()
+    spec = {"image": "img", "secret_keys": ["level1"]}
+    plan, _ = controller.create_or_get(it.SINGLE_TARGET, "team-1", "otw", spec)
+    original_secret = plan.access["level1"]
+
+    relaunched_plan, created = controller.create_or_get(
+        it.SINGLE_TARGET, "team-1", "otw", spec, force_relaunch=True
+    )
+
+    assert created is True
+    assert relaunched_plan.access["level1"] != original_secret
+
+
+def test_teardown_range_then_recreate_reuses_vaulted_attacker_credentials():
+    controller, docker, store, range_store = make_controller()
+    spec = {"target_image": "t", "attacker_image": "k"}
+    plan, _ = controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", spec)
+    original_ssh = plan.access["ssh_password"]
+    original_novnc = plan.access["novnc_password"]
+
+    assert controller.teardown_range("team-1") is True
+    assert range_store.get("team-1") is None
+
+    recreated_plan, created = controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", spec)
+
+    assert created is True
+    assert recreated_plan.access["ssh_password"] == original_ssh
+    assert recreated_plan.access["novnc_password"] == original_novnc
+
+
+def test_teardown_range_then_recreate_reuses_vaulted_target_secrets():
+    controller, docker, store, range_store = make_controller()
+    spec = {"target_image": "t", "attacker_image": "k", "secret_keys": ["natas1"]}
+    plan, _ = controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", spec)
+    original_secret = plan.access["natas1"]
+
+    controller.teardown_range("team-1")
+    recreated_plan, _ = controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", spec)
+
+    assert recreated_plan.access["natas1"] == original_secret
+
+
 def test_pause_is_a_noop_for_a_missing_or_already_paused_instance():
     controller, docker, store, _ = make_controller()
     assert controller.pause("nobody", "nothing") is False
