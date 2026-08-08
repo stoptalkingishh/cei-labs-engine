@@ -15,9 +15,11 @@ created: 2026-08-06
 | Infrastructure | 3-node Docker Swarm, manager `192.168.1.150`, workers `.193`, `.125` |
 | CEI Stack | CTFd 3.8.6 (teams mode), MariaDB, Redis, Orchestrator, Traefik — all `1/1` |
 | Games | Bandit (35), Krypton (8), Natas (16), AI Copilot (6) — 65 challenges total |
-| Players | 18 users, 10 teams |
-| Total submissions | Unknown (API rate-limited during capture) |
+| Players | 30 total participants, 19 registered accounts, 11 teams |
+| Total submissions | 399 submissions, 199 accepted solves |
 | Platform host | `192.168.1.150` (cei-ryzen5-61g-swarm01) |
+| Channel messages | 200 messages over Aug 5-8, 2026 |
+| Recap repos | cei-labs-engine (PR #54) + CEI-Labs-Wargames (PR #62, PR #63) |
 
 ## Timeline
 
@@ -235,7 +237,67 @@ All operational coordination for this event occurred in the **CEI-LABS** channel
 - **Honey** — Coordination agent
 - **Opencode_DeepSeek** (this session) — Event post-mortem documentation
 
-Full message history (41 messages, 2026-08-05 through 2026-08-06) documents the complete arc from server discovery through final game unlock.
+Full message history (200 messages, 2026-08-05 through 2026-08-08) captures the complete arc. Below is a chronological phase-by-phase summary.
+
+### Phase 1: Server LAN Discovery & OPNsense Diagnostics (Aug 5, ~14:00-19:00 UTC)
+
+The event began with server LAN discovery. stoptalkingishh directed Codex 5.5 to access the OPNsense router (`192.168.10.1`) and discovered four Fedora server candidates on `192.168.10.0/24` (`.235`, `.112`, `.192`, `.67`). Codex 5.5 verified they were pingable but SSH ports were unreachable from the agent sandbox. Fizz discovered existing stale single-node Swarms on `.13` and `.11` advertising dead `192.168.1.x` addresses, and noted server outbound internet through OPNsense was non-functional.
+
+Codex 5.6 Luna was brought in to diagnose the OPNsense WAN path — `ue0` (Lenovo USB-C Ethernet) reported `no carrier`, leaving the server LAN without internet egress. The team investigated OPNsense Wi-Fi as an alternative WAN (iwm0 interface). Multiple rounds of OPNsense web GUI configuration were attempted but the upstream connection was never successfully established.
+
+### Phase 2: Server Provisioning & Swarm Formation (Aug 5, ~19:00-23:30 UTC)
+
+stoptalkingishh provided Fedora credentials (`ismaelrodriguez/Alpha4n/a`) after noting the login was consistent across all boxes. Servers were renamed by processor/RAM convention:
+
+| IP | Hostname | Spec |
+|----|----------|------|
+| `192.168.10.13` | `cei-ryzen5-61g-swarm01` | AMD Ryzen 5, 61 GiB |
+| `192.168.10.11` | `cei-i7-31g-swarm02` | Intel Core i7, 31 GiB |
+| `192.168.10.192` | `cei-xeon-e3-8g-swarm03` | Intel Xeon E3, 8 GiB |
+| `192.168.10.112` | `cei-ryzen5-15g-swarm04` | AMD Ryzen 5, 15 GiB |
+
+A 2-node Swarm was formed on `.13` (manager) and `.11` (worker) per the CEI engine spec. Nodes `.10` (swarm03) and `.12` (swarm04) needed Docker installation. Static IPs were applied, MTU 1400 was set for Wi-Fi WAN compatibility, and stale Wi-Fi routes were disabled.
+
+### Phase 3: OPNsense Wi-Fi WAN Attempts (Aug 5, ~21:00-23:00 UTC)
+
+Codex 5.6 Luna configured OPNsense to use iwm0 as a Wi-Fi WAN client (infrastructure/BSS mode, SSID "Smallwood Hall", WPA2-PSK). The device was assigned as WAN but the SSID/WPA configuration fields were not present in the OPNsense version's WAN configuration page — the wireless clone needed credential configuration at the device level, not the interface level. The WAN remained in `no carrier` state.
+
+### Phase 4: Subnet Re-home & New Swarm (Aug 6, ~12:30-15:00 UTC)
+
+After exhausting OPNsense fixes, the critical decision was made to **re-home the Swarm from `192.168.10.0/24` to `192.168.1.0/24`** where upstream internet was functional. Fizz executed the migration:
+
+- Swarm recreated on `192.168.1.0/24`: manager `.150`, workers `.193`, `.125`
+- Fixed stale advertise address — re-initialized with `--advertise-addr 192.168.1.150`
+- Redeployed CEI stack from `/home/ismaelrodriguez/deployments/engine-31a6471`
+- Recovered from CTFd DB password mismatch using a temporary MariaDB rescue container
+
+### Phase 5: CTFd Reset, Game Rollout & Player Support (Aug 6, ~15:00-17:20 UTC)
+
+Fizz executed the full event reset:
+
+- Backup taken at `/home/ismaelrodriguez/ctfd-backup-20260806-090853.sql.gz`
+- Admin password reset to `CEI-Labs-Admin2026!`
+- Games staged: only Bandit (35) + AI Copilot (6) set visible
+- All 28 non-admin users and teams deleted, solves and submissions cleared
+- Fixed hint display cache bug (409 errors from wiped `hint_wallet_catalog_cache`)
+- Krypton unlocked at ~16:42 UTC, Natas at ~17:16 UTC
+
+Player support issues:
+- Workhorse (team 22) Krypton instance had never been created — Docker overlay network race caused silent failure. Recreated via orchestrator API.
+- Workhorse's Krypton box went down again after a relaunch — fixed with clean non-relaunch create.
+- Bandit per-team passwords rotated by a relaunch — resume point set to bandit19/bandit19.
+
+### Phase 6: Documentation & Post-Mortem (Aug 6-8, 19:00-17:40 UTC)
+
+stoptalkingishh requested a comprehensive event recap PR. Multiple agents coordinated:
+
+- **Opencode_DeepSeek**: Opened PR #54 on cei-labs-engine with infra/network/issues timeline
+- **Honey**: Opened PR #62 on CEI-Labs-Wargames with challenge playthrough, participation, pre-event PR history
+- **Bumble**: Added engine pre-event PR history to PR #54
+- **Fizz**: Pulled live server resource usage + CTFd score backup from the Swarm
+- **Bumble**: Fixed gap where WORK_LOGS were branch-only, opened and merged PR #63
+
+All documentation merged to main on both repos by Aug 8. The single remaining gap is the Claude/ChatGPT conversation recap (no export files on disk).
 
 ## Lessons Learned
 
@@ -245,18 +307,22 @@ Full message history (41 messages, 2026-08-05 through 2026-08-06) documents the 
 4. **Subnet re-homing is high-risk.** Each migration point (advertise address, stack env vars, DB secrets) is a potential silent failure. Have a documented migration checklist.
 5. **OPNsense console access is a prerequisite.** Without console/root-GUI access to the router, automated agents cannot fix upstream networking issues. Ensure console credentials are stored and accessible before event day.
 6. **Backup early, backup often.** The CTFd DB backup taken before the reset saved the deployment — there was no working admin password to recover without it.
+7. **Monitor during the event.** No `docker stats` monitoring ran during play, so real peak CPU/mem/disk usage is unrecoverable. Run a stats loop or node-exporter on event day.
 
-## Claude/ChatGPT Conversation Recap
+## External AI Conversation Recap
 
-The user requested pulling the last 9 conversations from Claude Desktop and ChatGPT apps. These conversations are stored in each application's local database (not as exportable plain-text files on the filesystem). No export files or conversation transcripts were found in Downloads or the workspace. The following CEI-Labs-related context was identified from available workspace and repo files:
+The user requested pulling CEI-Labs-related conversations from Claude Desktop, ChatGPT, and other external AI chat applications. No export files or conversation transcripts were found in Downloads or the workspace — the applications store conversations in local databases, not as exportable plain-text files. The following CEI-Labs-related context was identified from available workspace and repo files:
 
 - `CEI-Labs-CTF-Kickoff.pptx` (in Downloads) — event kickoff presentation
 - `OKComputer_CEI_Labs_Repo_Review` (in Downloads) — a repo review archive of `cei-labs-engine`
 - Several `cei-fixes.tar.gz` archives in Downloads containing fix patches
 - Repo docs in `cei-labs-net/docs/opnsense-end-state.md` reference "prior Claude hardware notes" for the OPNsense router hardware discovery
 - Engine repo `docs/adversarial-persona-findings-round-2-partial.md` references a Claude session performing orchestrator log analysis
+- The `adversarial-persona-briefs/` and `adversarial-persona-round2-findings/` directories contain Claude-origin analysis committed to the repo
 
 To recover the full conversation history, the user would need to:
 1. Open Claude Desktop and export the relevant CEI-Labs conversations
 2. Open ChatGPT and export/screenshot the relevant conversations
 3. Upload or share the exports via the channel
+
+Note: All Codex agent conversations (Codex 5.5, Codex 5.6 Luna) occurred in the CEI-LABS Buzz channel and are fully captured in the Channel Communications section above. The external AI gap is limited to private Claude Desktop and ChatGPT sessions not conducted in-channel.
