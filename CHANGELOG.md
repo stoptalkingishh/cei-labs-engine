@@ -9,6 +9,13 @@ full record.
 ## [Unreleased]
 
 ### Added
+- `ansible/inventory-fedora-live.ini`: live Fedora Swarm inventory template
+  targeting the current OPNsense LAN/server network `192.168.10.0/24`
+  (gateway `192.168.10.1`), replacing the stale `192.168.1.0/24` /
+  five-VLAN reference assumptions. Records the confirmed SSH-reachable
+  candidate `192.168.10.192` and the unconfirmed `192.168.10.235` lease
+  candidate; SSH user/key are placeholders pending node-identity
+  confirmation. Player Wi-Fi (`10.10.32.0/22`) is explicitly out of scope.
 - `docker/stack.yml`: commented-out scaffolding (secret definition +
   `orchestrator` service mount) for `hint_wallet_sync_secret_previous`, an
   `external: true` Docker secret an operator provisions only for the

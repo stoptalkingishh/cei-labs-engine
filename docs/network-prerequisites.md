@@ -69,12 +69,19 @@ participant-facing document and it was never revisited.
   handout. Re-check and re-document it immediately before each event,
   every time, from the actual running station — never reuse a value from
   a previous event's notes.
-- **Current value for this station, confirmed live 2026-07-23:**
-  `192.168.1.173` (SSH and the Docker Swarm manager both answer there).
-  This will go stale the same way `192.168.1.131` did if the station's
-  network configuration changes — re-verify with `ip addr` / `hostname -I`
-  on the manager node before relying on it, do not assume this document is
-  current.
+- **Current deployment network, confirmed live 2026-08-05:** the live
+  Fedora Swarm nodes now live on the OPNsense LAN/server network
+  `192.168.10.0/24`, gateway `192.168.10.1` (OPNsense). This replaces the
+  earlier `192.168.1.0/24` station network and is **not** the older
+  five-VLAN / VLAN-20 reference topology. Player Wi-Fi stays separate on
+  `10.10.32.0/22` and does not host Swarm nodes. As of 2026-08-05,
+  `192.168.10.192` is the confirmed SSH-reachable server candidate (Docker
+  engine / Swarm ports not yet open); `192.168.10.235` is a DHCP/lease
+  candidate whose OS is unconfirmed. See
+  `ansible/inventory-fedora-live.ini` for the live inventory template.
+  Verify each node's OS identity and SSH credentials before relying on any
+  address, and re-verify with `ip addr` / `hostname -I` on the manager node
+  before each event — do not assume this document is current.
 - Before an event: from a clean client on the player network, confirm the
   documented hostname (or, if unavoidable, IP) actually resolves/reaches
   CTFd, SSH, and noVNC — this is the acceptance check called out in the
