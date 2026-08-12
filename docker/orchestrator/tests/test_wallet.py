@@ -1,5 +1,5 @@
 """Unit tests for app/wallet.py's schema/economic validation of the signed
-three-track hint-wallet bundle, independent of HTTP/HMAC/revision-state
+four-track hint-wallet bundle, independent of HTTP/HMAC/revision-state
 concerns (those are covered in test_wallet_api.py). Mirrors deploy.sh's
 `sync_hint_wallet_bundle()` payload shape exactly -- see
 docs/P0-FIX-LOG-2026-07-23.md.
@@ -37,7 +37,7 @@ def _manifest(track: str, entries=None) -> dict:
     return body
 
 
-def _bundle(revision=1, tracks=("bandit", "krypton", "natas"), overrides=None):
+def _bundle(revision=1, tracks=("bandit", "krypton", "natas", "sentinel"), overrides=None):
     manifests = [_manifest(t) for t in tracks]
     if overrides:
         for i, patch in overrides.items():
@@ -47,10 +47,10 @@ def _bundle(revision=1, tracks=("bandit", "krypton", "natas"), overrides=None):
 
 # ── happy path ──────────────────────────────────────────────────────────────
 
-def test_valid_bundle_round_trips():
+def test_valid_four_track_bundle_round_trips():
     bundle = _bundle()
     manifests = validate_bundle(bundle)
-    assert {m["track"] for m in manifests} == {"bandit", "krypton", "natas"}
+    assert {m["track"] for m in manifests} == {"bandit", "krypton", "natas", "sentinel"}
 
 
 def test_manifest_digest_matches_deploy_sh_computation():
@@ -161,19 +161,19 @@ def test_cost_of_100_or_more_is_schema_error():
 # ── track completeness -> 400 incomplete_tracks ─────────────────────────────
 
 def test_missing_track_is_incomplete_tracks():
-    bundle = _bundle(tracks=("bandit", "krypton"))
+    bundle = _bundle(tracks=("bandit", "krypton", "natas"))
     with pytest.raises(WalletIncompleteTracksError):
         validate_bundle(bundle)
 
 
 def test_duplicate_track_is_incomplete_tracks():
-    bundle = _bundle(tracks=("bandit", "bandit", "natas"))
+    bundle = _bundle(tracks=("bandit", "krypton", "natas", "sentinel", "sentinel"))
     with pytest.raises(WalletIncompleteTracksError):
         validate_bundle(bundle)
 
 
 def test_extra_unknown_track_is_incomplete_tracks():
-    bundle = _bundle(tracks=("bandit", "krypton", "natas", "extra"))
+    bundle = _bundle(tracks=("bandit", "krypton", "natas", "sentinel", "extra"))
     with pytest.raises(WalletIncompleteTracksError):
         validate_bundle(bundle)
 

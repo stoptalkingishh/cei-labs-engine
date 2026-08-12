@@ -597,6 +597,27 @@ def test_api_unlock_progression_window_is_independent_per_track(app_client, monk
     assert resp.status_code == 200
 
 
+def test_api_unlock_maps_security_operations_to_sentinel(app_client, monkeypatch):
+    monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
+    _set_track_challenges(_FakeChallengeRow(201, "Sentinel Start Here", "Security Operations"))
+    _set_solves()
+    captured = {}
+
+    def fake_unlock(owner_id, track, entry_name, tier):
+        captured.update(owner_id=owner_id, track=track, entry_name=entry_name, tier=tier)
+        return {"success": True, "status": "unlocked", "cost_percent": 10, "content": "hi"}
+
+    _install_fake_client(monkeypatch, unlock=fake_unlock)
+
+    resp = app_client.post(
+        "/plugins/hint-wallet/api/unlock",
+        json={"track": "sentinel", "entry_name": "Sentinel Start Here", "tier": 1},
+    )
+
+    assert resp.status_code == 200
+    assert captured == {"owner_id": "7", "track": "sentinel", "entry_name": "Sentinel Start Here", "tier": 1}
+
+
 def test_api_unlock_for_a_challenge_ctfd_does_not_know_about_is_404(app_client, monkeypatch):
     monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
     _set_track_challenges()  # empty -- track has no challenges in CTFd at all

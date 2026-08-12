@@ -31,11 +31,11 @@
  * Where this deliberately differs from challenge-launch.js:
  *
  * 1. Track lookup. The wallet API is keyed by (track, entry_name), where
- *    track is one of 'bandit' | 'krypton' | 'natas' (docker/orchestrator
+ *    track is one of 'bandit' | 'krypton' | 'natas' | 'sentinel' (docker/orchestrator
  *    /app/wallet.py's REQUIRED_TRACKS) -- but nothing CTFd-side stores that
  *    mapping. entry_name is free: it's exactly each challenge's own `name`
  *    field, already visible to a player, and exactly what
- *    CEI-Labs-Wargames/scripts/build_{bandit,krypton,natas}.py write into
+ *    CEI-Labs-Wargames/scripts/build_{bandit,krypton,natas,sentinel}.py write into
  *    both the CTFd challenge.yml's `name:` and the wallet manifest's
  *    `entries[].name` (both come from the same `ch['name']`) -- so no new
  *    plumbing is needed for entry_name. track has no such source, so
@@ -46,8 +46,9 @@
  *      build_bandit.py  -> category: "Linux Basics"  -> track "bandit"
  *      build_krypton.py -> category: "Cryptography"  -> track "krypton"
  *      build_natas.py   -> category: "Web Security"  -> track "natas"
- *    A challenge whose category isn't one of these three (anything outside
- *    the three wargame tracks) has no hint-wallet entry at all, so the
+ *      build_sentinel.py -> category: "Security Operations" -> track "sentinel"
+ *    A challenge whose category isn't one of these four (anything outside
+ *    the four wargame tracks) has no hint-wallet entry at all, so the
  *    panel stays hidden for it.
  *
  * 2. Where category/name come from. CTFd's own challenge-modal template
@@ -88,7 +89,7 @@
 
   var PANEL_ID = "hint-wallet-panel";
 
-  // See this file's header comment (#1) for where each of these three
+  // See this file's header comment (#1) for where each of these four
   // values was confirmed, straight out of the CEI-Labs-Wargames build
   // scripts that set both CTFd's `category:` field and the wallet
   // manifest's `"track"` key.
@@ -96,6 +97,7 @@
     "Linux Basics": "bandit",
     "Cryptography": "krypton",
     "Web Security": "natas",
+    "Security Operations": "sentinel",
   };
 
   function escapeHtml(str) {
@@ -280,7 +282,7 @@
 
         var track = CATEGORY_TRACK_MAP[json.data.category];
         if (!track) {
-          // Not a Bandit/Krypton/Natas challenge -- no hint-wallet entry
+          // Not a mapped wargame challenge -- no hint-wallet entry
           // can exist for it, so there's nothing for this panel to show.
           hidePanel(panel);
           return;
