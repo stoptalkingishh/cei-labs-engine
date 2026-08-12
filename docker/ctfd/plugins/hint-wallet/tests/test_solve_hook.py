@@ -211,6 +211,27 @@ def test_tier_opened_applies_percent_of_value_penalty(app_client, monkeypatch):
     assert award.user_id == 7
 
 
+def test_sentinel_category_resolves_sentinel_track_and_applies_penalty(app_client, monkeypatch):
+    challenge_id = _seed_challenge(name="Sentinel Start Here", category="Security Operations", value=100)
+    captured = {}
+
+    class _FakeClient:
+        def unlocked(self, owner_id, track, entry_name):
+            captured.update(owner_id=owner_id, track=track, entry_name=entry_name)
+            return {"tier": 1, "cost_percent": 10}
+
+    class _Factory:
+        @classmethod
+        def from_env(cls):
+            return _FakeClient()
+
+    monkeypatch.setattr(solve_hook, "OrchestratorClient", _Factory)
+    app_client.post("/api/v1/challenges/attempt", json={"challenge_id": challenge_id})
+
+    assert captured == {"owner_id": "7", "track": "sentinel", "entry_name": "Sentinel Start Here"}
+    assert Awards.created[0].value == -10
+
+
 def test_penalty_rounds_down_fractional_points(app_client, monkeypatch):
     challenge_id = _seed_challenge(value=99)
     _install_fake_orchestrator(monkeypatch, {"tier": 1, "cost_percent": 10})  # 9.9 -> floor 9

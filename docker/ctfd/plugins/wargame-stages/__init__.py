@@ -15,6 +15,7 @@ DEFAULT_STAGES = (
     ("bandit", "Bandit", "Linux Basics", 1, 35),
     ("krypton", "Krypton", "Cryptography", 2, 8),
     ("natas", "Natas", "Web Security", 3, 16),
+    ("sentinel", "Sentinel - Security Operations", "Security Operations", 4, 22),
 )
 
 

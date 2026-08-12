@@ -11,7 +11,7 @@ level 12 are both unlockable. Once level 11 is solved (now on 12), the
 window shifts to 12+13. If the whole track is already solved, nothing is
 unlockable (there is no "next unsolved" to anchor on).
 
-Each track (Bandit/Krypton/Natas) has its own independent sequence and
+Each track (Bandit/Krypton/Natas/Sentinel) has its own independent sequence and
 window -- a player's position in one track never affects another.
 """
 

@@ -272,6 +272,16 @@ class TestReconcileStage:
         mapped_ids = {row.challenge_id for row in ALL_TABLES[GameStageChallenge]}
         assert mapped_ids == {c1.id, c2.id}
 
+    def test_pending_sentinel_stage_maps_and_hides_security_operations(self):
+        stage = _stage("sentinel", "Security Operations", expected_challenge_count=22)
+        challenge = _challenge("Security Operations")
+
+        mapped = routes_mod._reconcile_stage(stage)
+
+        assert mapped == 1
+        assert challenge.state == "hidden"
+        assert [(row.stage_id, row.challenge_id) for row in ALL_TABLES[GameStageChallenge]] == [(stage.id, challenge.id)]
+
     def test_started_stage_is_a_no_op(self):
         stage = _stage("bandit", "Linux Basics", state="active")
         c1 = _challenge("Linux Basics", state="visible")

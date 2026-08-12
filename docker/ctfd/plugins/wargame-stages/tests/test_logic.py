@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import unittest
 from datetime import datetime, timedelta
@@ -7,6 +8,21 @@ MODULE = Path(__file__).parents[1] / "logic.py"
 SPEC = importlib.util.spec_from_file_location("wargame_stage_logic", MODULE)
 logic = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(logic)
+
+
+def test_default_stages_include_sentinel_contract():
+    module = Path(__file__).parents[1] / "__init__.py"
+    tree = ast.parse(module.read_text())
+    default_stages = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "DEFAULT_STAGES"
+            for target in node.targets
+        )
+    )
+
+    assert ("sentinel", "Sentinel - Security Operations", "Security Operations", 4, 22) in default_stages
 
 
 class TransitionTests(unittest.TestCase):
