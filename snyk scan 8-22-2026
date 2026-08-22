@@ -1,0 +1,99 @@
+# snyk code test
+
+Testing /home/greenpepper52/projects/ismael/cei-labs-engine ...
+
+Open Issues
+
+ ✗ [LOW] Hardcoded Non-Cryptographic Secret
+   Finding ID: f3dfd56f-ebae-4661-b253-43467c0ea15c
+   Path: docker/ctfd/plugins/instance-launcher/tests/test_orchestrator_client.py, line 90
+   Info: Avoid hardcoding values that are meant to be secret. Found a hardcoded string used in here.
+
+ ✗ [LOW] Hardcoded Non-Cryptographic Secret
+   Finding ID: ef437009-ba3f-4c85-9180-9fdcb2ddd10a
+   Path: docker/ctfd/plugins/instance-launcher/tests/test_orchestrator_client.py, line 98
+   Info: Avoid hardcoding values that are meant to be secret. Found a hardcoded string used in here.
+
+ ✗ [LOW] Hardcoded Non-Cryptographic Secret
+   Finding ID: 90582bbf-0832-43d9-9d58-119d1e529cba
+   Path: docker/ctfd/plugins/instance-launcher/tests/test_orchestrator_client.py, line 34
+   Info: Avoid hardcoding values that are meant to be secret. Found a hardcoded string used in here.
+
+ ✗ [LOW] Hardcoded Non-Cryptographic Secret
+   Finding ID: c599c69b-bce6-4f3f-b1dc-8ad23230a8eb
+   Path: docker/ctfd/plugins/instance-launcher/tests/test_orchestrator_client.py, line 49
+   Info: Avoid hardcoding values that are meant to be secret. Found a hardcoded string used in here.
+
+ ✗ [LOW] Hardcoded Non-Cryptographic Secret
+   Finding ID: b8b66791-7963-47db-8de5-caae29535fff
+   Path: docker/ctfd/plugins/instance-launcher/tests/test_orchestrator_client.py, line 57
+   Info: Avoid hardcoding values that are meant to be secret. Found a hardcoded string used in here.
+
+ ✗ [LOW] Hardcoded Non-Cryptographic Secret
+   Finding ID: 710bc6eb-db59-406d-b3cd-d47387622986
+   Path: docker/ctfd/plugins/instance-launcher/tests/test_orchestrator_client.py, line 66
+   Info: Avoid hardcoding values that are meant to be secret. Found a hardcoded string used in here.
+
+ ✗ [LOW] Hardcoded Non-Cryptographic Secret
+   Finding ID: 48b62602-8b7b-4afb-8de5-44e62ea3b49c
+   Path: docker/ctfd/plugins/hint-wallet/tests/test_orchestrator_client.py, line 34
+   Info: Avoid hardcoding values that are meant to be secret. Found a hardcoded string used in here.
+
+ ✗ [LOW] Hardcoded Non-Cryptographic Secret
+   Finding ID: a78c3744-3912-44c8-86a1-944ea78e74f0
+   Path: docker/ctfd/plugins/instance-launcher/tests/test_orchestrator_client.py, line 74
+   Info: Avoid hardcoding values that are meant to be secret. Found a hardcoded string used in here.
+
+ ✗ [LOW] Server-Side Request Forgery (SSRF)
+   Finding ID: 3d69f980-a1b2-4f51-a897-ee167ef1e15e
+   Path: scripts/orchestrator-loadtest.py, line 38
+   Info: Unsanitized input from a command line argument flows into urllib.request.urlopen, where it is used as an URL to perform a request. This may result in a Server-Side Request Forgery vulnerability.
+
+ ✗ [LOW] Hardcoded Non-Cryptographic Secret
+   Finding ID: 9be6c8bb-f526-4778-89ca-72beb899acd8
+   Path: docker/ctfd/plugins/instance-launcher/tests/test_orchestrator_client.py, line 82
+   Info: Avoid hardcoding values that are meant to be secret. Found a hardcoded string used in here.
+
+ ✗ [LOW] Hardcoded Non-Cryptographic Secret
+   Finding ID: 39a33c46-11de-4e26-8ea0-bd7c4c6d7a88
+   Path: docker/ctfd/plugins/instance-launcher/tests/test_orchestrator_client.py, line 105
+   Info: Avoid hardcoding values that are meant to be secret. Found a hardcoded string used in here.
+
+ ✗ [LOW] Path Traversal
+   Finding ID: e378e00f-772a-4078-bee2-15e7c60a60fe
+   Path: scripts/orchestrator-loadtest.py, line 27
+   Info: Unsanitized input from a command line argument flows into pathlib.Path, where it is used as a path. This may result in a Path Traversal vulnerability and allow an attacker to read arbitrary files.
+
+ ✗ [LOW] Path Traversal
+   Finding ID: 842571b1-09dd-42a8-b5fe-ff67de86f939
+   Path: scripts/orchestrator-loadtest.py, line 178
+   Info: Unsanitized input from a command line argument flows into pathlib.Path, where it is used as a path. This may result in a Path Traversal vulnerability and allow an attacker to write arbitrary files.
+
+ ✗ [LOW] Path Traversal
+   Finding ID: 554dea19-3b31-4935-b3b8-7dc437a4f942
+   Path: scripts/orchestrator-loadtest.py, line 194
+   Info: Unsanitized input from a command line argument flows into pathlib.Path, where it is used as a path. This may result in a Path Traversal vulnerability and allow an attacker to write arbitrary files.
+
+ ✗ [MEDIUM] Binding to all network interfaces may open service to unintended traffic
+   Finding ID: f322ed63-e1d6-4bbd-9b5b-97d71d363abc
+   Path: operator/tcp-gateway/server.py, line 47
+   Info: Using bind in bind makes it listen on all network interfaces, which may open the service to unintended traffic.
+
+ ✗ [MEDIUM] Cross-site Scripting (XSS)
+   Finding ID: d5fe8c2b-7140-466e-b985-4f041e75a21e
+   Path: docker/ctfd/plugins/hint-wallet/routes.py, line 280
+   Info: Unsanitized input from an environment variable flows into the return value of api_unlock, where it is used to render an HTML page returned to the user. This may result in a Cross-Site Scripting attack (XSS).
+
+
+
+╭─────────────────────────────────────────────────────────────────────────────╮
+│ Test Summary                                                                │
+│                                                                             │
+│   Organization:                                                             │
+│   Test type:         Static code analysis                                   │
+│   Project path:      /home/greenpepper52/projects/ismael/cei-labs-engine    │
+│                                                                             │
+│   Total issues:   16                                                        │
+│   Ignored issues: 0 [ 0 HIGH  0 MEDIUM  0 LOW ]                             │
+│   Open issues:    16 [ 0 HIGH  2 MEDIUM  14 LOW ]                           │
+╰─────────────────────────────────────────────────────────────────────────────╯
