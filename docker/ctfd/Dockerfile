@@ -13,9 +13,11 @@ COPY plugins/wargame-stages /opt/CTFd/CTFd/plugins/wargame-stages
 COPY plugins/hint-wallet /opt/CTFd/CTFd/plugins/hint-wallet
 COPY plugins/modal-theme /opt/CTFd/CTFd/plugins/modal-theme
 COPY plugins/submission-history /opt/CTFd/CTFd/plugins/submission-history
+COPY plugins/typed-answer-flags /opt/CTFd/CTFd/plugins/typed-answer-flags
 
 RUN pip install --no-cache-dir -r /opt/CTFd/CTFd/plugins/instance-launcher/requirements.txt \
-    && pip install --no-cache-dir -r /opt/CTFd/CTFd/plugins/hint-wallet/requirements.txt
+    && pip install --no-cache-dir -r /opt/CTFd/CTFd/plugins/hint-wallet/requirements.txt \
+    && pip install --no-cache-dir -r /opt/CTFd/CTFd/plugins/typed-answer-flags/requirements.txt
 
 COPY docker-entrypoint-wrapper.sh /docker-entrypoint-wrapper.sh
 RUN chmod +x /docker-entrypoint-wrapper.sh \
@@ -23,7 +25,8 @@ RUN chmod +x /docker-entrypoint-wrapper.sh \
        /opt/CTFd/CTFd/plugins/wargame-stages \
        /opt/CTFd/CTFd/plugins/hint-wallet \
        /opt/CTFd/CTFd/plugins/modal-theme \
-       /opt/CTFd/CTFd/plugins/submission-history
+       /opt/CTFd/CTFd/plugins/submission-history \
+       /opt/CTFd/CTFd/plugins/typed-answer-flags
 
 USER 1001
 
