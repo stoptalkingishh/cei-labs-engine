@@ -1,0 +1,1 @@
+ctf-generator @ git+https://github.com/Judgernaut777/CTFGenerator.git@3bf708868d2af1e567686ca3e7e684b537fd0451

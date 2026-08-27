@@ -43,6 +43,14 @@ jobs:
         working-directory: docker/ctfd/plugins/instance-launcher
         run: pytest -q --import-mode=importlib tests/
 
+      - name: Install typed-answer-flags test dependencies
+        working-directory: docker/ctfd/plugins/typed-answer-flags
+        run: pip install -r requirements.txt pytest
+
+      - name: Run typed-answer-flags unit tests
+        working-directory: docker/ctfd/plugins/typed-answer-flags
+        run: pytest -q --import-mode=importlib tests/
+
       - name: Install hint-wallet test dependencies
         working-directory: docker/ctfd/plugins/hint-wallet
         # flask isn't in requirements.txt because in production it's

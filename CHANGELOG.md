@@ -9,6 +9,11 @@ full record.
 ## [Unreleased]
 
 ### Added
+- `docker/ctfd/plugins/typed-answer-flags`: a fail-closed CTFd custom flag
+  type that delegates alias, coordinate-tolerance, identifier-normalization,
+  and multipart verification to CTFGenerator pinned at reviewed commit
+  `3bf708868d2af1e567686ca3e7e684b537fd0451`; candidate submissions are not
+  logged and malformed stored specifications are rejected.
 - `ansible/inventory-fedora-live.ini`: live Fedora Swarm inventory template
   targeting the current OPNsense LAN/server network `192.168.10.0/24`
   (gateway `192.168.10.1`), replacing the stale `192.168.1.0/24` /

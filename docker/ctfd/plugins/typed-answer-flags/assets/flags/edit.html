@@ -1,0 +1,15 @@
+<label>
+  CTFGenerator typed answer<br>
+  <small>Private immutable verifier specification. Never include it in challenge text or downloadable files.</small>
+</label>
+<div class="form-group">
+  <label>Verifier JSON</label>
+  <textarea class="form-control" name="data" rows="10">{{ data }}</textarea>
+</div>
+<input type="hidden" name="content" value="{{ content }}">
+<input type="hidden" name="type" value="typed_answer">
+<input type="hidden" name="id" value="{{ id }}">
+<hr>
+<div class="form-group">
+  <button class="btn btn-success float-right">Update</button>
+</div>
