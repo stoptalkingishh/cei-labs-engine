@@ -63,8 +63,9 @@ def test_runtime_dependency_is_pinned_to_the_reviewed_ctfgenerator_commit():
     requirements = (PLUGIN / "requirements.txt").read_text(encoding="utf-8")
 
     assert requirements.strip() == (
-        "ctf-generator @ git+https://github.com/Judgernaut777/CTFGenerator.git@"
+        "ctf-generator @ https://github.com/Judgernaut777/CTFGenerator/archive/"
         + PINNED_HOST_SHA
+        + ".tar.gz"
     )
 
 
