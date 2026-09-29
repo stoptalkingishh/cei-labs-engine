@@ -7,6 +7,15 @@ creds.txt
 docker/secrets/
 docker/.env
 
+# Traefik TLS material. docker/traefik/dynamic/tls.yml.example tells operators to
+# copy it to tls.yml and drop the referenced cert/key files into
+# docker/traefik/certs/ — walking them straight at a path nothing was ignoring.
+# The .gitkeep keeps the directory in the tree; the negations are the only
+# things from those two directories that should ever be tracked.
+docker/traefik/certs/*
+!docker/traefik/certs/.gitkeep
+docker/traefik/dynamic/tls.yml
+
 # Block local collection capture assets and memory drops
 *.img
 *.raw

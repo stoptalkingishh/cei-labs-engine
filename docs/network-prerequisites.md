@@ -10,7 +10,8 @@ require any specific firewall/router product.
 | Port(s) | Protocol | Direction | Purpose |
 | :--- | :--- | :--- | :--- |
 | 80, 443 | TCP | Inbound to any Swarm node | Traefik ingress (CTFd + Traefik-routed challenge instances). Swarm's routing mesh means any node's IP works, regardless of where the container is actually scheduled. |
-| `ORCHESTRATOR_SSH_PORT_RANGE_START`–`END` (default `30000`–`32767`) | TCP | Inbound to any Swarm node | Directly-published ports for `single-target` orchestrator instances (e.g. SSH challenges) and bulk-spawned analyst/Kali workspaces (`scripts/spawn-workspaces.sh`, via `ANALYST_BASE_PORT`). Both provisioning paths share this one range — see `docker/.env.example`. |
+| `ORCHESTRATOR_SSH_PORT_RANGE_START`–`END` (default `32000`–`32767`) | TCP | Inbound to any Swarm node | Directly-published ports for `single-target` orchestrator instances (e.g. SSH challenges). Deliberately **disjoint** from `ANALYST_BASE_PORT` (default `30001`, used by `scripts/spawn-workspaces.sh` for bulk-spawned analyst/Kali workspaces) so the two provisioning paths never collide — see `docker/.env.example`, which is the authoritative source for both values. |
+| `ANALYST_BASE_PORT`–(`ANALYST_BASE_PORT` + roster size) (default `30001`+) | TCP | Inbound to any Swarm node | Bulk-spawned analyst/Kali workspaces (`scripts/spawn-workspaces.sh`). Keep the top of this range **below** `ORCHESTRATOR_SSH_PORT_RANGE_START`; a roster large enough to cross 32000 collides with the range above and the affected challenge instances fail to bind. |
 | 2377/tcp, 7946/tcp+udp, 4789/udp | — | Between Swarm nodes only | Swarm cluster management, node gossip, and overlay network data path (VXLAN). Only relevant for multi-node deployments — irrelevant on a single-host swarm. |
 
 ## Swarm ingress capacity
