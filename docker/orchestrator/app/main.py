@@ -21,6 +21,19 @@ service -- see app/store.py's WalletStore docstring). The percentage is
 applied as a reduction of that challenge's own score award at solve time,
 CTFd-side (docker/ctfd/plugins/hint-wallet/solve_hook.py), which reads back
 the highest tier a team opened via /wallet/unlocked/....
+
+What each audience gets back (see _access_for_response for the full rule): a
+plan's `access` dict mixes the player's own connect credentials with that
+team's generated per-team flag values and marks neither, so it is served
+differently per route. The `/admin/*` listings carry no `access` at all --
+one static admin header must not be able to read every team's passwords and
+flags at once. `POST /instances` serves `access` only on the `201` (the one
+response where an environment was really built) and never with flag values.
+`GET /instances/<owner_id>/<instance_key>` is the single exception: it is
+what the CTFd plugin's _persist_and_scrub_secrets feeds, and that scrub is
+the only thing that ever populates TeamChallengeSecret, which in turn is the
+only thing flags.PerTeamDynamicFlag.compare() validates against -- so it
+still carries them, deliberately.
 """
 import hashlib
 import hmac
@@ -53,6 +66,34 @@ from .wallet import WalletIncompleteTracksError, WalletSchemaError, WalletValida
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+# Hard ceiling on any request body, enforced by Werkzeug before a route reads
+# the stream. Sized for the biggest legitimate body this service accepts: the
+# hint catalog POST /wallet/sync receives (three tracks x every challenge x
+# three tiers of hint prose -- a few hundred KB on a real deployment), with a
+# large margin on top of that.
+#
+# This exists specifically because /wallet/sync is the one route _enforce_auth
+# lets through unauthenticated (it carries its own HMAC body signature) while
+# its first statement is `raw_body = request.get_data()`. Without a ceiling,
+# the signature check sits downstream of a full buffer of the attacker's
+# body: anyone who can reach the orchestrator-internal network can POST a
+# huge body and have gunicorn buffer all of it before anything is rejected.
+# The orchestrator is capped at `memory: 256M` (docker/stack.yml), so a
+# couple of concurrent oversized uploads OOM-kills the container and takes
+# every team's live environments with it -- repeatable, pre-auth, cheap.
+MAX_CONTENT_LENGTH_BYTES = 1024 * 1024
+
+# Ceiling on how many per-level keys a single create request may ask for.
+# generate_track_secrets()/generate_alpha_track_secrets()/
+# generate_fixed_length_track_secrets() (instance_types.py) each generate one
+# random value per key and merge the result into BOTH the container's
+# LEVEL_SECRETS env blob and the plan's `access` dict, so an unbounded list
+# turns one small authorized request into an arbitrarily large allocation --
+# and an arbitrarily large encrypted plan_json row, re-decrypted in full on
+# every status check. A real deployment's level count is a handful per
+# challenge group, not thousands.
+MAX_SECRET_KEYS_PER_SPEC = 64
+
 
 def _authorized(provided: "str | None", expected: str) -> bool:
     if not expected:
@@ -63,10 +104,36 @@ def _authorized(provided: "str | None", expected: str) -> bool:
     return hmac.compare_digest(provided, expected)
 
 
-def _instance_response(record, cfg: "Config | None" = None) -> dict:
+def _access_for_response(plan, include_flag_secrets: bool = False) -> dict:
+    """The `access` dict as it may be sent to THIS caller, with per-team flag
+    material (instance_types.InstancePlan.flag_secret_keys) stripped unless
+    the caller is the one response that legitimately needs it.
+
+    Why this is per-caller and not "always strip": `access` is the transport
+    CTFd uses to learn a team's flag values at all. The plugin's
+    _persist_and_scrub_secrets pops each level key out of `access` and
+    upserts it into TeamChallengeSecret, and that row is the ONLY thing
+    flags.PerTeamDynamicFlag.compare() validates a submission against -- no
+    other path writes it, and no orchestrator round-trip happens at solve
+    time. So the one response feeding that scrub (GET
+    /instances/<owner>/<key>) has to carry the values, and every other
+    response can drop them: a caller that never receives them cannot leak
+    them, and a flag value that nothing is persisting anywhere is not a
+    credential any downstream consumer needs.
+
+    Genuine credentials (ssh_password/novnc_password, connect_host/port, the
+    URLs) are never touched here -- the plugin needs them to show the player
+    their own console, and they are the player's to know."""
+    if include_flag_secrets:
+        return dict(plan.access)
+    flag_keys = set(plan.flag_secret_keys or ())
+    return {key: value for key, value in plan.access.items() if key not in flag_keys}
+
+
+def _instance_response(record, cfg: "Config | None" = None, include_flag_secrets: bool = False) -> dict:
     body = {
         "type": record.plan.type,
-        "access": record.plan.access,
+        "access": _access_for_response(record.plan, include_flag_secrets),
         "idle_seconds": record.idle_seconds(),
         # Non-destructive pause state (idle timeout / post-solve countdown
         # already fired, container stopped) vs. live -- NOT the same thing
@@ -190,7 +257,11 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
         reaper.start()
 
     app.config.update(
-        cfg=cfg, controller=controller, store=store, range_store=range_store, wallet_store=wallet_store, reaper=reaper
+        cfg=cfg, controller=controller, store=store, range_store=range_store, wallet_store=wallet_store, reaper=reaper,
+        # See MAX_CONTENT_LENGTH_BYTES above: without this, the pre-auth
+        # /wallet/sync route buffers an arbitrarily large body into a
+        # memory-capped container before its HMAC check ever runs.
+        MAX_CONTENT_LENGTH=MAX_CONTENT_LENGTH_BYTES,
     )
 
     @app.get("/healthz")
@@ -231,6 +302,19 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
         if not owner_id or not instance_key:
             return jsonify(error="'owner_id' and 'instance_key' are required"), 400
 
+        # Rejected here, before instance_types.py ever iterates them -- see
+        # MAX_SECRET_KEYS_PER_SPEC. Also pins the shape: these are consumed as
+        # an iterable of level keys, so a caller sending a dict or a string
+        # would otherwise have it silently iterated one character at a time.
+        for keys_field in ("secret_keys", "alpha_secret_keys", "fixed_secret_keys"):
+            keys = spec.get(keys_field)
+            if keys is None:
+                continue
+            if not isinstance(keys, list) or len(keys) > MAX_SECRET_KEYS_PER_SPEC:
+                return jsonify(
+                    error=f"'{keys_field}' must be a list of at most {MAX_SECRET_KEYS_PER_SPEC} level keys"
+                ), 400
+
         # Recorded before the call: create_or_get() clears `stopped` itself
         # when it resumes a paused record, so this is the only place left to
         # tell "resumed a paused environment" apart from "already running,
@@ -262,7 +346,23 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             status = "resumed"
         else:
             status = "exists"
-        return jsonify(status=status, type=plan.type, access=plan.access), 201 if created else 200
+
+        response = {"status": status, "type": plan.type}
+        if created:
+            # 201 is returned for exactly one thing: an environment that was
+            # (re)built, i.e. the only case where the connect info below is
+            # news to the caller. It is also the only place `access` appears
+            # on this route -- on the 200 exists/resumed paths nothing was
+            # created and the plugin already holds these exact credentials
+            # (it just fetched them for this same owner/key moments earlier),
+            # so re-serving them only widens how many responses carry every
+            # team's passwords around. Checked against the plugin: routes.py's
+            # _run_action discards create_or_get()'s return value entirely
+            # and re-reads state through GET /instances/<owner>/<key>, so
+            # nothing downstream depends on this body. Flag values are dropped
+            # even here -- see _access_for_response.
+            response["access"] = _access_for_response(plan)
+        return jsonify(**response), 201 if created else 200
 
     @app.get("/instances/<owner_id>/<instance_key>")
     def get_instance(owner_id: str, instance_key: str):
@@ -271,7 +371,19 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             return jsonify(error="not found"), 404
         record.touch()
         store.touch(owner_id, instance_key)
-        return jsonify(**_instance_response(record, cfg))
+        # include_flag_secrets=True, and deliberately so -- this is the one
+        # response the CTFd plugin's _persist_and_scrub_secrets feeds, and
+        # that scrub is the only thing that ever populates
+        # TeamChallengeSecret, which is in turn the only thing
+        # flags.PerTeamDynamicFlag.compare() validates a submission against.
+        # Strip the flag values here and every per_team_dynamic flag in the
+        # deployment fails closed forever, silently, since compare() just
+        # returns False when the row is missing. The plugin pops each of them
+        # out of `access` and upserts it CTFd-side before anything is rendered
+        # to or returned to a player, which is the boundary that actually
+        # matters; every other response in this file is held to the stricter
+        # rule they can live with (see _access_for_response).
+        return jsonify(**_instance_response(record, cfg, include_flag_secrets=True))
 
     @app.delete("/instances/<owner_id>/<instance_key>")
     def delete_instance(owner_id: str, instance_key: str):
@@ -435,26 +547,50 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
     # ── Admin ────────────────────────────────────────────────────────────────
     @app.get("/admin/instances")
     def admin_list_instances():
+        # Deliberately NOT _instance_response(). This route used to splat
+        # that whole body -- `access` included -- across every row of an
+        # unbounded store.all(), which handed one caller presenting the single
+        # static X-Admin-Auth header the SSH/noVNC passwords AND the per-team
+        # flag values of every live instance in the event, at once. An ops
+        # dashboard needs identity and lifecycle state (who owns what, is it
+        # idle, is it paused, when does it expire) and has no use for any
+        # credential, so the projection below is an explicit allowlist rather
+        # than the player-facing body with pieces removed: a field added to
+        # `access` or to _instance_response() can't leak through here by
+        # default, it has to be added here on purpose. Credentials stay
+        # readable through the owner-scoped, X-Orchestrator-Auth-protected
+        # per-instance routes.
         return jsonify([
             {
                 "owner_id": r.owner_id,
                 "instance_key": r.instance_key,
-                **_instance_response(r, cfg),
+                "type": r.plan.type,
                 "created_at": r.created_at,
+                "last_accessed": r.last_accessed,
+                "idle_seconds": r.idle_seconds(),
+                "stopped": r.stopped,
+                "shutdown_at": r.shutdown_at,
+                "extensions_used": r.extensions_used,
             }
             for r in store.all()
         ])
 
     @app.get("/admin/ranges")
     def admin_list_ranges():
+        # Same reasoning as /admin/instances above: this listing used to
+        # return range access wholesale, i.e. every team's generated
+        # ssh_password and novnc_password in one response behind one static
+        # header. The network, target inventory and timestamps an ops
+        # dashboard actually renders all stay.
         return jsonify([
             {
                 "owner_id": r.owner_id,
-                "access": r.plan.access,
+                "network": r.plan.network,
                 "target_keys": sorted(r.target_keys),
+                "created_at": r.created_at,
+                "last_accessed": r.last_accessed,
                 "idle_seconds": r.idle_seconds(),
                 "stopped": r.stopped,
-                "created_at": r.created_at,
             }
             for r in range_store.all()
         ])

@@ -9,7 +9,8 @@ import os
 import sqlite3
 import tempfile
 
-from cryptography.fernet import Fernet
+import pytest
+from cryptography.fernet import Fernet, InvalidToken
 
 from app import instance_types as it
 from app.crypto import CredentialCipher
@@ -143,3 +144,117 @@ def test_range_store_also_encrypts_plan_json_at_rest():
         record = store.get("team-1")
         assert record.plan.access["attacker_password"] == SECRET_MARKER
         store.close()
+
+
+# ── flag_secret_keys survives persistence ──────────────────────────────────
+#
+# main.py can only keep per-team flag values out of an API response if it
+# still knows which `access` keys they are after a restart -- the request
+# spec that named them (secret_keys/alpha_secret_keys/fixed_secret_keys) is
+# long gone by then. InstancePlan.flag_secret_keys is persisted inside the
+# same encrypted plan_json for exactly that reason.
+
+def test_flag_secret_keys_round_trip_through_the_store():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "instances.db")
+        key = Fernet.generate_key()
+        plan = it.plan_single_target(
+            "team-1", "krypton", {"image": "img", "secret_keys": ["krypton1", "krypton2"]},
+            allocated_port=32000, base_domain="ctf.local",
+        )
+        assert plan.flag_secret_keys == ["krypton1", "krypton2"]
+
+        store = InstanceStore(db_path=db_path, cipher=CredentialCipher(key))
+        store.reserve("team-1", "krypton")
+        store.finalize("team-1", "krypton", plan)
+        store.close()
+
+        # A brand-new store built from the same key material -- i.e. exactly
+        # what a restarted orchestrator process sees.
+        reloaded = InstanceStore(db_path=db_path, cipher=CredentialCipher(key))
+        record = reloaded.get("team-1", "krypton")
+        assert record.plan.flag_secret_keys == ["krypton1", "krypton2"]
+        # Only the generated per-level values, never ordinary connect info --
+        # getting this list wrong is what would drop connect_port from a
+        # player's launch panel.
+        assert "connect_port" not in record.plan.flag_secret_keys
+        reloaded.close()
+
+
+def test_a_web_app_plan_records_no_flag_secret_keys():
+    plan = it.plan_web_app("team-1", "juice", {"image": "img"}, "ctf.local", "challenge-net")
+    assert plan.flag_secret_keys == []
+
+
+# ── the legacy-plaintext fallback is a shape test, not a "decrypt threw" test ──
+#
+# _decrypt_plan used to return the raw stored value on ANY InvalidToken /
+# ValueError, so the one-way pre-upgrade migration path also silently
+# promoted every undecryptable row -- wrong key, truncated write, tampering,
+# plain garbage -- to authoritative-plan status. These tests pin the narrowed
+# contract: a value that actually looks like the pre-upgrade row is honoured,
+# and everything else has to decrypt or raise.
+
+def _write_raw_plan_json(db_path: str, owner_id: str, instance_key: str, raw: str) -> None:
+    """Put an arbitrary value into plan_json the way a pre-upgrade row (or
+    anything else writing to the orchestrator_data volume) would."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO instances "
+        "(owner_id, instance_key, plan_json, created_at, last_accessed, extensions_used) "
+        "VALUES (?, ?, ?, 0, 0, 0)",
+        (owner_id, instance_key, raw),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_a_non_json_corrupt_row_is_rejected_rather_than_accepted_as_the_plan():
+    """The regression this guards: under the old fallback this returned the
+    corrupt string verbatim from _decrypt_plan as though it were the
+    decrypted plan."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "instances.db")
+        store = InstanceStore(db_path=db_path, cipher=CredentialCipher(Fernet.generate_key()))
+        _write_raw_plan_json(db_path, "team-1", "juice", "this-is-not-a-plan-and-not-ciphertext")
+
+        with pytest.raises(Exception):
+            store.get("team-1", "juice")
+        store.close()
+
+
+def test_a_corrupt_row_does_not_silently_pass_through_the_teardown_path_either():
+    """teardown()/relaunch reach the plan through claim_for_replacement(),
+    which goes through the same _decrypt_plan -- so a corrupt row has to fail
+    there too rather than being handed to _plan_from_json as a 'plan'. Under
+    the old swallow this was an unexplained 500 two layers downstream of the
+    actual cause; here the point is only that it raises, and never returns a
+    record built out of the corrupt value."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "instances.db")
+        store = InstanceStore(db_path=db_path, cipher=CredentialCipher(Fernet.generate_key()))
+        _write_raw_plan_json(db_path, "team-1", "juice", "truncated-ciphertext")
+
+        with pytest.raises(Exception):
+            store.claim_for_replacement("team-1", "juice")
+        store.close()
+
+
+def test_ciphertext_written_under_a_different_key_raises_rather_than_being_returned():
+    """Same failure mode, reached the realistic way: a row persisted under a
+    credential_encryption_key this process no longer has. Its stored value is
+    genuine Fernet ciphertext and does not start with '{', so it must never
+    take the legacy-plaintext path."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "instances.db")
+        store = InstanceStore(db_path=db_path, cipher=CredentialCipher(Fernet.generate_key()))
+        store.reserve("team-1", "juice")
+        store.finalize("team-1", "juice", _make_plan_with_marker())
+        ciphertext = _raw_plan_json_column(db_path)
+        store.close()
+        assert not ciphertext.startswith("{")
+
+        store_b = InstanceStore(db_path=db_path, cipher=CredentialCipher(Fernet.generate_key()))
+        with pytest.raises(InvalidToken):
+            store_b.get("team-1", "juice")
+        store_b.close()

@@ -389,6 +389,72 @@ def test_unlocked_is_independent_per_challenge_entry(client):
     assert resp.get_json()["tier"] is None
 
 
+# ── pre-auth body-size ceiling (issue #63) ─────────────────────────────────
+
+def test_oversized_wallet_sync_body_is_413_and_never_reaches_the_hmac_check(client):
+    """/wallet/sync is the one route _enforce_auth lets through unauthenticated
+    (it carries its own HMAC body signature), and its first statement buffers
+    the whole body. Without MAX_CONTENT_LENGTH that made a pre-auth OOM of the
+    memory-capped orchestrator container repeatable and cheap. The oversized
+    body here is correctly signed with the real sync secret, so the ONLY
+    reason it can be rejected is the size ceiling running ahead of
+    request.get_data(): were the HMAC/schema path reached first it would answer
+    200 (accepting the catalog) or 400 invalid_schema, never 413."""
+    from app.main import MAX_CONTENT_LENGTH_BYTES
+
+    oversized = b"x" * (MAX_CONTENT_LENGTH_BYTES + 1)
+    signature = hmac.new(SECRET.encode(), oversized, hashlib.sha256).hexdigest()
+
+    resp = client.post(
+        "/wallet/sync",
+        data=oversized,
+        headers={"X-Hint-Wallet-Signature": signature, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 413
+
+    # Same size, no signature at all: also 413, not 401 -- the body is turned
+    # away before authentication is attempted at all.
+    resp = client.post("/wallet/sync", data=oversized, headers={"Content-Type": "application/json"})
+    assert resp.status_code == 413
+
+
+def test_a_realistic_wallet_catalog_sync_is_well_under_the_body_ceiling(client):
+    """Guards the ceiling against being set so low that a real deployment's
+    catalog stops syncing: a bundle carrying 100 challenges per track (300 in
+    total) x 3 tiers of hint prose still fits comfortably under 1 MiB."""
+    from app.main import MAX_CONTENT_LENGTH_BYTES
+
+    def big_manifest(track: str) -> dict:
+        filler = "hint prose " * 50
+        body = {
+            "schema_version": 1,
+            "track": track,
+            "entries": [
+                {
+                    "name": f"{track} challenge {i}",
+                    "tiers": [
+                        {"tier": tier, "cost": tier * 10, "content": filler} for tier in (1, 2, 3)
+                    ],
+                }
+                for i in range(1, 101)
+            ],
+        }
+        raw = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        body["digest"] = hashlib.sha256(raw).hexdigest()
+        return body
+
+    raw, _ = _signed_bundle(SECRET, 1, [big_manifest(t) for t in ("bandit", "krypton", "natas")])
+    assert len(raw) < MAX_CONTENT_LENGTH_BYTES
+
+    resp = client.post(
+        "/wallet/sync",
+        data=raw,
+        headers={"X-Hint-Wallet-Signature": hmac.new(SECRET.encode(), raw, hashlib.sha256).hexdigest(),
+                 "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+
+
 # ── concurrency: a repeated unlock is recorded exactly once across workers ─
 
 def test_repeated_unlock_is_recorded_exactly_once_across_workers():
