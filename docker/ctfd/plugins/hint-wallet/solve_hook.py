@@ -103,7 +103,7 @@ def _maybe_apply_hint_penalty(response) -> None:
 def _apply_penalty(owner_id: str, user, challenge, description: str) -> None:
     track = track_for_category(challenge.category)
     if track is None:
-        return  # not a Bandit/Krypton/Natas challenge -- no hint-wallet entry can exist
+        return  # not a mapped wargame challenge -- no hint-wallet entry can exist
     entry_name = challenge.name
 
     client = OrchestratorClient.from_env()

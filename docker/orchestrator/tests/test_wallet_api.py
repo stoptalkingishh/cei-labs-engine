@@ -3,7 +3,7 @@ POST /wallet/unlock, GET /wallet/unlocked/<owner_id>/<track>/<entry_name>).
 
 Covers the fail-closed contract from docs/P0-FIX-LOG-2026-07-23.md: HMAC
 signature auth (including secret rotation overlap), the revision/digest
-state machine, all-or-nothing three-track schema/track/economic validation,
+state machine, all-or-nothing four-track schema/track/economic validation,
 and that a rejected sync never disturbs the previously accepted catalog.
 Also covers unlock/unlocked (percent-of-value cost model, no shared team
 balance -- see cei-labs-event#7 and app/store.py's WalletStore docstring)
@@ -89,7 +89,7 @@ def _manifest(track: str, entry_costs=(10, 20, 30), entry_name=None) -> dict:
 
 
 def _signed_bundle(secret: str, revision: int, manifests=None):
-    manifests = manifests if manifests is not None else [_manifest("bandit"), _manifest("krypton"), _manifest("natas")]
+    manifests = manifests if manifests is not None else [_manifest("bandit"), _manifest("krypton"), _manifest("natas"), _manifest("sentinel")]
     bundle = {"schema_version": 1, "revision": revision, "manifests": manifests}
     raw = json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     signature = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
@@ -188,6 +188,12 @@ def test_old_secret_rejected_once_retired(client):
 
 # ── schema / track / economic validation ────────────────────────────────────
 
+def test_signed_four_track_bundle_is_accepted(client):
+    resp = _sync(client, SECRET, 1)
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "accepted"
+
+
 def test_unparseable_body_is_400_invalid_schema(client):
     raw = b"not json"
     signature = hmac.new(SECRET.encode(), raw, hashlib.sha256).hexdigest()
@@ -199,7 +205,7 @@ def test_unparseable_body_is_400_invalid_schema(client):
 
 
 def test_missing_track_is_400_incomplete_tracks(client):
-    resp = _sync(client, SECRET, 1, manifests=[_manifest("bandit"), _manifest("krypton")])
+    resp = _sync(client, SECRET, 1, manifests=[_manifest("bandit"), _manifest("krypton"), _manifest("natas")])
     assert resp.status_code == 400
     assert resp.get_json()["error"] == "incomplete_tracks"
 
@@ -214,7 +220,7 @@ def test_bad_tier_costs_is_422_catalog_validation_failed(client):
         sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     ).encode()
     bad["digest"] = hashlib.sha256(raw).hexdigest()
-    resp = _sync(client, SECRET, 1, manifests=[bad, _manifest("krypton"), _manifest("natas")])
+    resp = _sync(client, SECRET, 1, manifests=[bad, _manifest("krypton"), _manifest("natas"), _manifest("sentinel")])
     assert resp.status_code == 422
     assert resp.get_json()["error"] == "catalog_validation_failed"
 
@@ -222,13 +228,13 @@ def test_bad_tier_costs_is_422_catalog_validation_failed(client):
 def test_tampered_digest_is_422(client):
     bad = _manifest("bandit")
     bad["digest"] = "f" * 64
-    resp = _sync(client, SECRET, 1, manifests=[bad, _manifest("krypton"), _manifest("natas")])
+    resp = _sync(client, SECRET, 1, manifests=[bad, _manifest("krypton"), _manifest("natas"), _manifest("sentinel")])
     assert resp.status_code == 422
 
 
 def test_rejected_sync_leaves_previous_catalog_active(client):
     assert _sync(client, SECRET, 1).status_code == 200
-    bad_resp = _sync(client, SECRET, 2, manifests=[_manifest("bandit"), _manifest("krypton")])
+    bad_resp = _sync(client, SECRET, 2, manifests=[_manifest("bandit"), _manifest("krypton"), _manifest("natas")])
     assert bad_resp.status_code == 400
 
     # Unlock still resolves against the revision-1 catalog, proving the
@@ -267,7 +273,7 @@ def test_same_revision_same_digest_is_idempotent(client):
 
 def test_same_revision_different_digest_is_409_conflict(client):
     _sync(client, SECRET, 1)
-    resp = _sync(client, SECRET, 1, manifests=[_manifest("bandit", entry_costs=(1, 2, 3)), _manifest("krypton"), _manifest("natas")])
+    resp = _sync(client, SECRET, 1, manifests=[_manifest("bandit", entry_costs=(1, 2, 3)), _manifest("krypton"), _manifest("natas"), _manifest("sentinel")])
     assert resp.status_code == 409
     assert resp.get_json()["error"] == "revision_digest_conflict"
 
@@ -378,6 +384,7 @@ def test_unlocked_is_independent_per_challenge_entry(client):
         _manifest("bandit", entry_name="bandit challenge 1"),
         _manifest("krypton"),
         _manifest("natas"),
+        _manifest("sentinel"),
     ])
     client.post(
         "/wallet/unlock",

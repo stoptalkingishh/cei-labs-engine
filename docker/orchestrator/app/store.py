@@ -903,7 +903,7 @@ class RangeStore:
 
 
 class WalletStore:
-    """SQLite-backed hint-wallet state: the accepted three-track catalog
+    """SQLite-backed hint-wallet state: the accepted required-track catalog
     (`wallet_catalog`, a singleton row -- see the revision/digest contract in
     docs/P0-FIX-LOG-2026-07-23.md) and a record of which (owner, track,
     entry, tier) hints have already been unlocked (`wallet_unlocks`), so a
