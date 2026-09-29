@@ -68,12 +68,38 @@ docker exec "$db_container" sh -c \
   > "$DEST/ctfd.sql"
 [[ -s "$DEST/ctfd.sql" ]] || { echo "database dump is empty" >&2; exit 1; }
 
+# `docker run -v <named-volume>:/path` CREATES the volume when it does not
+# exist, so a typo'd STACK_NAME (or an orchestrator not yet redeployed under
+# the current name) did not fail here — it silently produced a tar of an empty
+# directory. Both archives below then passed every existing check: the
+# checksum recorded them, and verify-backup.sh only asserted the file was
+# non-empty and that tar could read it. The result was a "verified" backup
+# containing zero uploads and zero orchestrator state, indistinguishable from
+# a good one until the moment someone needed to restore it. Fail here instead.
+for volume in "${STACK_NAME}_ctfd_uploads" "${STACK_NAME}_orchestrator_data"; do
+  if ! docker volume inspect "$volume" >/dev/null 2>&1; then
+    echo "required volume '$volume' does not exist — refusing to back up an empty substitute" >&2
+    echo "check STACK_NAME (currently '${STACK_NAME}') against the deployed stack" >&2
+    exit 1
+  fi
+done
+
 docker run --rm --entrypoint tar \
   -v "${STACK_NAME}_ctfd_uploads:/source:ro" "$ctfd_image" -C /source -cf - . \
   > "$DEST/ctfd-uploads.tar"
 docker run --rm --entrypoint tar \
   -v "${STACK_NAME}_orchestrator_data:/source:ro" "$orch_image" -C /source -cf - . \
   > "$DEST/orchestrator-data.tar"
+
+# A volume that exists can still be empty (created but never written to, e.g.
+# by an interrupted first deploy), which tar renders as a valid archive of
+# "./" entries. The orchestrator store is the one archive that must never be
+# empty — a restore without it comes up with no instance registry at all — so
+# assert real content rather than a readable tarball.
+if [[ -z "$(tar -tf "$DEST/orchestrator-data.tar" | grep -v '/\?$' | head -n 1)" ]]; then
+  echo "orchestrator-data.tar contains no files — the orchestrator volume is empty" >&2
+  exit 1
+fi
 
 tar -C "$DEPLOYMENT_ROOT" -cf - \
   docker/.env docker/secrets docker/traefik/dynamic docker/traefik/certs \
@@ -95,7 +121,13 @@ docker service inspect "${stack_service_ids[@]}" > "$DEST/services.json"
   source "$DEPLOYMENT_ROOT/docker/.env"
   set +a
   cd "$DEPLOYMENT_ROOT/docker"
-  docker stack config -c "$REPO_ROOT/docker/stack.yml"
+  # DEPLOYMENT_ROOT, not REPO_ROOT: every other path in this backup honours it
+  # (the config tar, the .env source, the cd above), and it exists precisely to
+  # support a deployment tree distinct from the engine checkout. Resolving the
+  # stack from REPO_ROOT recorded the wrong stack whenever the two differed —
+  # and this file is the sole input to the restore deploy, so the wrong stack
+  # is what gets deployed.
+  docker stack config -c "$DEPLOYMENT_ROOT/docker/stack.yml"
 ) > "$DEST/resolved-stack.yml"
 
 BACKUP_RUN_ID="$RUN_ID" BACKUP_DIR="$DEST" python3 - <<'PY'
