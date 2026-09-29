@@ -24,39 +24,7 @@ jobs:
         run: pip install PyYAML
 
       - name: Parse and validate YAML files
-        run: |
-          python3 -c '
-          import os, sys, yaml
-          success = True
-          invalid_files = []
-          for root, dirs, files in os.walk("."):
-              # Skip hidden directories like .git
-              if any(d.startswith(".") for d in root.split(os.sep)):
-                  continue
-              for file in files:
-                  if file.endswith((".yml", ".yaml")):
-                      path = os.path.join(root, file)
-                      try:
-                          with open(path, "r") as f:
-                              # Load all documents if multi-document file
-                              list(yaml.safe_load_all(f))
-                      except Exception as e:
-                          print(f"[-] Invalid YAML format in {path}: {e}", file=sys.stderr)
-                          invalid_files.append(f"{path}: {e}")
-                          success = False
-          if not success:
-              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-                  summary.write("### ❌ YAML Validation Failed\n")
-                  summary.write("The following files failed parsing validation:\n")
-                  for error in invalid_files:
-                      summary.write(f"- `{error}`\n")
-              sys.exit(1)
-          
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-              summary.write("### ✅ YAML Validation Passed\n")
-              summary.write("All YAML configurations parsed cleanly without structural defects.\n")
-          print("[+] All YAML configurations parsed cleanly.")
-          '
+        run: python3 scripts/validate-yaml.py
 
   validate-stack:
     runs-on: ubuntu-latest
@@ -67,8 +35,10 @@ jobs:
         run: |
           cp docker/.env.example docker/.env
           cp -r docker/secrets.example docker/secrets
+          set +e
           (cd docker && docker compose -f stack.yml config --quiet) > compose_output.txt 2>&1
           exit_code=$?
+          set -e
 
           cat compose_output.txt
 
