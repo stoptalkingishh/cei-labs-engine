@@ -37,9 +37,11 @@ cross the boundary between the plaintext JSON the rest of this file already
 worked with and the ciphertext actually written to disk, so the rest of
 this module (query shapes, transaction handling, the reservation race logic
 et al) is unchanged. `_decrypt_plan` tolerates rows written before this
-patch (plain JSON, not a Fernet token) so an in-place upgrade doesn't break
-reads of already-running instances; every write after the upgrade always
-produces ciphertext.
+patch -- recognized by the stored value actually being plain JSON (it starts
+with '{'), never by "decryption raised something", so an AEAD failure can't be
+turned into a plan this module then vouches for (see its docstring) -- so an
+in-place upgrade doesn't break reads of already-running instances; every
+write after the upgrade always produces ciphertext.
 """
 import json
 import sqlite3
@@ -47,7 +49,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from .crypto import CredentialCipher, InvalidToken
+from .crypto import CredentialCipher
 from .docker_client import ServiceSpec
 from .instance_types import InstancePlan, RangePlan
 
@@ -165,6 +167,13 @@ def _plan_to_json(plan: InstancePlan) -> str:
         "access": plan.access,
         "network": plan.network,
         "range_owner_id": plan.range_owner_id,
+        # Which access keys are per-team flag material rather than connect
+        # info -- needed after a restart, when main.py rebuilds responses
+        # from the persisted plan and can no longer see the original spec's
+        # secret_keys/alpha_secret_keys/fixed_secret_keys. Optional on read
+        # for the same reason every other field here is: a plan row written
+        # before this field existed simply has no flag keys recorded.
+        "flag_secret_keys": list(plan.flag_secret_keys),
     })
 
 
@@ -178,6 +187,7 @@ def _plan_from_json(raw: str) -> InstancePlan:
         access=d["access"],
         network=d.get("network"),
         range_owner_id=d.get("range_owner_id"),
+        flag_secret_keys=list(d.get("flag_secret_keys") or []),
     )
 
 
@@ -212,18 +222,46 @@ def _encrypt_plan(cipher: CredentialCipher, plan_json: "str | None") -> "str | N
 
 def _decrypt_plan(cipher: CredentialCipher, stored: "str | None") -> "str | None":
     """Inverse of _encrypt_plan. Tolerates rows persisted before this module
-    started encrypting plan_json: a pre-upgrade row is plain JSON (starts
-    with '{'), which is never valid Fernet ciphertext, so InvalidToken (or
-    any decode failure) falls back to treating `stored` as already-plaintext
-    JSON. This is a one-way migration path -- the next write of that same
-    row (finalize/put) always produces ciphertext, so rows self-upgrade as
-    they're touched."""
+    started encrypting plan_json, and *only* those: a pre-upgrade row is
+    plain JSON produced by _plan_to_json(), which always begins with '{' and
+    is never valid Fernet ciphertext. The test is therefore on the stored
+    value's own shape, decided BEFORE any decryption is attempted -- not on
+    whatever exception decryption happened to raise. This is a one-way
+    migration path: the next write of that same row (finalize/put) always
+    produces ciphertext, so rows self-upgrade as they're touched.
+
+    Every other value is treated as what it is -- genuine ciphertext -- and a
+    failure to decrypt it is raised, never swallowed.
+
+    That used to be the other way round: `except (InvalidToken, ValueError):
+    return stored`, i.e. "the AEAD check failed, so promote the raw stored
+    value to authoritative-plan status anyway". Any decryption failure --
+    wrong key, truncated write, tampering, garbage -- took that path, so a
+    decrypt() failure was indistinguishable from the legacy-row case, and the
+    only signal anything was wrong was a JSON error raised much later, in a
+    different module, from data this function had already vouched for. The
+    guard is now on the stored value's own shape, so the fallback is reachable
+    only by something that actually looks like the pre-upgrade row it exists
+    for; anything else has to decrypt or raise.
+
+    Raising is also the only outcome that leaves the instance recoverable by
+    an operator. Silently accepting a corrupt row does not make DELETE work:
+    claim_for_replacement()/teardown() both reach the plan through this
+    function, so a value that isn't the plan this row held fails there either
+    way -- the swallow only hides *why*, turning a decrypt failure at this
+    layer into an unexplained 500 on DELETE /instances/<owner>/<key> (and on
+    /admin/instances/...) that nobody can act on. Raising names the row and
+    the cause; the remedy (restore the right credential_encryption_key, or
+    drop the row out of band) is the same one either way.
+    """
     if stored is None:
         return None
-    try:
-        return cipher.decrypt(stored)
-    except (InvalidToken, ValueError):
+    if stored.startswith("{"):
+        # Genuine pre-encryption row (see docstring) -- plain JSON, never
+        # ciphertext. Checked before decrypt() precisely so this stays a
+        # shape test and not a "did it blow up?" test.
         return stored
+    return cipher.decrypt(stored)
 
 
 class InstanceStore:

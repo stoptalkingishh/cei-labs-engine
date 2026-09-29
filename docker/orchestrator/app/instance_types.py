@@ -153,6 +153,18 @@ class InstancePlan:
     access: dict[str, str]
     network: "str | None" = field(default=None)  # owned + airgapped; None for target-attacker (shared range network instead)
     range_owner_id: "str | None" = field(default=None)  # set for target-attacker: which range this target belongs to
+    # Which keys of `access` are per-team flag material rather than ordinary
+    # connect info -- i.e. exactly the level keys fed to the
+    # generate_*_track_secrets() calls above. `access` itself can't carry
+    # that distinction: track_secrets is splatted straight into it, so
+    # "krypton2" sits beside "connect_port" with nothing marking which is
+    # which. main.py needs this to keep flag values out of the API responses
+    # where the caller has no use for them (see its _access_for_response),
+    # so it's recorded here at planning time -- the only moment the two are
+    # still distinguishable. The names aren't secret; the values they resolve
+    # to are, and those stay exactly where they were (in `access` and in
+    # LEVEL_SECRETS, same encrypted-at-rest plan_json column).
+    flag_secret_keys: list = field(default_factory=list)
 
 
 @dataclass
@@ -280,7 +292,11 @@ def plan_single_target(
     # `access` too, under each level's own key, purely as the transport
     # back to CTFd -- routes.py's _persist_and_scrub_secrets MUST strip
     # these back out of `access` before a player ever sees it (access is
-    # otherwise displayed verbatim as connect info).
+    # otherwise displayed verbatim as connect info), and main.py's
+    # _access_for_response is the server-side half of the same rule for every
+    # response the plugin's scrub path does not feed. `flag_secret_keys`
+    # records which `access` keys those are, since once splatted in there is
+    # nothing left distinguishing them from ordinary connect info.
     secret_keys = spec.get("secret_keys") or []
     alpha_secret_keys = spec.get("alpha_secret_keys") or []
     fixed_secret_keys = spec.get("fixed_secret_keys") or []
@@ -329,6 +345,7 @@ def plan_single_target(
             ),
             **track_secrets,
         },
+        flag_secret_keys=sorted(track_secrets),
     )
 
 
@@ -571,4 +588,8 @@ def plan_range_target(
             "target_note": "Target is reachable only from your attacker workstation, at the hostname above.",
             **track_secrets,
         },
+        # Only this plan's own level keys: range_access (splatted in above)
+        # carries the shared attacker's ssh_password/novnc_password, which
+        # are genuine credentials the player needs, not flag material.
+        flag_secret_keys=sorted(track_secrets),
     )
