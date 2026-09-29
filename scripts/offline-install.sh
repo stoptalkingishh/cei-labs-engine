@@ -40,6 +40,27 @@ log_warn()  { echo -e "${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
 log_error() { echo -e "${RED}[-]${NC} $*" | tee -a "$LOG_FILE" >&2; }
 log_step()  { echo -e "\n${BLUE}══ $* ══${NC}" | tee -a "$LOG_FILE"; }
 
+# 32 alphanumerics, the length every secret here is written to look like it has.
+#
+# The previous `head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32`
+# reads as though it draws 64 random bytes and keeps the alphanumeric ones,
+# but tr *deletes* the other 62/256 of them, so 64 raw bytes yield ~15.5
+# usable characters and the final `head -c 32` almost never has 32 to give.
+# Measured over 15 runs on Linux: 13-20 characters, never 32, never empty,
+# always exit 0 -- so every generated secret (all of docker/secrets/, and the
+# CTFd admin password below) was silently ~90 bits where the code implied
+# ~190. 256 raw bytes clears the filter to ~62, and the length is asserted
+# rather than assumed.
+random_secret() {
+  local value
+  value=$(head -c 256 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32)
+  if [[ ${#value} -ne 32 ]]; then
+    log_error "secret generation produced ${#value} characters, expected 32"
+    return 1
+  fi
+  printf '%s' "$value"
+}
+
 # Track pass/fail per numbered step for the final summary. Never let a
 # failure in one step stop later ones — that's the whole point of not
 # using `set -e` here; every step function traps its own errors.
@@ -382,12 +403,18 @@ step7_deploy_stack() {
         continue
       fi
       if grep -q CHANGE_ME "$f"; then
-        head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32 > "$f"
+        random_secret > "$f"
       fi
     done
     if grep -q CHANGE_ME docker/secrets/credential_encryption_key.txt 2>/dev/null; then
       python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"         > docker/secrets/credential_encryption_key.txt 2>/dev/null         || python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"           > docker/secrets/credential_encryption_key.txt
     fi
+    # Everything in docker/secrets/ is a Swarm secret mounted into a
+    # root-privileged container, and ctf_key seeds every Juice Shop flag.
+    # They were written under the default umask, i.e. -rw-r--r--, while the
+    # token files a few hundred lines below are explicitly chmod 600. The
+    # token files were the careful ones and these were the ones that needed it.
+    chmod 600 docker/secrets/*.txt
   fi
 
   # This is a fully offline install with no DNS server standing up
@@ -450,7 +477,7 @@ step8_bootstrap_ctfd() {
   fi
 
   local admin_pass
-  admin_pass=$(head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32)
+  admin_pass=$(random_secret)
 
   local out
   out=$("$py" - "$url" "$admin_pass" <<'PYEOF'

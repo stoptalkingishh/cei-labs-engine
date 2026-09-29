@@ -16,6 +16,16 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Every sprint path below is relative to the repo root, and ctfcli resolves its
+# own workspace from $HOME. This script computed REPO_ROOT and then never used
+# it, so it only behaved correctly when invoked from the repo root — which is
+# not how it is normally run: the documented multi-host flow is to SSH to the
+# manager and run /opt/cei-labs/cei-labs-engine/scripts/challenges-load.sh
+# from wherever the shell happens to be. In that case every sprint directory
+# test below missed, load_sprint returned 0, and the script finished by
+# printing "...executed successfully" having loaded nothing at all.
+cd "$REPO_ROOT"
+
 CTFD_URL="${CTFD_URL:-https://ctfd.ctf.local}"
 CTFD_ADMIN_TOKEN="${CTFD_ADMIN_TOKEN:-}"
 SYNC_SECRET_FILE="${SYNC_SECRET_FILE:-$REPO_ROOT/docker/secrets/plugin_shared_secret.txt}"
@@ -70,8 +80,9 @@ if [[ "$DRY_RUN" == "false" ]]; then
     exit 1
   fi
 
-  # FIXED: Verify presence of active local ctfcli workspace before running commands
-  if [[ ! -d ".ctf" ]]; then
+  # FIXED: ctfcli keeps its workspace in $HOME, not in the current directory,
+  # so testing for a bare ".ctf" here never matched a real workspace.
+  if [[ ! -d "${HOME}/.ctf" ]]; then
     log_warn "Local ctfcli workspace registry directory not detected. Initializing context..."
     printf '%s\n%s\n' "${CTFD_URL}" "${CTFD_ADMIN_TOKEN}" | ctf init >/dev/null || true
   fi
@@ -143,14 +154,21 @@ PYEOF
 }
 
 # ── CHALLENGE INGESTION HANDLER ───────────────────────────────────────────────
+# Counts the sprint directories that were actually present. Without it, "every
+# selected directory is missing" and "every sprint synced cleanly" produce
+# byte-identical output, which is how a run that loaded nothing was able to
+# report success.
+SPRINTS_FOUND=0
+
 load_sprint() {
   local dir="$1"
   local description="$2"
 
   if [[ ! -d "$dir" ]]; then
-    log_warn "Directory reference '$dir' missing from tree. Skipping deployment of ${description}..."
+    log_warn "Directory '$dir' missing from the tree; skipping ${description}."
     return 0
   fi
+  SPRINTS_FOUND=$((SPRINTS_FOUND + 1))
 
   log_info "Synchronizing Workspace Stack: ${description} [${dir}]"
 
@@ -205,4 +223,13 @@ case "$SPRINT" in
     ;;
 esac
 
-log_info "Challenge ingestion sync phase operations executed successfully."
+if [[ "$SPRINTS_FOUND" -eq 0 ]]; then
+  log_error "No challenge directories were found, so nothing was loaded into CTFd."
+  log_error "Searched for the sprint paths above, relative to $REPO_ROOT."
+  log_error "This repo ships no challenge content by design — it hosts challenges, it"
+  log_error "does not author them. Clone CEI-Labs-Wargames and run its deploy.sh, or"
+  log_error "place challenge YAML in challenges/sprint{1-otw,2-web,3-pccc}/."
+  exit 1
+fi
+
+log_info "Challenge ingestion sync phase operations executed successfully (${SPRINTS_FOUND} sprint(s) loaded)."
