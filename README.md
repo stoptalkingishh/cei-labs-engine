@@ -329,12 +329,19 @@ After deployment:
 4. Load challenge content. This repo ships no bundled challenges — pull
    content from a wargames repo first (e.g. clone
    [`CEI-Labs-Wargames`](https://github.com/stoptalkingishh/CEI-Labs-Wargames)
-   and run its own `deploy.sh`), or drop challenge YAML under
-   `challenges/sprintN-*/` here and run:
+   and run its own `deploy.sh`), **or** place challenge YAML yourself in the
+   three sprint directories `scripts/challenges-load.sh` looks for —
+   `challenges/sprint1-otw/`, `challenges/sprint2-web/`,
+   `challenges/sprint3-pccc/` — and then run:
 
 ```bash
+export CTFD_URL="https://ctfd.${BASE_DOMAIN}"   # defaults to https://ctfd.ctf.local
 ./scripts/challenges-load.sh
 ```
+
+The script also needs the `ctfcli` binary (`pip install ctfcli`) and exits
+non-zero if none of the sprint directories are present, rather than reporting
+success with nothing loaded.
 
 Any challenge whose YAML declares `instance_type` (see `docker/orchestrator/README.md`) automatically gets a "Launch Environment" link wired up via the instance-launcher plugin — both loading paths populate the same CTFd instance/mapping tables.
 

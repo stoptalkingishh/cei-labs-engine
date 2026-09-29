@@ -46,10 +46,30 @@ Fill in `docker/.env`:
 
 Replace every `CHANGE_ME` placeholder in `docker/secrets/*.txt` with a real
 random value (`openssl rand -hex 32` per file is fine for a local test —
-these are never committed, `docker/secrets/` is gitignored). There are six:
-`ctf_key.txt`, `ctfd_db_password.txt`, `ctfd_db_root_password.txt`,
-`ctfd_secret_key.txt`, `orchestrator_admin_password.txt`,
-`plugin_shared_secret.txt`.
+these are never committed, `docker/secrets/` is gitignored). There are **eight**
+(also `docker/secrets.example/` and `docker/stack.yml`):
+
+| File | Purpose |
+| --- | --- |
+| `ctf_key.txt` | Seeds every Juice Shop flag. |
+| `ctfd_db_password.txt` | CTFd's own DB user password. |
+| `ctfd_db_root_password.txt` | MariaDB root password (also used by backup/restore). |
+| `ctfd_secret_key.txt` | CTFd session signing key. |
+| `orchestrator_admin_password.txt` | `X-Admin-Auth` for the orchestrator's `/admin/*` routes. |
+| `plugin_shared_secret.txt` | `X-Orchestrator-Auth`, shared by CTFd and the orchestrator. |
+| `credential_encryption_key.txt` | Fernet key for per-team credentials and flags at rest. **Required at orchestrator startup** — see below. |
+| `hint_wallet_sync_secret.txt` | HMAC key for the hint-wallet catalog sync. |
+
+`credential_encryption_key.txt` is **not** an arbitrary string: the orchestrator
+hands it straight to `cryptography.fernet.Fernet()`, and `create_app()` raises
+at startup if it is missing or not a valid key — there is no production
+fallback, so the orchestrator crash-loops on every start until it is set.
+Generate it the way `scripts/install.sh:133` does:
+
+```bash
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" \
+  > docker/secrets/credential_encryption_key.txt
+```
 
 **If you're redeploying after a previous local attempt**, don't assume old
 secrets and volumes still agree with each other. A stale `ctfd_db_data`
@@ -61,14 +81,17 @@ the stack's named volumes before redeploying clean.
 
 ## 2. Build images locally (if not pulling from GHCR)
 
-With `GITHUB_ORG=local-test` / `IMAGE_TAG=dev`, build and tag the three
-custom images yourself using the same build contexts CI uses
-(`.github/workflows/build-*.yml` for the exact context/Dockerfile paths):
+With `GITHUB_ORG=local-test` / `IMAGE_TAG=dev`, build and tag the custom
+images yourself using the same build contexts CI uses
+(`.github/workflows/build-*.yml` for the exact context/Dockerfile paths).
+There are **six** build workflows, and `tcp-gateway` is not optional — it is the
+`GATEWAY_IMAGE` every orchestrator instance type routes player traffic
+through:
 
 ```bash
 docker build -t ghcr.io/local-test/cei-labs-engine/ctfd:dev          -f docker/ctfd/Dockerfile docker/ctfd
 docker build -t ghcr.io/local-test/cei-labs-engine/orchestrator:dev  -f docker/orchestrator/Dockerfile docker/orchestrator
-docker build -t ghcr.io/local-test/cei-labs-engine/tcp-gateway:dev   -f docker/tcp-gateway/Dockerfile docker/tcp-gateway
+docker build -t ghcr.io/local-test/cei-labs-engine/tcp-gateway:dev   -f operator/tcp-gateway/Dockerfile operator/tcp-gateway
 ```
 
 (Confirm exact paths against the actual workflow files if they've moved —
