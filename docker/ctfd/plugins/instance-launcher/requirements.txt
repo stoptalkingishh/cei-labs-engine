@@ -1,4 +1,4 @@
-requests==2.32.3
+requests==2.33.0
 # Range-constrained, not exact-pinned like docker/orchestrator/requirements.txt's
 # flask==3.0.3. That pin is safe there because the orchestrator gets its own
 # dedicated venv/image with nothing else opinionated about Flask's version.
