@@ -1,24 +1,32 @@
 """docker/ctfd/plugins/submission-history/routes.py
 
-Three routes, all participant-facing, all `@authed_only`, all read-only, and
-all scoped strictly to the requesting account's OWN `Solves` rows -- never
-another team's or user's:
+Three routes, all read-only, and all scoped strictly to the requesting
+account's OWN `Solves` rows -- never another team's or user's:
 
-  - /api/solve/<id>   the flag text this account submitted for a specific
-                      challenge, if (and only if) this account has actually
-                      solved it. Used by submission-history.js's reveal
-                      button in the challenge modal.
-  - /api/solves       every challenge this account has solved, each with its
-                      submitted flag -- the JSON backing /solves below, and
-                      the more useful shape for the actual motivating case
-                      (looking up an old Bandit/Krypton/Natas password
-                      without having to reopen each challenge individually).
-  - /solves           a plain HTML page rendering /api/solves' data, reached
-                      directly (bookmarkable, works even if the injected
-                      modal script never loads) -- the same
-                      "full page as a fallback for the injected JS" shape
-                      instance-launcher/routes.py's /launch/<id> already
-                      uses next to its own /api/status, /api/launch.
+  - /api/solve/<id>   `@authed_only`. The flag text this account submitted
+                      for a specific challenge, if (and only if) this account
+                      has actually solved it. Used by submission-history.js's
+                      reveal button in the challenge modal. One flag per
+                      deliberate click, scoped to the challenge already open.
+  - /api/solves       `@admins_only`. Every challenge this account has ever
+                      solved, each with its submitted flag.
+  - /solves           `@admins_only`. A plain HTML page rendering /api/solves'
+                      data, for the same bulk-dump purpose.
+
+Why the two bulk routes are admin-only: they are an unthrottled, unlogged
+flag-export endpoint in one GET. Even correctly account-scoped, that is the
+single highest-leverage call available to an attacker holding any valid
+session -- and this platform's README threat model explicitly includes
+"automated tools attacking CTFd itself to extract flags directly". It also
+undercuts this plugin's own purpose: the per-challenge reveal exists to
+discourage flag-sharing screenshots, which a bulk endpoint that hands a team
+its entire flag history in one request (to be re-shared) works against.
+
+They are also unreachable from the UI: submission-history.js deliberately has
+no link to either (see its header comment -- the toggle is the only path to a
+submitted flag), so gating them costs a player nothing. The ergonomic minimum
+-- the one flag you just earned, for the challenge you're looking at -- stays
+available to every authenticated player via /api/solve/<id>.
 
 Scoping: CTFd's `Solves` table (CTFd/models/__init__.py) has separate
 `user_id` and `team_id` columns, not a single unified `account_id` column --
@@ -35,7 +43,7 @@ from flask import Blueprint, jsonify, render_template
 
 from CTFd.models import Challenges, Solves
 from CTFd.utils import get_config
-from CTFd.utils.decorators import authed_only
+from CTFd.utils.decorators import admins_only, authed_only
 from CTFd.utils.user import get_current_user
 
 submission_history_bp = Blueprint(
@@ -110,14 +118,14 @@ def api_solve(challenge_id: int):
 
 
 @submission_history_bp.route("/api/solves", methods=["GET"])
-@authed_only
+@admins_only
 def api_solves():
     rows = _own_solve_rows()
     return jsonify(solves=[_serialize(solve, name) for solve, name in rows]), 200
 
 
 @submission_history_bp.route("/solves", methods=["GET"])
-@authed_only
+@admins_only
 def solves_page():
     rows = _own_solve_rows()
     return render_template("submission_history/solves.html", solves=rows)

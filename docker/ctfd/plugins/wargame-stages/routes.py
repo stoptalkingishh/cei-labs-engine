@@ -155,6 +155,22 @@ def _reconcile_stage(stage):
         ).all()
     } if ids else set()
     own_ids = ids - already_elsewhere
+    # Two different empty-`own_ids` cases must not be conflated, because the
+    # delete below is only safe for one of them:
+    #
+    #  - ids is empty: the category has no challenges in CTFd at all, so every
+    #    existing mapping for this stage is stale and clearing them is the
+    #    correct cleanup.
+    #  - ids is non-empty but own_ids is empty: EVERY challenge in the category
+    #    is already mapped to a DIFFERENT stage, so this stage's own mappings
+    #    are (at most) a subset of ids -- they must be left alone. The old
+    #    `... if own_ids else True` made this case destructive: with no ids to
+    #    exclude, the filter degenerates to `.filter(True)` and wipes every
+    #    mapping for this stage, which then reports 0 mapped and can never be
+    #    started again (start() aborts 409 on the count check) without manual
+    #    DB surgery.
+    if ids and not own_ids:
+        return 0
     GameStageChallenge.query.filter_by(stage_id=stage.id).filter(~GameStageChallenge.challenge_id.in_(own_ids) if own_ids else True).delete(synchronize_session=False)
     existing = {row.challenge_id for row in GameStageChallenge.query.filter_by(stage_id=stage.id).all()}
     for challenge in challenges:
@@ -208,7 +224,13 @@ def machine_reconcile():
     plugin's admin page first. See docs/staggered-wargame-stages.md."""
     provided = request.headers.get("X-Sync-Auth", "")
     expected = read_secret("plugin_shared_secret")
-    if not expected or not hmac.compare_digest(provided, expected):
+    # Compare as bytes, not str: hmac.compare_digest raises TypeError on str
+    # operands containing any byte >= 0x80, so an X-Sync-Auth header with a
+    # non-ASCII byte would turn a rejected request into an unhandled 500
+    # instead of the 401 it is -- a trivially reachable error on an endpoint
+    # that must never fail open. Same encode-then-compare the orchestrator
+    # already does on its own side (docker/orchestrator/app/main.py).
+    if not expected or not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
         abort(401)
     return jsonify(reconcile_all_pending())
 
