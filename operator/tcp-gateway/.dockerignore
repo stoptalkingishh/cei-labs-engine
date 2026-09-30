@@ -1,0 +1,41 @@
+# Docker build context: operator/tcp-gateway
+#
+# Built by .github/workflows/build-tcp-gateway.yml (context:
+# operator/tcp-gateway).
+#
+# The Dockerfile COPYs exactly one thing:
+#   server.py -> /server.py
+# It is not excluded below. Note the Dockerfile's `FROM python:3.12-alpine`
+# is pinned by tag but not by digest, so a rebuild can pick up a different
+# base layer with no record of what changed -- DL3006/DL3007 do not catch
+# that, and hadolint 2.12.0 does not either (it is DL3026, unflagged here).
+
+# VCS and local tooling state
+.git/
+.gitignore
+.github/
+.venv/
+venv/
+
+# Python build/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Tests are not needed to build or run this image
+tests/
+
+# Never ship local secrets or env overrides into an image
+.env
+.env.*
+!.env.example
+secrets/
+secrets.example/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store

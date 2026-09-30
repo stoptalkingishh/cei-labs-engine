@@ -9,7 +9,12 @@
 set -eu
 
 if [ -f /run/secrets/ctfd_secret_key ]; then
-  export SECRET_KEY="$(cat /run/secrets/ctfd_secret_key)"
+  # Assign, then export, as a separate step: `export X="$(cmd)"` declares the
+  # variable as part of an assignment whose exit status is the command's, so a
+  # failing `cat` is masked by the export succeeding and CTFd then starts with
+  # an empty SECRET_KEY. The password below already took this form.
+  SECRET_KEY="$(cat /run/secrets/ctfd_secret_key)"
+  export SECRET_KEY
 fi
 
 if [ -f /run/secrets/ctfd_db_password ]; then

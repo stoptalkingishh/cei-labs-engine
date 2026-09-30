@@ -1,0 +1,36 @@
+# Docker build context: operator/targets/base-linux
+#
+# Built by .github/workflows/build-target-base-linux.yml (context:
+# operator/targets/base-linux). The Dockerfile has no COPY at all -- the
+# image is built entirely from RUN instructions -- so nothing in this
+# directory is needed in the build context.
+
+# VCS and local tooling state
+.git/
+.gitignore
+.github/
+.venv/
+venv/
+
+# Python build/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Tests are not needed to build or run this image
+tests/
+
+# Never ship local secrets or env overrides into an image
+.env
+.env.*
+!.env.example
+secrets/
+secrets.example/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
