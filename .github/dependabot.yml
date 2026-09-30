@@ -1,0 +1,90 @@
+version: 2
+
+# Each entry below points at the directory that actually holds the manifest,
+# which for this repo is almost never the root:
+#
+#   * No Dockerfile exists at the repository root, so `directory: "/"` for
+#     the docker ecosystem would be pointing at nothing. Dependabot's
+#     `directory` is documented as "the location of the manifest or other
+#     definition files", so the six Dockerfiles (under docker/*/ and
+#     operator/*/) each get their own explicit entry rather than relying on
+#     recursive discovery from the root. Explicit paths are correct under
+#     either interpretation and fail loudly if a Dockerfile moves.
+#   * Likewise there is no top-level requirements.txt; the four pip
+#     manifests each get their own directory.
+#
+# Note on the docker entries: Dependabot does update digest-pinned FROM
+# lines, which is the point -- these digests are the only thing keeping the
+# base images auditable, and nothing else will notice a stale or
+# newly-vulnerable one. The one deliberate exception is noted inline below.
+updates:
+  # CI workflows pin actions by SHA already; Dependabot keeps those current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # The orchestrator gets a dedicated venv/image, so exact pins are safe here.
+  - package-ecosystem: "pip"
+    directory: "/docker/orchestrator"
+    schedule:
+      interval: "weekly"
+
+  # These three are pip-installed INTO the shared ctfd/ctfd:3.8.6 image
+  # (see docker/ctfd/Dockerfile), which bundles its own dependency versions.
+  - package-ecosystem: "pip"
+    directory: "/docker/ctfd/plugins/hint-wallet"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "pip"
+    directory: "/docker/ctfd/plugins/instance-launcher"
+    schedule:
+      interval: "weekly"
+
+  # The single entry here is a commit-pinned VCS URL rather than a PyPI
+  # release; Dependabot tracks the git ref, which is the behavior we want.
+  - package-ecosystem: "pip"
+    directory: "/docker/ctfd/plugins/typed-answer-flags"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/docker/ctfd"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/docker/orchestrator"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/operator/analyst"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/operator/targets/base-linux"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/operator/tcp-gateway"
+    schedule:
+      interval: "weekly"
+
+  # Deliberate exception to the entries above. operator/kali-novnc's
+  # Dockerfile documents that its rolling base digest is meant to be bumped
+  # "deliberately (not automatically)", because the apt-get layer underneath
+  # it is expected to track current Kali packages and a digest bump alone
+  # does not represent a decision anyone made about the image. This `ignore`
+  # keeps version-update PRs from quietly contradicting that intent. It does
+  # NOT suppress security updates -- Dependabot still opens those, which is
+  # the correct outcome. Delete this block if that tradeoff is unwanted.
+  - package-ecosystem: "docker"
+    directory: "/operator/kali-novnc"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "kalilinux/kali-rolling"
