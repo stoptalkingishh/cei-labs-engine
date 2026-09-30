@@ -172,6 +172,31 @@ def _require_str(spec: dict, key: str) -> str:
     return value
 
 
+def _require_port(spec: dict, key: str, default: int) -> int:
+    """Range-checked port from a request spec.
+
+    These used to be a bare ``int(spec.get("port", 3000))``, which accepted
+    anything int() accepted and nothing more: a negative number, a
+    999999999, or a string silently landed in the gateway's TCP_FORWARDS
+    env / Traefik loadbalancer.server.port label, producing a container that
+    can never be reached and a launch that reports success. Out-of-range now
+    fails the request (InvalidInstanceRequestError, which main.py maps to a
+    400) instead of producing that. bool is rejected explicitly because it
+    is an int subclass, and a float is rejected rather than truncated, since
+    "port": 3000.5 is a caller bug worth surfacing.
+    """
+    raw = spec.get(key, default)
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+        raise InvalidInstanceRequestError(f"'{key}' must be an integer port number")
+    try:
+        port = int(raw)
+    except ValueError:
+        raise InvalidInstanceRequestError(f"'{key}' must be an integer port number") from None
+    if not 1 <= port <= 65535:
+        raise InvalidInstanceRequestError(f"'{key}' must be between 1 and 65535")
+    return port
+
+
 def _traefik_labels(router_name: str, hostname: str, port: int, challenge_network: str) -> dict[str, str]:
     return {
         "traefik.enable": "true",
@@ -211,7 +236,7 @@ def plan_web_app(
     workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
 ) -> InstancePlan:
     image = _require_str(spec, "image")
-    port = int(spec.get("port", 3000))
+    port = _require_port(spec, "port", 3000)
     env = spec.get("env") or {}
     if not isinstance(env, dict):
         raise InvalidInstanceRequestError("'env' must be an object of string -> string")
@@ -267,7 +292,7 @@ def plan_single_target(
     instead, for the same reason and via the same flag as the attacker
     links -- one venue-level "we have no DNS" switch, not two."""
     image = _require_str(spec, "image")
-    target_port = int(spec.get("target_port", 22))
+    target_port = _require_port(spec, "target_port", 22)
     protocol = spec.get("protocol", "ssh")
     env = spec.get("env") or {}
     if not isinstance(env, dict):
@@ -376,7 +401,7 @@ def plan_range_attacker(
     fields would silently reintroduce the same unreachable-link problem
     this flag exists to fix."""
     attacker_image = _require_str(spec, "attacker_image")
-    attacker_port = int(spec.get("attacker_port", 6080))
+    attacker_port = _require_port(spec, "attacker_port", 6080)
     # Separate, TLS-only websockify listener (operator/kali-novnc/Dockerfile's
     # /start.sh runs both) that the no-DNS noVNC fallback below is forwarded
     # to instead of the plain `attacker_port`. attacker_port stays plaintext
@@ -386,8 +411,8 @@ def plan_range_attacker(
     # the Traefik route -- goes straight from the player's browser, through
     # tcp-gateway (which does zero TLS of its own), to this container, so it
     # needs its own encrypted listener rather than reusing the plaintext one.
-    attacker_novnc_tls_port = int(spec.get("attacker_novnc_tls_port", 6443))
-    attacker_ssh_port = int(spec.get("attacker_ssh_port", 22))
+    attacker_novnc_tls_port = _require_port(spec, "attacker_novnc_tls_port", 6443)
+    attacker_ssh_port = _require_port(spec, "attacker_ssh_port", 22)
     attacker_env = dict(spec.get("attacker_env") or {})
 
     # Security: generate random per-range credentials here, at instance-

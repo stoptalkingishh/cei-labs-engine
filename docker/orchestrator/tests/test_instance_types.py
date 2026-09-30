@@ -46,6 +46,46 @@ def test_web_app_plan_requires_image():
         it.plan_web_app("team-1", "app", {}, BASE_DOMAIN, CHALLENGE_NET)
 
 
+# ── port range validation ─────────────────────────────────────────────────────
+# Every one of these used to be a bare int(spec.get(...)), so a value like
+# 999999999 flowed straight into the gateway's TCP_FORWARDS env and the
+# Traefik loadbalancer.server.port label: the launch reported success and
+# produced a container that nothing could ever route to. Out of range is a
+# bad request, not a silently broken instance.
+
+@pytest.mark.parametrize("bad_port", [0, -1, 99999, 65536, 1.5, True, None, "http", ""])
+def test_web_app_rejects_an_out_of_range_or_non_integer_port(bad_port):
+    with pytest.raises(it.InvalidInstanceRequestError, match="port"):
+        it.plan_web_app("team-1", "app", {"image": "img", "port": bad_port}, BASE_DOMAIN, CHALLENGE_NET)
+
+
+@pytest.mark.parametrize("bad_port", [0, -22, 99999, None, "ssh"])
+def test_single_target_rejects_an_out_of_range_or_non_integer_target_port(bad_port):
+    with pytest.raises(it.InvalidInstanceRequestError, match="target_port"):
+        it.plan_single_target(
+            "team-1", "otw", {"image": "img", "target_port": bad_port},
+            allocated_port=32000, base_domain=BASE_DOMAIN,
+        )
+
+
+@pytest.mark.parametrize(
+    "field", ["attacker_port", "attacker_novnc_tls_port", "attacker_ssh_port"]
+)
+@pytest.mark.parametrize("bad_port", [0, 99999, "noVNC"])
+def test_range_attacker_rejects_an_out_of_range_or_non_integer_port(field, bad_port):
+    with pytest.raises(it.InvalidInstanceRequestError, match=field):
+        it.plan_range_attacker(
+            "team-1", {"attacker_image": "k", field: bad_port}, 32000, 32100, BASE_DOMAIN, CHALLENGE_NET
+        )
+
+
+def test_a_numeric_string_port_is_still_accepted():
+    # CTFd's challenge config is authored as YAML/HTML form input, so a
+    # numeric string has always been a legitimate way to express these.
+    plan = it.plan_web_app("team-1", "app", {"image": "img", "port": "8080"}, BASE_DOMAIN, CHALLENGE_NET)
+    assert json.loads(plan.services[1].env["TCP_FORWARDS"])[0]["port"] == 8080
+
+
 def test_workload_quota_applies_to_every_participant_controlled_service():
     quota = it.WorkloadQuota(300_000_000, 100_000_000, 750_000_000)
     web = it.plan_web_app("team-1", "app", {"image": "web"}, BASE_DOMAIN, CHALLENGE_NET, quota)
