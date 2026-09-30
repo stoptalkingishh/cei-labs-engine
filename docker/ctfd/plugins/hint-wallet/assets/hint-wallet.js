@@ -211,11 +211,15 @@
 
         // 200: "unlocked" (first open) or "already_unlocked" (idempotent
         // re-reveal, same content) -- both carry the real hint content.
-        // routes.py now renders this server-side through CTFd's own
-        // cmark-gfm Markdown pipeline (same one challenge descriptions go
-        // through) before it ever reaches this response, so it's already
-        // safe HTML -- set directly, not escaped, or code fences/backticks/
-        // bold would show up as literal text instead of rendering.
+        // routes.py renders this server-side through CTFd's own cmark-gfm
+        // Markdown pipeline AND then through a sanitize_html() allowlist
+        // (sanitize.py) before it ever reaches this response -- the same
+        // markdown-then-sanitize pair CTFd core applies to challenge
+        // descriptions. cmark-gfm alone is NOT a sanitizer (it runs with
+        // CMARK_OPT_UNSAFE and passes raw HTML through), so this innerHTML
+        // assignment is only safe because of that second step; set it
+        // directly, not escaped, or code fences/backticks/bold would show up
+        // as literal text instead of rendering.
         if (contentDiv) {
           contentDiv.innerHTML = body.content;
         }
