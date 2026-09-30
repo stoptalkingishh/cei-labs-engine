@@ -8,6 +8,7 @@ import pytest
 from app import instance_types as it
 from app.controller import (
     CapacityError,
+    DockerServiceMissingError,
     ExtensionsExhaustedError,
     InstanceController,
     NotFoundError,
@@ -143,6 +144,48 @@ def test_single_target_create_failure_removes_network_and_releases_port():
     assert docker.networks == {}
     assert len(docker.remove_network_calls) == 1
     assert ports.allocate() == 32000
+
+
+def test_teardown_keeps_the_record_when_the_docker_teardown_fails():
+    """teardown() used to `finally: release_reservation(...)`, which deletes
+    the claimed row whether or not the Docker calls underneath it
+    succeeded. A raise from remove_service therefore left the participant
+    with a 500, an instance that had vanished from GET /instances and
+    /admin/instances, and a still-running container full of credentials and
+    flags that no store row accounts for any more. The row has to survive so
+    the teardown can simply be retried."""
+    class FailingRemoveDocker(FakeDockerOrchestratorClient):
+        def remove_service(self, name: str) -> None:
+            raise RuntimeError("synthetic Docker failure")
+
+    docker = FailingRemoveDocker()
+    store = InstanceStore()
+    range_store = RangeStore()
+    ports = PortAllocator(32000, 32767)
+    controller = InstanceController(
+        docker, store, range_store, ports, BASE_DOMAIN, CHALLENGE_NET, 30, 3
+    )
+    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    original_access = store.get("team-1", "juice").plan.access
+
+    with pytest.raises(RuntimeError, match="synthetic Docker failure"):
+        controller.teardown("team-1", "juice")
+
+    record = store.get("team-1", "juice")
+    assert record is not None
+    assert record.plan.access == original_access
+    assert store.count() == 1
+
+
+def test_teardown_still_deletes_the_record_on_success():
+    """The complement of the above: a teardown that actually got through
+    Docker must still remove the row, or instances would pile up forever."""
+    controller, docker, store, _ = make_controller()
+    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+
+    assert controller.teardown("team-1", "juice") is True
+    assert store.get("team-1", "juice") is None
+    assert store.count() == 0
 
 
 def test_single_target_pause_resume_keeps_same_port_and_secrets():
@@ -337,6 +380,35 @@ def test_reboot_of_a_paused_instance_resumes_it_instead_of_force_updating():
 def test_reboot_missing_instance_returns_false():
     controller, docker, store, _ = make_controller()
     assert controller.reboot("nobody", "nothing") is False
+
+
+def test_reboot_raises_when_the_record_exists_but_docker_lost_the_service():
+    """A record whose container vanished is a recoverable state (relaunch
+    recreates it), NOT a missing instance. These used to collapse into the
+    same `False`, and main.py mapped that to a 404 -- which tells the
+    participant's launcher the instance doesn't exist, when the only thing
+    that can bring it back is a relaunch that destroys their progress."""
+    controller, docker, store, _ = make_controller()
+    controller.create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
+    docker.services.clear()  # e.g. a node loss / manual `docker service rm`
+
+    with pytest.raises(DockerServiceMissingError, match="relaunch"):
+        controller.reboot("team-1", "juice")
+
+    # The record -- and therefore the credentials/flags on it -- survives.
+    assert store.get("team-1", "juice") is not None
+
+
+def test_reboot_range_attacker_raises_when_docker_lost_the_attacker():
+    controller, docker, store, range_store = make_controller()
+    controller.create_or_get(it.TARGET_ATTACKER, "team-1", "otw", {"target_image": "t", "attacker_image": "k"})
+    docker.services.clear()
+
+    with pytest.raises(DockerServiceMissingError, match="relaunch"):
+        controller.reboot_range_attacker("team-1")
+
+    assert range_store.get("team-1") is not None
+    assert controller.reboot_range_attacker("nobody") is False
 
 
 def test_reboot_range_attacker():

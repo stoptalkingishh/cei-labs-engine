@@ -161,6 +161,84 @@ def test_relaunch_claim_is_atomic_across_independent_store_objects():
             store.close()
 
 
+def test_concurrent_target_key_additions_are_never_lost():
+    """Regression test for the range-store lost update behind a leaked
+    container.
+
+    The normal case, not an exotic one: a team opens two target-attacker
+    challenges at once, each of which ends in
+    controller._create_range_target doing
+    ``range_store.get()`` -> ``target_keys.add(key)`` -> ``update()``.
+    Both requests read the same pre-mutation set, both add their own key,
+    and both write the whole ``target_keys_json`` column back from that
+    in-memory snapshot -- so whichever UPDATE commits last silently reverts
+    the other's addition. Nothing fails at the time; the damage only shows
+    up later, because teardown_range() iterates exactly this set to decide
+    which target containers to destroy. A lost key means that target's
+    container is never torn down and stays reachable from the team's own
+    attacker, with no store row pointing at it.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "target-keys.db")
+        cipher = CredentialCipher(Fernet.generate_key())
+        stores = [RangeStore(db_path=db_path, cipher=cipher) for _ in range(N_WORKERS)]
+        plan = it.plan_range_attacker(
+            "race-team", {"attacker_image": "k"}, 32000, 32101, BASE_DOMAIN, CHALLENGE_NET
+        )
+        assert stores[0].reserve("race-team")
+        stores[0].finalize("race-team", plan)
+        barrier = threading.Barrier(N_WORKERS)
+
+        def race(i):
+            barrier.wait()
+            stores[i].add_target_key("race-team", f"otw-{i}")
+
+        threads = [threading.Thread(target=race, args=(i,)) for i in range(N_WORKERS)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert stores[0].get("race-team").target_keys == {f"otw-{i}" for i in range(N_WORKERS)}
+        for store in stores:
+            store.close()
+
+
+def test_target_key_removal_does_not_revert_a_concurrent_addition():
+    """The mirror image: a teardown removing one key used to rewrite the
+    column from its own snapshot too, so a target being launched at that
+    exact moment would have its key dropped and its container orphaned."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "target-key-removal.db")
+        cipher = CredentialCipher(Fernet.generate_key())
+        stores = [RangeStore(db_path=db_path, cipher=cipher) for _ in range(2)]
+        plan = it.plan_range_attacker(
+            "race-team", {"attacker_image": "k"}, 32000, 32101, BASE_DOMAIN, CHALLENGE_NET
+        )
+        assert stores[0].reserve("race-team")
+        stores[0].finalize("race-team", plan)
+        stores[0].add_target_key("race-team", "doomed")
+        barrier = threading.Barrier(2)
+
+        def remove():
+            barrier.wait()
+            stores[0].remove_target_key("race-team", "doomed")
+
+        def add():
+            barrier.wait()
+            stores[1].add_target_key("race-team", "survivor")
+
+        threads = [threading.Thread(target=remove), threading.Thread(target=add)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert stores[0].get("race-team").target_keys == {"survivor"}
+        for store in stores:
+            store.close()
+
+
 def test_components_initialize_cleanly_in_parallel_processes():
     worker_count = 12
     context = multiprocessing.get_context("spawn")

@@ -127,12 +127,14 @@ which CTFd persists CTFd-side as `TeamChallengeSecret`). Those are scrubbed
 server-side out of every response except the status route — see "Per-team
 flags in API responses" under `GET /instances/...` below.
 
-`503` if at `ORCHESTRATOR_MAX_INSTANCES` capacity or the SSH port range is
-exhausted; `400` for a malformed spec (including a `secret_keys` /
-`alpha_secret_keys` / `fixed_secret_keys` list longer than
-`MAX_SECRET_KEYS_PER_SPEC`, since every entry costs a generated secret in
-both the container env and the persisted plan); `413` if the request body
-exceeds `MAX_CONTENT_LENGTH_BYTES`.
+`503` if at `ORCHESTRATOR_MAX_INSTANCES` capacity, the SSH port range is
+exhausted, or the creation lost its reservation mid-flight (reaper race — retry
+shortly); `400` for a malformed spec, including out-of-range ports or a
+`secret_keys` / `alpha_secret_keys` / `fixed_secret_keys` list longer than
+`MAX_SECRET_KEYS_PER_SPEC` (every entry costs a generated secret in both the
+container env and the persisted plan); `413` if the request body exceeds
+`MAX_CONTENT_LENGTH_BYTES`. A creation is never reported as `201` unless the
+store actually recorded it.
 
 ### `GET /instances/<owner_id>/<instance_key>`
 
@@ -172,6 +174,12 @@ update --force`equivalent): same identity, same network/port, no state
 carried over inside the container. Faster than a relaunch, useful when a
 participant wedges a service without needing a fresh image pull/reschedule.
 
+`404` only when there is no record of this instance at all. `502`
+(`{"error": ..., "relaunch_required": true}`) when the record *is* there but
+Docker no longer has the service — a recoverable state (a relaunch recreates
+it), not a missing instance, and deliberately never reported as a `404` so a
+client doesn't mistake it for "start over".
+
 ### `POST /instances/<owner_id>/<instance_key>/schedule-shutdown`
 
 Starts (or restarts) a countdown to automatic teardown. Called by the CTFd
@@ -182,6 +190,12 @@ challenge.
 { "delay_seconds": 30 }  // optional, defaults to ORCHESTRATOR_SHUTDOWN_DELAY_SECONDS
 ```
 
+Non-integer values are a `400`, not a `500`. Values are clamped to
+`[0, 86400]` — a negative delay used to put `shutdown_at` in the past, so the
+very next reaper sweep read the countdown as already due and destroyed an
+instance the participant was still using. A JSON `null` means "omitted" and
+uses the configured default.
+
 ### `POST /instances/<owner_id>/<instance_key>/extend-shutdown`
 
 The participant-facing "keep it running 5 more minutes" action.
@@ -190,13 +204,15 @@ The participant-facing "keep it running 5 more minutes" action.
 { "extend_seconds": 300 }  // optional, defaults to ORCHESTRATOR_SHUTDOWN_EXTEND_SECONDS
 ```
 
-`409` if no shutdown is currently pending, or if
+`400` on a non-integer value, clamped to `[0, 86400]` as above. `409` if no
+shutdown is currently pending, or if
 `ORCHESTRATOR_SHUTDOWN_MAX_EXTENSIONS` extensions have already been used
 (default 3, i.e. 15 extra minutes max).
 
 ### `POST /ranges/<owner_id>/attacker/reboot`
 
 Reboots just the shared attacker workstation for a team's range, in place.
+Same `404`-vs-`502` distinction as the instance reboot above.
 
 ### `DELETE /ranges/<owner_id>`
 
@@ -346,10 +362,16 @@ A background thread sweeps every `ORCHESTRATOR_REAP_INTERVAL_SECONDS`
 2. Tears down any instance whose `schedule-shutdown` deadline has passed.
 3. Enforces `ORCHESTRATOR_MAX_INSTANCE_LIFETIME_MINUTES` (default 240), even
    if the participant continuously touches the instance.
-4. Releases creation reservations abandoned longer than
-   `ORCHESTRATOR_RESERVATION_TIMEOUT_SECONDS` (default 300), then removes any
-   label-managed services/networks that have no authoritative store record.
-   Reconciliation is skipped while a non-stale reservation is in flight.
+4. Removes any label-managed services/networks that have no authoritative
+   store record, then releases creation reservations abandoned longer than
+   `ORCHESTRATOR_RESERVATION_TIMEOUT_SECONDS` (default 300). In that order,
+   and neither step touches a creation still in progress: reconciliation is
+   skipped while any reservation is live, skips resources too young to have
+   been abandoned, and a reservation is only released once nothing that
+   could have been created by it is still live in Docker. A launch slower
+   than the timeout (a slow image pull) is not a crashed worker, and treating
+   it as one used to delete the containers it was still building out from
+   under a participant who had already been given the URL.
 
 State is stored in SQLite and the Swarm stack mounts it from the persistent
 `orchestrator_data` volume. Routine service restarts therefore retain instance,
