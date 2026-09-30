@@ -26,6 +26,21 @@ _TASK_DRAIN_POLL_INTERVAL = 0.5
 _NETWORK_READY_TIMEOUT_SECONDS = 5.0
 _NETWORK_READY_POLL_INTERVAL = 0.05
 
+# create_service() retries this many times when Swarm rejects the create
+# because one of the spec's own networks vanished between ensure_network()
+# and the create call -- see _managed_missing_network's docstring for the
+# race. One retry is enough in practice (the losing side re-creates the
+# network and wins the second attempt); the extra attempt is headroom for a
+# second teardown landing in the same window.
+_SERVICE_CREATE_ATTEMPTS = 3
+
+# Only networks this orchestrator itself creates per instance/range may be
+# re-created on that retry path. Anything else named in a spec -- notably
+# the stack-owned `cei-labs_challenge-edge` -- is provisioned by
+# docker/stack.yml, and silently re-creating it here would produce a
+# same-named network with orchestrator labels and no stack ownership.
+_MANAGED_NETWORK_PREFIXES = ("chnet-", "chrange-")
+
 # Terminal task states per the Swarm API -- a task in any other state might
 # still hold its network attachment/port.
 _TASK_TERMINAL_STATES = {"shutdown", "complete", "failed", "rejected", "orphaned", "remove"}
@@ -203,6 +218,43 @@ class DockerOrchestratorClient:
         )
         return image_ref
 
+    @staticmethod
+    def _managed_missing_network(exc: Exception, spec: "ServiceSpec") -> "str | None":
+        """The name of one of `spec`'s own managed networks that Swarm says
+        doesn't exist, or None if this error is anything else.
+
+        Swarm reports it as a plain 500 with the name in the message
+        ('network chnet-21-group-bandit not found'), not a typed error, so
+        matching on the message is the only option -- but the name is matched
+        against `spec.networks` rather than parsed out of the string, so a
+        message-format change degrades to "don't retry" instead of
+        misidentifying a network.
+
+        Why this happens at all: ensure_network() returns early when the
+        network already exists, and it cannot tell a healthy network apart
+        from one that a concurrent teardown is midway through deleting
+        (remove_network() retries for up to _TASK_DRAIN_TIMEOUT_SECONDS while
+        endpoints drain). A player who relaunches the instant their box is
+        torn down hits exactly that window: ensure_network() sees the old
+        network and returns, the deletion completes, and the create then
+        fails against a network that no longer exists. Observed live on a
+        station 51 times in one event -- see docs/credential-lifecycle.md.
+
+        This matters beyond a failed launch: the player is left with a broken
+        environment, and the natural response is to click "Relaunch
+        Environment", which is the one path that deliberately rotates their
+        flags and passwords (purge_vaulted_secrets). A transient network race
+        should not cost anyone their progress."""
+        if not isinstance(exc, docker.errors.APIError):
+            return None
+        message = str(exc)
+        if "not found" not in message:
+            return None
+        for name in spec.networks:
+            if name in message and name.startswith(_MANAGED_NETWORK_PREFIXES):
+                return name
+        return None
+
     def create_service(self, spec: ServiceSpec):
         existing = self.get_service(spec.name)
         if existing is not None:
@@ -223,24 +275,41 @@ class DockerOrchestratorClient:
             "creating service %s (image=%s, resolved=%s, networks=%s)",
             spec.name, spec.image, resolved_image, spec.networks,
         )
-        return self._client.services.create(
-            image=resolved_image,
-            name=spec.name,
-            env=[f"{k}={v}" for k, v in spec.env.items()],
-            networks=[NetworkAttachmentConfig(target=n) for n in spec.networks],
-            labels={**spec.labels, ORCH_LABEL: "true"},
-            endpoint_spec=endpoint_spec,
-            cap_drop=spec.cap_drop or None,
-            cap_add=spec.cap_add or None,
-            read_only=spec.read_only,
-            sysctls=spec.sysctls or None,
-            resources=Resources(
-                mem_limit=spec.mem_limit_bytes,
-                mem_reservation=spec.mem_reservation_bytes,
-                cpu_limit=spec.cpu_limit_nanos,
-            ),
-            restart_policy=RestartPolicy(condition="on-failure"),
-        )
+        for attempt in range(1, _SERVICE_CREATE_ATTEMPTS + 1):
+            try:
+                return self._client.services.create(
+                    image=resolved_image,
+                    name=spec.name,
+                    env=[f"{k}={v}" for k, v in spec.env.items()],
+                    networks=[NetworkAttachmentConfig(target=n) for n in spec.networks],
+                    labels={**spec.labels, ORCH_LABEL: "true"},
+                    endpoint_spec=endpoint_spec,
+                    cap_drop=spec.cap_drop or None,
+                    cap_add=spec.cap_add or None,
+                    read_only=spec.read_only,
+                    sysctls=spec.sysctls or None,
+                    resources=Resources(
+                        mem_limit=spec.mem_limit_bytes,
+                        mem_reservation=spec.mem_reservation_bytes,
+                        cpu_limit=spec.cpu_limit_nanos,
+                    ),
+                    restart_policy=RestartPolicy(condition="on-failure"),
+                )
+            except docker.errors.APIError as exc:
+                missing = self._managed_missing_network(exc, spec)
+                if missing is None or attempt == _SERVICE_CREATE_ATTEMPTS:
+                    raise
+                # Re-create it and try again. ensure_network() is itself
+                # idempotent and waits for inspect visibility, so if the
+                # concurrent teardown has meanwhile finished, this rebuilds
+                # the network; if another caller already rebuilt it, this is
+                # a no-op.
+                logger.warning(
+                    "service %s create failed: network %s vanished mid-create "
+                    "(attempt %s/%s) -- re-creating it and retrying",
+                    spec.name, missing, attempt, _SERVICE_CREATE_ATTEMPTS,
+                )
+                self.ensure_network(missing, internal=True)
 
     def remove_service(self, name: str) -> None:
         """Waits for the removed service's last task(s) to actually reach a

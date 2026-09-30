@@ -1,8 +1,14 @@
 from unittest.mock import MagicMock, patch
 
-from docker.errors import NotFound
+import pytest
+from docker.errors import APIError, NotFound
 
-from app.docker_client import DockerOrchestratorClient, ORCH_LABEL, ServiceSpec
+from app.docker_client import (
+    _SERVICE_CREATE_ATTEMPTS,
+    DockerOrchestratorClient,
+    ORCH_LABEL,
+    ServiceSpec,
+)
 
 
 def test_ensure_network_retries_until_new_overlay_is_inspectable():
@@ -149,3 +155,93 @@ def test_create_service_still_works_when_image_has_no_local_digest():
 
     kwargs = docker_client.services.create.call_args.kwargs
     assert kwargs["image"] == "myimage:latest"
+
+
+# ── Network-vanished-mid-create retry ────────────────────────────────────────
+# ensure_network() returns early when the network already exists and cannot
+# tell a healthy network from one a concurrent teardown is midway through
+# deleting. A player relaunching the instant their box is torn down lands in
+# that window, and the create fails against a network that no longer exists.
+# See DockerOrchestratorClient._managed_missing_network's docstring.
+
+def _api_error(message):
+    return APIError(message, explanation=message)
+
+
+def test_create_service_recreates_a_managed_network_that_vanished_mid_create():
+    docker_client = MagicMock()
+    docker_client.services.get.side_effect = NotFound("missing")
+    docker_client.networks.get.side_effect = NotFound("missing")
+    docker_client.api.create_network.return_value = {"Id": "network-id"}
+    docker_client.api.inspect_network.return_value = {"Id": "network-id"}
+    docker_client.services.create.side_effect = [
+        _api_error('500 Server Error: Internal Server Error ("network chnet-21-group-bandit not found")'),
+        "created-service",
+    ]
+
+    with patch("app.docker_client.docker.DockerClient", return_value=docker_client):
+        client = DockerOrchestratorClient("unix:///var/run/docker.sock")
+        result = client.create_service(ServiceSpec(
+            name="chinst-21-group-bandit", image="bandit:sha", networks=["chnet-21-group-bandit"],
+        ))
+
+    assert result == "created-service"
+    assert docker_client.services.create.call_count == 2
+    # The vanished network was rebuilt before the retry.
+    docker_client.api.create_network.assert_called_once()
+
+
+def test_create_service_gives_up_after_the_attempt_ceiling():
+    docker_client = MagicMock()
+    docker_client.services.get.side_effect = NotFound("missing")
+    docker_client.networks.get.return_value = MagicMock()
+    docker_client.services.create.side_effect = _api_error(
+        '500 Server Error: Internal Server Error ("network chnet-21-group-bandit not found")'
+    )
+
+    with patch("app.docker_client.docker.DockerClient", return_value=docker_client):
+        client = DockerOrchestratorClient("unix:///var/run/docker.sock")
+        with pytest.raises(APIError):
+            client.create_service(ServiceSpec(
+                name="chinst-21-group-bandit", image="bandit:sha", networks=["chnet-21-group-bandit"],
+            ))
+
+    assert docker_client.services.create.call_count == _SERVICE_CREATE_ATTEMPTS
+
+
+def test_create_service_does_not_retry_unrelated_api_errors():
+    docker_client = MagicMock()
+    docker_client.services.get.side_effect = NotFound("missing")
+    docker_client.services.create.side_effect = _api_error("500 Server Error: no suitable node")
+
+    with patch("app.docker_client.docker.DockerClient", return_value=docker_client):
+        client = DockerOrchestratorClient("unix:///var/run/docker.sock")
+        with pytest.raises(APIError):
+            client.create_service(ServiceSpec(
+                name="chinst-21-group-bandit", image="bandit:sha", networks=["chnet-21-group-bandit"],
+            ))
+
+    assert docker_client.services.create.call_count == 1
+
+
+def test_create_service_never_recreates_a_stack_owned_network():
+    """`cei-labs_challenge-edge` is provisioned by docker/stack.yml, not by
+    this orchestrator. Re-creating it here would produce a same-named network
+    carrying orchestrator labels and no stack ownership, so a missing one must
+    surface as a hard failure instead."""
+    docker_client = MagicMock()
+    docker_client.services.get.side_effect = NotFound("missing")
+    docker_client.services.create.side_effect = _api_error(
+        '500 Server Error: Internal Server Error ("network cei-labs_challenge-edge not found")'
+    )
+
+    with patch("app.docker_client.docker.DockerClient", return_value=docker_client):
+        client = DockerOrchestratorClient("unix:///var/run/docker.sock")
+        with pytest.raises(APIError):
+            client.create_service(ServiceSpec(
+                name="chinst-21-group-bandit", image="gw:sha",
+                networks=["cei-labs_challenge-edge"],
+            ))
+
+    assert docker_client.services.create.call_count == 1
+    docker_client.api.create_network.assert_not_called()
