@@ -1,0 +1,40 @@
+# Docker build context: docker/ctfd
+#
+# Built by .github/workflows/build-ctfd.yml (context: docker/ctfd).
+# docker/.env and docker/secrets/ live in the PARENT directory and are
+# therefore not in this context today -- that safety is incidental, not
+# designed. These rules make it explicit.
+#
+# NOTE: plugins/*/tests/ is deliberately NOT excluded. The Dockerfile does
+# `COPY plugins/<name> /opt/CTFd/CTFd/plugins/<name>` for whole plugin
+# directories, so each plugin's tests/ tree is currently baked into the
+# published image. Excluding it here would silently change image contents.
+# Narrowing those COPYs and dropping the tests from the image is a separate
+# change to docker/ctfd/Dockerfile.
+
+# VCS and local tooling state
+.git/
+.gitignore
+.github/
+.venv/
+venv/
+
+# Python build/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Never ship local secrets or env overrides into an image
+.env
+.env.*
+!.env.example
+secrets/
+secrets.example/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store

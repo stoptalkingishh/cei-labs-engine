@@ -1,0 +1,45 @@
+# Root .dockerignore -- belt-and-braces only.
+#
+# No build workflow uses `context: .`; all six use leaf subdirectories
+# (docker/ctfd, docker/orchestrator, operator/analyst, operator/kali-novnc,
+# operator/targets/base-linux, operator/tcp-gateway), and each of those has
+# its own .dockerignore. This file exists purely for the failure mode those
+# per-context files cannot cover: a `context: .` typo in a build workflow
+# would otherwise put docker/secrets/ and docker/.env into a context that
+# gets pushed to the PUBLIC ghcr.io/stoptalkingishh/* registry.
+#
+# It is inert today. If a build ever legitimately needs the repository root
+# as its context, review this file first -- in particular the docker/
+# exclusions below, which would break `COPY docker/...`.
+
+.git/
+.github/
+.venv/
+venv/
+
+# Live secrets and env overrides. The .example files are kept so the stack
+# validation job's placeholder setup still works if the root is ever built.
+docker/.env
+docker/.env.*
+!docker/.env.example
+docker/secrets/
+!docker/secrets.example/
+docker/traefik/certs/
+docker/traefik/dynamic/
+
+# Python build/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Not needed to build any image
+docs/
+tests/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
