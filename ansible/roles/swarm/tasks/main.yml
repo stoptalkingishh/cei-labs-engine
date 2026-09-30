@@ -11,12 +11,42 @@
 # workers forms a one-node swarm; adding hosts under [swarm_workers] later
 # and re-running this playbook grows it. Nothing else changes.
 
+# Supply-chain note: `curl | sh` from an unpinned URL means every run trusts
+# whatever get.docker.com serves today and runs it as root. That is not
+# fixable inside this task (an offline/pinned install is a separate
+# mechanism), but it is the reason the install is gated on a real probe
+# below rather than re-fetched on every run: a host that already has a
+# working Docker never reaches the network again.
+# The probe replaces the old `creates: /usr/bin/docker` guard, which only
+# matched Docker's own install path. Distro-packaged docker and the snap
+# install (which lives at /snap/bin/docker, on PATH via /snap/bin) both
+# missed it, so on those hosts the remote-script task re-ran on every single
+# playbook run while always reporting `changed` — an idempotency check over
+# this role could never go green.
+- name: Probe for a Docker CLI already on PATH
+  ansible.builtin.shell:
+    cmd: command -v docker
+  register: swarm_docker_cli
+  # Absent CLI is the expected state on a first run, so rc=1 must not fail
+  # the play; it just means the install task below has work to do.
+  changed_when: false
+  failed_when: false
+  # `command -v` is a shell builtin: the `command` module execs a binary by
+  # absolute-or-PATH name and cannot perform a PATH lookup itself, so this is
+  # the case ansible-lint's command-instead-of-shell rule exists to exempt.
+  # noqa: command-instead-of-shell
+
 - name: Install Docker Engine
+  # Left visible on purpose: it echoes only the remote installer's own
+  # progress output, no credentials, and install failures are exactly when
+  # an operator needs to see it.
   ansible.builtin.shell: |
     set -o pipefail
     curl -fsSL https://get.docker.com | sh
-  args:
-    creates: /usr/bin/docker
+  when: swarm_docker_cli.rc != 0
+  # The remote installer gives no way to know whether it actually changed
+  # anything, and it only ever runs when no docker was found at all — so
+  # "changed" is the only truthful answer here.
   changed_when: true
 
 - name: Enable and start Docker
@@ -41,6 +71,15 @@
   community.docker.docker_swarm_info:
   register: swarm_info
   when: inventory_hostname == groups['swarm_managers'][0]
+  # JoinTokens.* are cluster-wide bearer credentials: anyone holding the
+  # manager token can `docker swarm join --token` and take over the cluster.
+  # Measured on ansible-core 2.21.4: at the default verbosity set_fact values
+  # are not printed, but at -v (and above) Ansible prints each task's full
+  # invocation and result, which includes these facts verbatim — and -v is
+  # what CI runs at and what operators paste into tickets. Suppressing is the
+  # cheap way to be sure no verbosity, callback plugin or failure path can
+  # print them.
+  no_log: true
 
 - name: Expose join tokens/address for other hosts to consume this run
   ansible.builtin.set_fact:
@@ -48,18 +87,54 @@
     swarm_worker_token: "{{ swarm_info.swarm_facts.JoinTokens.Worker }}"
     swarm_manager_addr: "{{ (ansible_host | default(ansible_default_ipv4.address)) }}:2377"
   when: inventory_hostname == groups['swarm_managers'][0]
+  # Same reasoning as the token fetch above, and it also covers the failure
+  # path: a failing task prints its result, and set_fact values live there.
+  # The trade-off is real and accepted: no_log also hides the harmless
+  # swarm_manager_addr fact in this same task, which is why the next task
+  # re-publishes just that one value without suppression.
+  no_log: true
+
+- name: Publish the manager join address (not a credential, safe to log)
+  ansible.builtin.set_fact:
+    swarm_manager_addr: "{{ (ansible_host | default(ansible_default_ipv4.address)) }}:2377"
+  when: inventory_hostname == groups['swarm_managers'][0]
+
+- name: Assert the primary manager published a join token
+  ansible.builtin.assert:
+    that:
+      - swarm_primary_token is defined
+      - swarm_primary_token | length > 0
+    fail_msg: >-
+      No Swarm join token was published by the primary manager
+      {{ groups['swarm_managers'][0] }} — every joining host would render
+      an empty join_token and fail with an opaque Docker error that names no
+      host. Check that host specifically: is it reachable over SSH, did its
+      Docker install succeed, and did `docker swarm init` complete? The two
+      tasks on that host that would explain why are suppressed (no_log), so
+      either read `docker swarm join-token manager` on that host directly, or
+      re-run this playbook with `-e ansible_check_mode=False` and look for the
+      "Fetch swarm join tokens" failure in the recap.
+  vars:
+    swarm_primary_token: >-
+      {{ (hostvars[groups['swarm_managers'][0]]['swarm_worker_token'] | default(''))
+         if inventory_hostname in (groups['swarm_workers'] | default([]))
+         else (hostvars[groups['swarm_managers'][0]]['swarm_manager_token'] | default('')) }}
 
 - name: Join this host to the swarm
   community.docker.docker_swarm:
     state: join
     advertise_addr: "{{ ansible_host | default(ansible_default_ipv4.address) }}"
-    join_token: >-
-      {{ hostvars[groups['swarm_managers'][0]]['swarm_worker_token']
-         if inventory_hostname in (groups['swarm_workers'] | default([]))
-         else hostvars[groups['swarm_managers'][0]]['swarm_manager_token'] }}
+    join_token: "{{ swarm_primary_token }}"
     remote_addrs:
       - "{{ hostvars[groups['swarm_managers'][0]]['swarm_manager_addr'] }}"
+  vars:
+    swarm_primary_token: >-
+      {{ (hostvars[groups['swarm_managers'][0]]['swarm_worker_token'] | default(''))
+         if inventory_hostname in (groups['swarm_workers'] | default([]))
+         else (hostvars[groups['swarm_managers'][0]]['swarm_manager_token'] | default('')) }}
   when: inventory_hostname != groups['swarm_managers'][0]
+  # A failed join prints the task args, and the args carry the join token.
+  no_log: true
 
 - name: Label the primary manager to host stateful services (DB) and the orchestrator
   community.docker.docker_node:

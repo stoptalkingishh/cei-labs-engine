@@ -17,5 +17,12 @@
 - name: Phase 2 - Form/grow the Docker Swarm
   hosts: all
   become: true
+  # A partial swarm is worse than a failed one: the linear strategy already
+  # guarantees the primary manager's init/token tasks finish before anyone
+  # joins, so if the primary manager fails, no other host can join and the
+  # only useful outcome is a loud stop. Without this, the play limps on and
+  # reports a pile of unrelated per-host failures that all trace back to
+  # one unreachable manager.
+  any_errors_fatal: true
   roles:
     - role: swarm
