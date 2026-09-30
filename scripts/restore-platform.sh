@@ -12,6 +12,7 @@ ASSUME_YES=false
 START_EPOCH="$(date +%s)"
 STAGE=""
 DB_CONTAINER=""
+CREATED_VOLUMES=()
 
 usage() {
   echo "usage: BACKUP_ENCRYPTION_KEY_FILE=/protected/key $0 [--yes] <backup-directory>" >&2
@@ -111,6 +112,10 @@ db_user_secret="$DEPLOYMENT_ROOT/docker/secrets/ctfd_db_password.txt"
 
 for volume in ctfd_db_data ctfd_uploads orchestrator_data; do
   docker volume create "${STACK_NAME}_${volume}" >/dev/null
+  # Recorded so the readiness failure below can clean up exactly what this
+  # run created. The guard near the top of the script proved none of these
+  # pre-existed, so removing them cannot destroy anything the operator had.
+  CREATED_VOLUMES+=("${STACK_NAME}_${volume}")
 done
 
 echo "restoring uploads and orchestrator data"
@@ -121,22 +126,74 @@ docker run --rm --entrypoint tar -i -v "${STACK_NAME}_orchestrator_data:/restore
 
 echo "initializing MariaDB from ctfd.sql"
 DB_CONTAINER="${STACK_NAME}-restore-db-$$"
+DB_VOLUME="${STACK_NAME}_ctfd_db_data"
 docker run -d --name "$DB_CONTAINER" \
   -e MYSQL_DATABASE=ctfd -e MYSQL_USER=ctfd \
   -e MYSQL_ROOT_PASSWORD_FILE=/run/restore/root -e MYSQL_PASSWORD_FILE=/run/restore/user \
-  -v "${STACK_NAME}_ctfd_db_data:/var/lib/mysql" \
+  -v "$DB_VOLUME:/var/lib/mysql" \
   -v "$db_root_secret:/run/restore/root:ro" -v "$db_user_secret:/run/restore/user:ro" \
   -v "$BACKUP_DIR/ctfd.sql:/docker-entrypoint-initdb.d/ctfd.sql:ro" "$db_image" >/dev/null
+
+# The wait loop below used to have no failure branch. It polled
+# `mariadb-admin ping` for up to 180s and, if the container stayed Running
+# but never answered, the `for` simply fell through and execution continued
+# into the real import — surfacing as a bare connection error with nothing
+# between "MariaDB should be ready by now" and "it wasn't". Worse, the
+# `docker volume create` above had already materialised cei-labs_ctfd_db_data
+# with a partially initialized datadir, and the "refusing to restore over
+# existing volume" guard near the top of this script then rejected the
+# operator's retry — so one transient MariaDB failure became a manual
+# `docker volume rm` with nothing in the output explaining why.
+#
+# `db_ready` is set explicitly instead of being inferred from a bare
+# `break`, so "never became ready" is distinguishable from "became ready".
+# An exited container also breaks out to this same branch rather than
+# exiting from inside the loop, so the volume cleanup below always runs.
+db_ready=false
+db_exited=false
 for _ in $(seq 1 180); do
   if docker exec "$DB_CONTAINER" sh -c \
     'MYSQL_PWD="$(cat /run/restore/root)" mariadb-admin --user=root ping --silent' >/dev/null 2>&1; then
+    db_ready=true
     break
   fi
-  [[ "$(docker inspect "$DB_CONTAINER" --format '{{.State.Running}}')" == true ]] || {
-    docker logs "$DB_CONTAINER" >&2; exit 1;
-  }
+  if [[ "$(docker inspect "$DB_CONTAINER" --format '{{.State.Running}}')" != true ]]; then
+    db_exited=true
+    break
+  fi
   sleep 1
 done
+
+if [[ "$db_ready" != true ]]; then
+  if [[ "$db_exited" == true ]]; then
+    echo "MariaDB container ${DB_CONTAINER} exited before accepting connections." >&2
+  else
+    echo "MariaDB in ${DB_CONTAINER} was still running but never accepted connections after 180s." >&2
+  fi
+  echo "Container logs (usual cause: ctfd.sql failing to import, or a corrupt/partial backup):" >&2
+  docker logs "$DB_CONTAINER" >&2 || true
+  # The container must go before the volumes: `docker volume rm` fails while
+  # any container still references one, and failing here would leave
+  # precisely the state this branch exists to clear.
+  docker rm -f "$DB_CONTAINER" >/dev/null 2>&1 || true
+  DB_CONTAINER=""
+  # Drop every volume this run created, not just the database one. They are
+  # all created in the same loop immediately above and are all rejected by
+  # the "refusing to restore over existing volume" guard on the next
+  # attempt, so cleaning up only ctfd_db_data would just make the retry fail
+  # on cei-labs_ctfd_uploads instead and leave the operator exactly as stuck
+  # as before. None of them pre-existed (checked at the top of this script)
+  # and none holds anything but this failed run's partial import.
+  for vol in "${CREATED_VOLUMES[@]}"; do
+    if ! docker volume rm "$vol" >/dev/null 2>&1; then
+      echo "WARNING: could not remove the partially initialized volume ${vol}." >&2
+      echo "         A retry stays blocked by 'refusing to restore over existing volume' until you run:" >&2
+      echo "           docker volume rm ${vol}" >&2
+    fi
+  done
+  exit 1
+fi
+
 docker exec "$DB_CONTAINER" sh -c \
   'MYSQL_PWD="$(cat /run/restore/root)" mariadb --user=root --batch --skip-column-names -e "SELECT COUNT(*) FROM ctfd.users"' >/dev/null
 docker rm -f "$DB_CONTAINER" >/dev/null
