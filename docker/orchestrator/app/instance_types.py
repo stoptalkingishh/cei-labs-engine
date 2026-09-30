@@ -253,6 +253,7 @@ def plan_single_target(
     workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
     offline_mode: bool = False,
     offline_host: "str | None" = None,
+    existing_secrets: "dict | None" = None,
 ) -> InstancePlan:
     """No Traefik involvement — a dedicated airgapped network plus a directly
     published port (e.g. for SSH). `allocated_port` is acquired by the
@@ -265,7 +266,16 @@ def plan_single_target(
     actually answers for it. `offline_mode` (the resolved value from config.resolve_offline_mode()) swaps in
     `offline_host` (Config.OFFLINE_HOST, the venue's current bare LAN IP)
     instead, for the same reason and via the same flag as the attacker
-    links -- one venue-level "we have no DNS" switch, not two."""
+    links -- one venue-level "we have no DNS" switch, not two.
+
+    `existing_secrets` (owner_id/instance_key's row from
+    InstanceStore.get_vaulted_secrets(), if any) overrides freshly
+    generated values key-for-key -- this is what makes a reap-expiry
+    recreate (destroys the container, but never the vault row) hand the
+    SAME team back the SAME flags instead of new ones. A genuinely new
+    key (a level added to this instance since it was last vaulted) still
+    gets a fresh generated value, since it has no existing entry to
+    override."""
     image = _require_str(spec, "image")
     target_port = int(spec.get("target_port", 22))
     protocol = spec.get("protocol", "ssh")
@@ -291,6 +301,8 @@ def plan_single_target(
     # See generate_fixed_length_track_secrets' docstring: levels whose
     # static description text is calibrated to an exact byte count/length.
     track_secrets.update(generate_fixed_length_track_secrets(fixed_secret_keys) if fixed_secret_keys else {})
+    if existing_secrets:
+        track_secrets.update({k: v for k, v in existing_secrets.items() if k in track_secrets})
     if track_secrets:
         env = {**env, "LEVEL_SECRETS": json.dumps(track_secrets)}
 
@@ -342,9 +354,16 @@ def plan_range_attacker(
     workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
     offline_mode: bool = False,
     offline_host: "str | None" = None,
+    existing_credentials: "dict | None" = None,
 ) -> RangePlan:
     """Called once per team, the first time they launch any target-attacker
     challenge. Subsequent challenges reuse this range (see plan_range_target).
+
+    `existing_credentials` (RangeStore.get_vaulted_secrets(owner_id), if
+    any) overrides the freshly generated ssh_password/novnc_password below
+    -- same reap-survives-recreate mechanism as plan_single_target's
+    `existing_secrets`, so a real absolute-lifetime reap-expiry teardown of
+    a team's range no longer hands them a new attacker password either.
 
     `allocated_port` publishes the attacker's SSH port directly (same
     PortAllocator pool `single-target` already draws from — see
@@ -416,8 +435,11 @@ def plan_range_attacker(
     # around; novnc_password is generated at exactly 8 characters so
     # there's no truncation gap between what's generated and what VNC will
     # actually honor.
-    ssh_password = secrets.token_urlsafe(18)
-    novnc_password = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+    existing_credentials = existing_credentials or {}
+    ssh_password = existing_credentials.get("ssh_password") or secrets.token_urlsafe(18)
+    novnc_password = existing_credentials.get("novnc_password") or "".join(
+        secrets.choice(string.ascii_letters + string.digits) for _ in range(8)
+    )
     attacker_env["OPERATOR_PASSWORD"] = ssh_password
     attacker_env["VNC_PASSWORD"] = novnc_password
 
@@ -521,6 +543,7 @@ def plan_range_target(
     range_network: str,
     range_access: dict,
     workload_quota: WorkloadQuota = DEFAULT_WORKLOAD_QUOTA,
+    existing_secrets: "dict | None" = None,
 ) -> InstancePlan:
     """A single challenge's target within an existing (or about-to-exist)
     range. Joins ONLY the range's network — never challenge_network, never
@@ -528,15 +551,16 @@ def plan_range_target(
     attacker.
 
     Per-team level secrets: same mechanism as plan_single_target (see its
-    docstring) -- generated here and never before, since this function
-    previously ignored spec["secret_keys"]/alpha/fixed entirely. That
-    silently broke every per_team_dynamic flag on every target-attacker
-    track (confirmed live: Natas's natas0 page served the literal
-    unsubstituted "__NATAS1_SECRET__" placeholder to every team, since
-    LEVEL_SECRETS was never set) -- CTFd's routes.py._spec_with_secret_keys
-    already aggregates every sibling challenge's flag data across the
-    whole instance_group correctly; this function just never consumed
-    what it was handed."""
+    docstring, including `existing_secrets`) -- generated here and never
+    before, since this function previously ignored
+    spec["secret_keys"]/alpha/fixed entirely. That silently broke every
+    per_team_dynamic flag on every target-attacker track (confirmed live:
+    Natas's natas0 page served the literal unsubstituted
+    "__NATAS1_SECRET__" placeholder to every team, since LEVEL_SECRETS was
+    never set) -- CTFd's routes.py._spec_with_secret_keys already
+    aggregates every sibling challenge's flag data across the whole
+    instance_group correctly; this function just never consumed what it
+    was handed."""
     target_image = _require_str(spec, "target_image")
     target_env = spec.get("target_env") or {}
 
@@ -546,6 +570,8 @@ def plan_range_target(
     track_secrets = generate_track_secrets(secret_keys) if secret_keys else {}
     track_secrets.update(generate_alpha_track_secrets(alpha_secret_keys) if alpha_secret_keys else {})
     track_secrets.update(generate_fixed_length_track_secrets(fixed_secret_keys) if fixed_secret_keys else {})
+    if existing_secrets:
+        track_secrets.update({k: v for k, v in existing_secrets.items() if k in track_secrets})
     if track_secrets:
         target_env = {**target_env, "LEVEL_SECRETS": json.dumps(track_secrets)}
 

@@ -158,6 +158,12 @@ class InstanceController:
         try:
             if replacement_record is not None:
                 self._teardown_record(replacement_record)
+                # The one path that's actually allowed to rotate this
+                # team's flags/passwords -- an explicit relaunch/reset.
+                # See instance_secret_vault's schema comment in store.py:
+                # reap-expiry teardown() never reaches this branch, only
+                # force_relaunch=True does.
+                self.store.purge_vaulted_secrets(owner_id, instance_key)
             if instance_type == TARGET_ATTACKER:
                 plan = self._create_range_target(owner_id, instance_key, spec)
             elif instance_type == SINGLE_TARGET:
@@ -202,6 +208,7 @@ class InstanceController:
             plan = instance_types.plan_single_target(
                 owner_id, instance_key, spec, port, self.base_domain, self.workload_quota,
                 offline_mode=self.offline_mode, offline_host=self.offline_host,
+                existing_secrets=self.store.get_vaulted_secrets(owner_id, instance_key),
             )
             self.docker.ensure_network(plan.network, internal=True)
             self._create_services(plan.services)
@@ -210,7 +217,25 @@ class InstanceController:
                 self.docker.remove_network(plan.network)
             self.port_allocator.release(port)
             raise
+        self._vault_track_secrets(owner_id, instance_key, spec, plan.access)
         return plan
+
+    def _vault_track_secrets(self, owner_id: str, instance_key: str, spec: dict, access: dict) -> None:
+        """Persists this plan's per-team flag values (never the rest of
+        `access` -- connect_host/port/etc legitimately do change run to
+        run) into the durable vault, so a later reap-expiry recreate (see
+        reaper._sweep_expired_instances) reuses them instead of generating
+        new ones. See instance_types.plan_single_target's `existing_secrets`
+        docstring for the read side of this."""
+        secret_keys = (
+            list(spec.get("secret_keys") or [])
+            + list(spec.get("alpha_secret_keys") or [])
+            + list(spec.get("fixed_secret_keys") or [])
+        )
+        if not secret_keys:
+            return
+        values = {key: access[key] for key in secret_keys if key in access}
+        self.store.merge_vaulted_secrets(owner_id, instance_key, values)
 
     def _create_range_target(self, owner_id: str, instance_key: str, spec: dict):
         # Same atomic-reservation pattern as create_or_get, scoped to the
@@ -247,6 +272,7 @@ class InstanceController:
                         self.workload_quota,
                         offline_mode=self.offline_mode,
                         offline_host=self.offline_host,
+                        existing_credentials=self.range_store.get_vaulted_secrets(owner_id),
                     )
                     self.docker.ensure_network(range_plan.network, internal=True)
                     self._create_services([range_plan.attacker_service, range_plan.gateway_service])
@@ -258,6 +284,10 @@ class InstanceController:
                     self.range_store.release_reservation(owner_id)
                     raise
                 self.range_store.finalize(owner_id, range_plan)
+                self.range_store.merge_vaulted_secrets(owner_id, {
+                    "ssh_password": range_plan.access["ssh_password"],
+                    "novnc_password": range_plan.access["novnc_password"],
+                })
                 range_record = RangeRecord(plan=range_plan, created_at=time.time())
         else:
             if range_record.stopped:
@@ -273,10 +303,12 @@ class InstanceController:
             range_record.plan.network,
             range_record.plan.access,
             self.workload_quota,
+            existing_secrets=self.store.get_vaulted_secrets(owner_id, instance_key),
         )
         self._create_services(target_plan.services)
         range_record.target_keys.add(instance_key)
         self.range_store.update(range_record)
+        self._vault_track_secrets(owner_id, instance_key, spec, target_plan.access)
         return target_plan
 
     # ── Pause / resume ("non-destructive stop") ──────────────────────────────
