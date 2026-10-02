@@ -8,9 +8,11 @@ Exits non-zero when any file fails to parse, and also when *zero* YAML files
 are found. An empty scan is a broken scan, not a passing one -- this job once
 reported "all YAML configurations parsed cleanly" while checking nothing at
 all, because the skip-hidden-directories guard tested the components of
-os.walk's root string, and on POSIX every one of those components starts with
-the literal "." -- including the top-level one. The count is printed on every
-run so that the next regression of that kind is visible in the log.
+os.walk's root string: the walk starts at ".", so every root -- on every
+platform, whatever ``os.sep`` -- contains a component starting with the
+literal "." and every directory was pruned, hidden or not. The count is
+printed on every run so that the next regression of that kind is visible
+in the log.
 """
 
 from __future__ import annotations
@@ -42,10 +44,11 @@ def iter_yaml_files(root: Path):
     """Yield every YAML file under *root*, pruning non-configuration dirs.
 
     The prune has to rewrite ``dirs`` in place. Inspecting the components of
-    ``os.walk``'s root string is exactly the bug this replaced, and it only
-    reproduces on POSIX -- ``os.sep`` is a backslash on Windows, so
-    ``root.split(os.sep)`` yields a single component and the guard silently
-    does nothing there.
+    ``os.walk``'s root string is exactly the bug this replaced: a walk rooted
+    at ``"."`` yields roots like ``"./docker"`` on POSIX and ``".\\docker"``
+    on Windows, so on *both* platforms one component is ``"."`` and the old
+    guard pruned the entire tree -- not just hidden directories. (Measured on
+    Windows: every walked root, hidden or not, was skipped.)
     """
     for current, dirs, files in os.walk(root):
         dirs[:] = sorted(d for d in dirs if not is_pruned(d))
