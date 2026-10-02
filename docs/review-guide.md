@@ -72,7 +72,9 @@ Check: `routes.py` now calls `sanitize_html(markdown(...))`, and
 production and challenge descriptions share one policy.
 
 **Claim 2 — the tests could not have caught an access-control regression.**
-All five route suites stubbed `authed_only`/`admins_only` to identity, so
+All four route suites stubbed `authed_only`/`admins_only` to identity — the
+fifth plugin, `modal-theme`, has no routes at all (just CSS assets), so there
+is nothing to stub or assert on — so
 deleting `@admins_only` from an admin route kept all 100+ tests green. The
 stubs now mark the function and each suite walks the real `url_map`, with a
 guard that fails if a route exists the table doesn't assert on.
