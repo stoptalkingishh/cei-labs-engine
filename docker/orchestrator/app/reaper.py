@@ -183,6 +183,25 @@ class Reaper(threading.Thread):
                 for (owner_id,) in self.range_store.pending_reservations()
                 if naming.range_reservation_resource_names(owner_id) & live
             }
+            # A target-attacker's own resources are all created *after* the
+            # shared per-owner range (controller._create_range_target builds
+            # the range attacker first, the target last), so while that range
+            # creation is provably in flight -- its attacker is live, which
+            # is what put it in protected_ranges above -- its instance rows
+            # look resource-less even though they cannot possibly have
+            # finished. The same live-resource evidence that protects the
+            # range therefore has to protect every instance reservation of
+            # that owner waiting on it, or the row ages out mid-launch,
+            # finalize() raises ReservationLostError, and CTFd reports 503
+            # for a launch still under way. This protection is bounded: it
+            # lasts exactly as long as the range reservation is pending, so
+            # once the range creation resolves (finalized or failed) a
+            # crashed worker's instance row ages out on the next pass.
+            protected_instances |= {
+                (owner_id, instance_key)
+                for owner_id, instance_key in self.store.pending_reservations()
+                if (owner_id,) in protected_ranges
+            }
         if protected_instances or protected_ranges:
             logger.info(
                 "keeping %s instance and %s range creation reservation(s) with live Docker resources",

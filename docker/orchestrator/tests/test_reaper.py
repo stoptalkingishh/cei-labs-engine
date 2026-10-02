@@ -497,3 +497,103 @@ def test_sweep_never_releases_a_reservation_whose_containers_are_still_being_cre
         assert plan.network in docker.networks
         for resource in (store, range_store, ports):
             resource.close()
+
+
+def test_sweep_keeps_a_target_reservation_while_its_owner_range_is_still_being_created():
+    """The target-attacker sibling of the test above, and the gap it left:
+    a target's own resources are all created *after* the shared per-owner
+    range (controller._create_range_target builds the range attacker first,
+    the target last), so during a slow range creation -- a slow image pull on
+    the shared attacker, say -- the instance row is pending with none of its
+    own resources live, even though the launch demonstrably cannot have
+    finished. reservation_resource_names() never mentions the shared range
+    attacker, so age alone used to release this row: finalize() then raised
+    ReservationLostError and CTFd reported 503 for a launch still under way,
+    leaving the target briefly orphaned. The range reservation being
+    protected -- its attacker is live -- is the evidence that has to carry
+    the instance row with it. timeout is 0 and the row is aged an hour, so
+    nothing but that evidence can save it."""
+
+    class SlowRangeDocker(FakeDockerOrchestratorClient):
+        def __init__(self):
+            super().__init__()
+            self.range_attacker_created = threading.Event()
+            self.allow_creation_to_finish = threading.Event()
+
+        def create_service(self, spec):
+            result = super().create_service(spec)
+            # The *first* service of a target-attacker launch is the shared
+            # range attacker, and it is live in Docker the moment this
+            # returns -- exactly the evidence the reaper should key on. The
+            # gateway (and everything the target itself needs) comes after.
+            if len(self.create_calls) == 1:
+                self.range_attacker_created.set()
+                assert self.allow_creation_to_finish.wait(timeout=10)
+            return result
+
+    outcome = {}
+
+    def launch():
+        try:
+            outcome["result"] = controller.create_or_get(
+                it.TARGET_ATTACKER, "team-1", "otw",
+                {"target_image": "t", "attacker_image": "k"},
+            )
+        except Exception as exc:  # pragma: no cover - surfaced via outcome
+            outcome["error"] = exc
+
+    # A real on-disk db for the same reason as above: the stores hand each
+    # thread its own sqlite3 connection, and ":memory:" would silently hand
+    # this one a private, empty database instead of the reservation the
+    # reaper is about to look at.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        db_path = os.path.join(tmp_dir, "range-in-flight.db")
+        docker = SlowRangeDocker()
+        store = InstanceStore(db_path=db_path)
+        range_store = RangeStore(db_path=db_path)
+        ports = PortAllocator(32000, 32767, db_path=db_path)
+        controller = InstanceController(
+            docker, store, range_store, ports, BASE_DOMAIN, CHALLENGE_NET, 30, 3
+        )
+        reaper = Reaper(
+            controller, store, range_store, grace_minutes=120, interval_seconds=9999,
+            reservation_timeout_seconds=0,
+        )
+
+        launcher = threading.Thread(target=launch)
+        launcher.start()
+        assert docker.range_attacker_created.wait(timeout=5), outcome.get("error")
+
+        # Age the *instance* row past the timeout. Its own resources -- the
+        # instance service, its gateway, its network, the range target -- are
+        # all still ahead of it; only the shared range attacker exists.
+        store._conn().execute(
+            "UPDATE instances SET created_at = created_at - 3600 WHERE owner_id = ? AND instance_key = ?",
+            ("team-1", "otw"),
+        )
+
+        reaped = reaper.sweep()
+
+        assert reaped == 0
+        assert store.reservation_pending("team-1", "otw") is True
+        assert range_store.reservation_pending("team-1") is True
+
+        docker.allow_creation_to_finish.set()
+        launcher.join(timeout=10)
+        assert not launcher.is_alive()
+
+        # The launch completed normally: its reservation survived the sweep,
+        # so finalize() found its row and the target the participant was
+        # already given a URL for is still there.
+        assert "error" not in outcome, outcome.get("error")
+        plan, created = outcome["result"]
+        assert created is True
+        record = store.get("team-1", "otw")
+        assert record is not None
+        assert record.plan.range_owner_id == "team-1"
+        # The target shares the range network (plan.network is None) -- the
+        # range attacker and the target both exist side by side now.
+        assert "chrange-team-1" in docker.networks
+        assert {svc.name for svc in plan.services} <= set(docker.services)
+        for resource in (store, range_store, ports):
+            resource.close()
