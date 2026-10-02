@@ -54,6 +54,21 @@ class InstanceInitializingError(Exception):
     pass
 
 
+class DockerServiceMissingError(Exception):
+    """The store still has a finalized record for this instance/range, but
+    the Docker service it describes is gone.
+
+    Deliberately distinct from "no record at all", which is the only thing
+    that's actually a 404. docker_client.restart_service() returns False for
+    both a missing service and a refused restart, and reboot() used to AND
+    that straight into a boolean, so main.py answered 404 {"error": "not
+    found"} for an instance whose credentials and flags were sitting right
+    there in the store. The only correct client response to that is
+    "relaunch", and a relaunch destroys the player's progress -- a wrong
+    answer to a recoverable state."""
+    pass
+
+
 class InstanceController:
     def __init__(
         self,
@@ -181,6 +196,13 @@ class InstanceController:
             self.store.release_reservation(owner_id, instance_key)
             raise
 
+        # Deliberately outside the try above: a failure *here* means the
+        # Docker work already happened, so there is nothing to roll back --
+        # only a reservation that vanished mid-creation (store.finalize now
+        # raises instead of silently updating 0 rows). The created services
+        # are left for the reaper's orphan sweep rather than removed here,
+        # because the reaper is what reconciles managed resources against
+        # the stores and a concurrent sweep may already have looked.
         self.store.finalize(owner_id, instance_key, plan)
         return plan, True
 
@@ -275,8 +297,13 @@ class InstanceController:
             self.workload_quota,
         )
         self._create_services(target_plan.services)
-        range_record.target_keys.add(instance_key)
-        self.range_store.update(range_record)
+        # Atomic add, not a get()->mutate->update() against an in-memory
+        # snapshot: two target-attacker challenges of the same team opened
+        # concurrently both read the same set here, and whichever
+        # update() landed last silently reverted the other's addition. The
+        # lost key then made teardown_range() skip that target's container
+        # forever. See RangeStore.add_target_key.
+        self.range_store.add_target_key(owner_id, instance_key)
         return target_plan
 
     # ── Pause / resume ("non-destructive stop") ──────────────────────────────
@@ -320,16 +347,19 @@ class InstanceController:
         return True
 
     def _resume_range_if_stopped(self, owner_id: str) -> None:
-        range_record = self.range_store.get(owner_id)
-        if range_record is None or not range_record.stopped:
+        # claim_stopped() atomically re-checks `stopped` rather than
+        # trusting a get() snapshot taken earlier in the caller's flow, so
+        # two concurrent resumes can't both recreate the attacker.
+        range_record = self.range_store.claim_stopped(
+            owner_id, expected_stopped=True, new_stopped=False
+        )
+        if range_record is None:
             return
         self.docker.ensure_network(range_record.plan.network, internal=True)
         services = [range_record.plan.attacker_service]
         if range_record.plan.gateway_service:
             services.append(range_record.plan.gateway_service)
         self._create_services(services)
-        range_record.stopped = False
-        self.range_store.update(range_record)
 
     def pause(self, owner_id: str, instance_key: str) -> bool:
         """Non-destructive stop used by the idle reaper and the post-solve
@@ -372,14 +402,14 @@ class InstanceController:
         it are paused/resumed independently via pause()/create_or_get()),
         and its published SSH/noVNC ports are kept reserved for the same
         reason pause() keeps an instance's ports."""
-        range_record = self.range_store.get(owner_id)
-        if range_record is None or range_record.stopped:
+        range_record = self.range_store.claim_stopped(
+            owner_id, expected_stopped=False, new_stopped=True
+        )
+        if range_record is None:
             return False
         self.docker.remove_service(range_record.plan.attacker_service.name)
         if range_record.plan.gateway_service:
             self.docker.remove_service(range_record.plan.gateway_service.name)
-        range_record.stopped = True
-        self.range_store.update(range_record)
         return True
 
     # ── Teardown ──────────────────────────────────────────────────────────────
@@ -404,10 +434,7 @@ class InstanceController:
             self.docker.remove_network(record.plan.network)
 
         if record.plan.range_owner_id:
-            range_record = self.range_store.get(record.plan.range_owner_id)
-            if range_record:
-                range_record.target_keys.discard(instance_key)
-                self.range_store.update(range_record)
+            self.range_store.remove_target_key(record.plan.range_owner_id, instance_key)
 
     def teardown(self, owner_id: str, instance_key: str) -> bool:
         record = self.store.claim_for_replacement(owner_id, instance_key)
@@ -415,8 +442,21 @@ class InstanceController:
             return False
         try:
             self._teardown_record(record)
-        finally:
-            self.store.release_reservation(owner_id, instance_key)
+        except Exception:
+            # The Docker teardown failed partway, so the record must NOT be
+            # dropped: `finally: release_reservation(...)` used to delete the
+            # row on this path too, leaving the caller with a 500, an
+            # instance that had vanished from GET /admin/instances, and a
+            # still-running container full of now-untracked credentials and
+            # flags. Restoring the claimed plan puts the environment back
+            # under store authority so it can simply be retried.
+            logger.exception(
+                "docker teardown failed for owner=%s key=%s; restoring the record so it can be retried",
+                owner_id, instance_key,
+            )
+            self.store.put(record)
+            raise
+        self.store.release_reservation(owner_id, instance_key)
         return True
 
     def teardown_range(self, owner_id: str) -> bool:
@@ -459,7 +499,14 @@ class InstanceController:
         """Restarts the container(s) in place, same credentials/flags either
         way: force_update() for a live instance (env is part of the existing
         task spec, untouched), or -- if the instance is currently paused --
-        recreate it from the persisted plan, exactly like a normal resume."""
+        recreate it from the persisted plan, exactly like a normal resume.
+
+        Returns False only when there's no record at all. A record whose
+        Docker service has vanished raises ``DockerServiceMissingError``
+        instead: that's a recoverable "someone/something removed the
+        container out from under us" state, not a missing instance, and
+        collapsing the two into one False is what made the API answer 404
+        for an instance the participant could still get back."""
         record = self.store.get(owner_id, instance_key)
         if record is None:
             return False
@@ -473,12 +520,26 @@ class InstanceController:
                 self._resume_range_if_stopped(record.plan.range_owner_id)
             return True
         self.store.touch(owner_id, instance_key)
-        ok = True
-        for svc_spec in record.plan.services:
-            ok = self.docker.restart_service(svc_spec.name) and ok
-        return ok
+        missing = [
+            svc_spec.name
+            for svc_spec in record.plan.services
+            if not self.docker.restart_service(svc_spec.name)
+        ]
+        if missing:
+            logger.warning(
+                "reboot owner=%s key=%s: Docker service(s) %s are gone from a record that still exists",
+                owner_id, instance_key, missing,
+            )
+            raise DockerServiceMissingError(
+                f"instance {owner_id}/{instance_key} is recorded but its container is no longer "
+                "running in Docker; relaunch the environment to recreate it"
+            )
+        return True
 
     def reboot_range_attacker(self, owner_id: str) -> bool:
+        """Same contract as reboot(): False means no record, a raised
+        DockerServiceMissingError means the range is recorded but its
+        attacker container is gone."""
         range_record = self.range_store.get(owner_id)
         if range_record is None:
             return False
@@ -488,7 +549,16 @@ class InstanceController:
             return True
         range_record.touch()
         self.range_store.touch(owner_id)
-        return self.docker.restart_service(range_record.plan.attacker_service.name)
+        if not self.docker.restart_service(range_record.plan.attacker_service.name):
+            logger.warning(
+                "reboot_range_attacker owner=%s: attacker service %s is gone from a record that still exists",
+                owner_id, range_record.plan.attacker_service.name,
+            )
+            raise DockerServiceMissingError(
+                f"range attacker for {owner_id} is recorded but its container is no longer "
+                "running in Docker; relaunch the environment to recreate it"
+            )
+        return True
 
     # ── Post-solve shutdown countdown ────────────────────────────────────────
     # schedule/extend/cancel below all delegate the actual read-then-write to

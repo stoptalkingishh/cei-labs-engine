@@ -1,8 +1,10 @@
+import time
+
 import pytest
 from cryptography.fernet import Fernet
 
 from app.config import Config
-from app.main import create_app
+from app.main import MAX_SHUTDOWN_SECONDS, create_app
 
 from .fakes import FakeDockerOrchestratorClient
 
@@ -96,6 +98,32 @@ def test_get_missing_instance_404(client):
     assert resp.status_code == 404
 
 
+def test_launch_is_never_reported_as_created_when_its_reservation_vanished(client):
+    """store.finalize() used to be a bare UPDATE with no rowcount check, so
+    a reservation deleted underneath an in-progress creation (the reaper's
+    stale-reservation release, or a concurrent teardown) made finalizing a
+    silent no-op and the participant got a 201 with a URL for an instance
+    the store has no record of. A lost reservation has to be an error."""
+    controller = client.application.config["controller"]
+    store = client.application.config["store"]
+    create_service = controller.docker.create_service
+
+    def create_then_lose_the_reservation(spec):
+        result = create_service(spec)
+        # The reaper winning the race against a creation slower than its
+        # own timeout, compressed to a single call.
+        store.release_stale_reservations(0)
+        return result
+
+    controller.docker.create_service = create_then_lose_the_reservation
+
+    resp = client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+
+    assert resp.status_code != 201
+    assert resp.status_code == 503
+    assert store.get("team-1", "juice") is None
+
+
 def test_delete_missing_instance_404(client):
     resp = client.delete("/instances/team-1/juice", headers=PLUGIN_HEADERS)
     assert resp.status_code == 404
@@ -118,6 +146,42 @@ def test_reboot_instance(client):
 def test_reboot_missing_instance_404(client):
     resp = client.post("/instances/team-1/juice/reboot", headers=PLUGIN_HEADERS)
     assert resp.status_code == 404
+
+
+def test_reboot_of_a_recorded_but_docker_less_instance_is_not_404(client):
+    """The store row is the instance; the container is just where it runs.
+    Answering 404 here told the participant's launcher to treat the
+    environment as gone, and the only thing that "fixes" that is a
+    relaunch -- which destroys the progress they're trying to keep. A
+    missing container is Docker's problem to report (502), not a claim that
+    the instance never existed."""
+    client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    docker = client.application.config["controller"].docker
+    docker.services.clear()
+
+    resp = client.post("/instances/team-1/juice/reboot", headers=PLUGIN_HEADERS)
+
+    assert resp.status_code != 404
+    assert resp.status_code == 502
+    body = resp.get_json()
+    assert "relaunch" in body["error"]
+    assert body["relaunch_required"] is True
+    # And the record is untouched -- nothing about this answer should cost
+    # the participant their credentials.
+    assert client.get("/instances/team-1/juice", headers=PLUGIN_HEADERS).status_code == 200
+
+
+def test_reboot_range_attacker_of_a_recorded_but_docker_less_range_is_not_404(client):
+    payload = {"type": "target-attacker", "owner_id": "team-1", "instance_key": "otw", "spec": {"target_image": "t", "attacker_image": "k"}}
+    client.post("/instances", json=payload, headers=PLUGIN_HEADERS)
+    client.application.config["controller"].docker.services.clear()
+
+    resp = client.post("/ranges/team-1/attacker/reboot", headers=PLUGIN_HEADERS)
+
+    assert resp.status_code == 502
+    assert "relaunch" in resp.get_json()["error"]
+    # Still a 404 for a range that genuinely has no record at all.
+    assert client.post("/ranges/nobody/attacker/reboot", headers=PLUGIN_HEADERS).status_code == 404
 
 
 # ── idle pause / resume: the credential-lifecycle fix, end-to-end over HTTP ────
@@ -252,6 +316,74 @@ def test_extend_exhausted_after_max_extensions(client):
         client.post("/instances/team-1/juice/extend-shutdown", json={}, headers=PLUGIN_HEADERS)
     resp = client.post("/instances/team-1/juice/extend-shutdown", json={}, headers=PLUGIN_HEADERS)
     assert resp.status_code == 409
+
+
+# ── shutdown countdown input validation ───────────────────────────────────────
+# `int(body.get("delay_seconds", ...))` used to sit outside the route's
+# try block, so anything JSON can express that isn't already an int --
+# "abc", null, a bool, a float -- raised straight out of the handler and
+# surfaced as an unhandled 500 with a stack trace instead of something the
+# caller could act on.
+
+@pytest.mark.parametrize(
+    "route,field",
+    [
+        ("schedule-shutdown", "delay_seconds"),
+        ("extend-shutdown", "extend_seconds"),
+    ],
+)
+@pytest.mark.parametrize("bad_value", ["abc", True, 30.5, [30], {"seconds": 30}])
+def test_non_integer_countdown_values_are_400_not_500(client, route, field, bad_value):
+    client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    client.post("/instances/team-1/juice/schedule-shutdown", json={}, headers=PLUGIN_HEADERS)
+
+    resp = client.post(
+        f"/instances/team-1/juice/{route}", json={field: bad_value}, headers=PLUGIN_HEADERS
+    )
+
+    assert resp.status_code == 400
+    assert field in resp.get_json()["error"]
+
+
+def test_explicit_null_countdown_falls_back_to_the_configured_default(client):
+    # CTFd's plugin omits the key rather than sending null when it wants the
+    # configured value (see orchestrator_client.schedule_shutdown), so an
+    # explicit null means the same thing -- it must not be a 500.
+    client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+
+    resp = client.post(
+        "/instances/team-1/juice/schedule-shutdown", json={"delay_seconds": None}, headers=PLUGIN_HEADERS
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["shutdown_at"] > time.time() + FakeConfig.SHUTDOWN_DELAY_SECONDS - 5
+
+
+def test_negative_countdown_is_clamped_instead_of_due_immediately(client):
+    # {"delay_seconds": -99999} used to set shutdown_at about a day in the
+    # PAST, so the very next reaper sweep saw the countdown as already due
+    # and destroyed an instance the participant was still using.
+    client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    before = time.time()
+
+    resp = client.post(
+        "/instances/team-1/juice/schedule-shutdown", json={"delay_seconds": -99999}, headers=PLUGIN_HEADERS
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["shutdown_at"] >= before
+
+
+def test_absurdly_large_countdown_is_clamped(client):
+    client.post("/instances", json=WEB_APP_PAYLOAD, headers=PLUGIN_HEADERS)
+    before = time.time()
+
+    resp = client.post(
+        "/instances/team-1/juice/schedule-shutdown", json={"delay_seconds": 10**12}, headers=PLUGIN_HEADERS
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["shutdown_at"] <= before + MAX_SHUTDOWN_SECONDS + 5
 
 
 # ── ranges ────────────────────────────────────────────────────────────────────
