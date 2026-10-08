@@ -14,6 +14,9 @@ full record.
   and multipart verification to CTFGenerator pinned at reviewed commit
   `3bf708868d2af1e567686ca3e7e684b537fd0451`; candidate submissions are not
   logged and malformed stored specifications are rejected.
+- `docker/ctfd/plugins/submission-history`: let a player review the flags they
+  have already submitted, account-scoped, so sharing a solved challenge no
+  longer requires a screenshot.
 - `ansible/inventory-fedora-live.ini`: live Fedora Swarm inventory template
   targeting the current OPNsense LAN/server network `192.168.10.0/24`
   (gateway `192.168.10.1`), replacing the stale `192.168.1.0/24` /
@@ -22,7 +25,8 @@ full record.
   candidate; SSH user/key are placeholders pending node-identity
   confirmation. Player Wi-Fi (`10.10.32.0/22`) is explicitly out of scope.
 - `docker/stack.yml`: commented-out scaffolding (secret definition +
-  `orchestrator` service mount) for `hint_wallet_sync_secret_previous`, an
+  `orchestrator` service mount) for
+  `hint_wallet_sync_secret_previous`, an
   `external: true` Docker secret an operator provisions only for the
   duration of a coordinated `hint_wallet_sync_secret` rotation — the
   application-side support for accepting either secret already existed
@@ -33,21 +37,6 @@ full record.
   stays `file:`-sourced (unchanged from PR #13) — see that doc section for
   why an `external:` primary secret was considered and rejected now that a
   file-based one is already live in production with real data in it.
-
-### Changed
-- Pinned every base/upstream image to an immutable digest instead of a
-  floating tag: `traefik:v3.7.6`, `mariadb:10.11`, `redis:7-alpine` in
-  `docker/stack.yml`; `ctfd/ctfd:3.8.2` (CTFd Dockerfile base),
-  `python:3.12-slim` (orchestrator Dockerfile base), `ubuntu:24.04`
-  (analyst Dockerfile base), `debian:12-slim` (target-base-linux Dockerfile
-  base). `kalilinux/kali-rolling` was already pinned from the 2026-07
-  security audit.
-- `docker/.env.example`'s `IMAGE_TAG` no longer defaults to `latest` — now
-  a placeholder that forces picking an explicit `sha-<commit>` release tag
-  (the immutable tag convention `build-ctfd.yml`/`build-orchestrator.yml`
-  already produce on every push to `main`).
-
-### Added
 - `docs/architecture-decisions.md`: ADR-001 (Docker Swarm, not K3s, is the
   production orchestration platform — resolves the "public repo
   description still says K3s" inconsistency the production-readiness
@@ -55,6 +44,56 @@ full record.
   read-only and the orchestrator's read-write Docker socket mounts, plus a
   recommended not-yet-scheduled follow-up: a docker-socket-proxy to narrow
   the orchestrator's API surface).
+- `docs/README.md`: an index separating the living reference docs from the
+  dated session logs, so an operator can tell which file to act on.
+
+### Changed
+- **Operator-visible:** `ORCHESTRATOR_OFFLINE_MODE` / `ORCHESTRATOR_OFFLINE_HOST`
+  (PR #44) collapse the attacker workstation's hostname-based link into a
+  single direct-IP noVNC address that works without DNS, instead of a
+  primary/fallback pair whose primary is permanently broken offline. Tri-state
+  (`auto` by default, decided at startup by probing whether `BASE_DOMAIN`
+  resolves) and fails fast when the mode is needed but the host is unset.
+- Hint scoring is now **per-challenge percentage reduction with a progression
+  window** (PR #35), replacing the shared-currency wallet: a hint costs a
+  percentage of that challenge's own score, and hints unlock only within a
+  bounded window of the player's progress. Requires the `cost_percent` column
+  added by PR #39 (`wallet_unlocks` table migration) on existing deployments.
+- Pinned every base/upstream image to an immutable digest instead of a
+  floating tag: `traefik:v3.7.6`, `mariadb:10.11`, `redis:7-alpine` in
+  `docker/stack.yml`; `ctfd/ctfd:3.8.6` (CTFd Dockerfile base, bumped from
+  3.8.2 in PR #42), `python:3.12-slim` (orchestrator Dockerfile base),
+  `ubuntu:24.04` (analyst Dockerfile base), `debian:12-slim`
+  (target-base-linux Dockerfile base). `kalilinux/kali-rolling` was already
+  pinned from the 2026-07 security audit.
+- `docker/.env.example`'s `IMAGE_TAG` no longer defaults to `latest` — now
+  a placeholder that forces picking an explicit `sha-<commit>` release tag
+  (the immutable tag convention `build-ctfd.yml`/`build-orchestrator.yml`
+  already produce on every push to `main`).
+- Attacker-workstation links now prefer a DNS-free route, and the number of
+  distinct scoreboards a player sees is consolidated to one (PR #43).
+- Wargame stage challenges hide automatically at their stage boundary rather
+  than waiting on a manual admin click (PR #31).
+
+### Fixed
+- `target-attacker` challenges served every team the literal
+  `__NATAS1_SECRET__` placeholder instead of a generated per-team value
+  (PR #48).
+- Lost-update race in the orchestrator's pause/reboot/shutdown state
+  transitions (PR #24) — a reaper sweep could interleave with a request and
+  leave a live container marked stopped.
+- Attacker workstation's no-DNS noVNC fallback is now encrypted (PR #23).
+- Wargame stage skip: the instance-launcher is gated on CTFd challenge
+  visibility (PR #26), and a solved challenge no longer shows "hints aren't
+  available" (PR #38).
+- kali-novnc: Chromium now starts (`--no-sandbox`; the renderer sandbox needs
+  `CLONE_NEWUSER`, which the deliberate `cap_drop: ALL` policy removes) —
+  PR #45.
+- `base-linux`: the standard Debian MOTD is restored at SSH login (PR #33).
+- Hint content renders as Markdown rather than escaped plain text (PR #40);
+  tier-cost wording simplified (PR #37); submission history expands inline
+  instead of opening a new tab (PR #36); the challenge modal widens on
+  desktop (PR #41).
 
 ## Milestones before this file existed
 
