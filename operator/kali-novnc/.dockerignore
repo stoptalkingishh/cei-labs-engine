@@ -1,0 +1,39 @@
+# Docker build context: operator/kali-novnc
+#
+# Built by .github/workflows/build-kali-novnc.yml (context:
+# operator/kali-novnc).
+#
+# The Dockerfile COPYs exactly two things:
+#   natas-theme-extension/                  -> /opt/cei-natas-theme-extension/
+#   wallpaper/natas-wallpaper.svg           -> /usr/share/backgrounds/...
+# Neither is excluded below.
+
+# VCS and local tooling state
+.git/
+.gitignore
+.github/
+.venv/
+venv/
+
+# Python build/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Tests are not needed to build or run this image
+tests/
+
+# Never ship local secrets or env overrides into an image
+.env
+.env.*
+!.env.example
+secrets/
+secrets.example/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store

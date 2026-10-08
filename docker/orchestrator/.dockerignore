@@ -1,0 +1,39 @@
+# Docker build context: docker/orchestrator
+#
+# Built by .github/workflows/build-orchestrator.yml (context:
+# docker/orchestrator).
+# docker/.env and docker/secrets/ live in the PARENT directory and are
+# therefore not in this context today -- that safety is incidental, not
+# designed. These rules make it explicit.
+#
+# tests/ IS safe to exclude here: the Dockerfile only COPYs requirements.txt
+# and app/, so the test suite is never part of the image. The unit tests run
+# in a separate job against the checked-out working tree, not in the image.
+tests/
+
+# VCS and local tooling state
+.git/
+.gitignore
+.github/
+.venv/
+venv/
+
+# Python build/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Never ship local secrets or env overrides into an image
+.env
+.env.*
+!.env.example
+secrets/
+secrets.example/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
