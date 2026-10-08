@@ -352,9 +352,41 @@ step6_copy_repos() {
       ok=false
       continue
     fi
-    log_info "Copying $repo -> $dst"
-    rm -rf "$dst"
-    if ! cp -r "$src" "$dst"; then
+    # This step must be independently re-runnable (see the "each is
+    # independent where possible" note at the top): re-running the installer
+    # on a live station to add a wargames challenge is a normal thing to do.
+    # The old unconditional `rm -rf "$dst"` made that destructive. The bundle
+    # ships docker/secrets.example (not a populated docker/secrets/), so
+    # wiping the destination left step 7's `if [[ ! -d docker/secrets ]]`
+    # guard true on the fresh copy: it rebuilt the directory from the
+    # CHANGE_ME placeholders, generated new random values for every secret,
+    # and redeployed the stack with them. That rotates the CTFd session key,
+    # the MariaDB root/user password and the plugin shared secret behind a
+    # running CTFd and a populated database — and it is exactly the rotation
+    # patch-secrets.sh exists to make deliberate, so it must never happen as
+    # a side effect of re-copying source code. docker/.env was destroyed the
+    # same way, discarding the station's BASE_DOMAIN/IMAGE_TAG choices.
+    #
+    # So: when the destination is already provisioned, skip the copy
+    # outright; otherwise merge with `cp -a "$src/." "$dst/"`, which copies
+    # contents, overwrites same-named files, and leaves anything the bundle
+    # doesn't have alone. Either way docker/.env and docker/secrets/ survive.
+    if [[ ! -d "$dst/docker" ]]; then
+      # Nothing provision-shaped here yet (fresh install, or a repo like
+      # CEI-Labs-Wargames that has no docker/ tree at all) — plain copy.
+      log_info "Copying $repo -> $dst"
+    elif [[ -f "$dst/docker/.env" && -d "$dst/docker/secrets" ]]; then
+      log_info "Preserving live $dst (has docker/.env + docker/secrets/) — skipping source copy."
+      log_info "  Run scripts/patch-secrets.sh to rotate a secret deliberately; re-copying must never do it implicitly."
+      continue
+    else
+      # A half-provisioned tree (docker/ present, .env or secrets/ missing):
+      # merge over it rather than wipe it, but say so, because a previous run
+      # died partway through step 7 and this is the state it left behind.
+      log_warn "$dst is half-provisioned (docker/ present but docker/.env or docker/secrets/ missing) — merging over it (cp -a, no rm -rf)."
+    fi
+    mkdir -p "$dst"
+    if ! cp -a "$src/." "$dst/"; then
       log_error "Copy failed for $repo"
       ok=false
     fi

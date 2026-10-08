@@ -23,6 +23,16 @@ DEFAULT_BASE_PORT=30001
 DEFAULT_TAG="latest"
 DEFAULT_ORG="your-github-org"
 DEFAULT_TYPE="analyst"
+# First port of the orchestrator's own published SSH range (32000-32767,
+# ORCHESTRATOR_SSH_PORT_RANGE_START/END in docker/.env.example). Workspaces
+# must stay strictly below it: a collision publishes a challenge instance's
+# SSH on a port an analyst workspace already owns, `docker service create`
+# fails with "Bind for 0.0.0.0:32200 failed: port is already allocated", and
+# the challenge never starts — surfacing much later as an opaque orchestrator
+# timeout with nothing pointing at the port. The default matches
+# .env.example; override with ORCHESTRATOR_SSH_PORT_RANGE_START (or
+# WORKSPACE_PORT_CEILING) if the orchestrator range is configured elsewhere.
+DEFAULT_ORCHESTRATOR_PORT_RANGE_START=32000
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 
@@ -31,9 +41,22 @@ log_warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 log_error() { echo -e "${RED}[-]${NC} $*" >&2; }
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BASE_PORT="$DEFAULT_BASE_PORT"
+# ANALYST_BASE_PORT is read from the environment here as well as from
+# docker/.env below. It used to be honoured only inside the `if .env exists`
+# branch, so on a station with no .env (or to reposition a roster from the
+# command line) the override was silently dropped and every run started at
+# 30001 — which is exactly the knob you need to reach when a roster no longer
+# fits below the orchestrator port range.
+BASE_PORT="${ANALYST_BASE_PORT:-$DEFAULT_BASE_PORT}"
 TAG="$DEFAULT_TAG"
 ORG="$DEFAULT_ORG"
+# Seed the ceiling from the environment before docker/.env is sourced, so a
+# station with no .env still honours ORCHESTRATOR_SSH_PORT_RANGE_START (or the
+# WORKSPACE_PORT_CEILING alias). If .env *does* define the range, that value
+# wins below — deliberately, because .env is what the orchestrator itself
+# reads, so letting a shell variable override it here would compute a ceiling
+# the orchestrator doesn't agree with and reintroduce the collision.
+PORT_CEILING="${ORCHESTRATOR_SSH_PORT_RANGE_START:-${WORKSPACE_PORT_CEILING:-$DEFAULT_ORCHESTRATOR_PORT_RANGE_START}}"
 
 if [[ -f "$ENV_FILE" ]]; then
   # docker/.env is plain KEY=value, safe to source directly (same file
@@ -45,8 +68,23 @@ if [[ -f "$ENV_FILE" ]]; then
   BASE_PORT="${ANALYST_BASE_PORT:-$DEFAULT_BASE_PORT}"
   TAG="${IMAGE_TAG:-$DEFAULT_TAG}"
   ORG="${GITHUB_ORG:-$DEFAULT_ORG}"
+  # .env is the authoritative place ORCHESTRATOR_SSH_PORT_RANGE_START lives
+  # (the orchestrator reads the same file), so it overrides the seed above.
+  PORT_CEILING="${ORCHESTRATOR_SSH_PORT_RANGE_START:-$PORT_CEILING}"
 else
   log_warn "docker/.env not found — using built-in defaults. Copy docker/.env.example to docker/.env to configure."
+fi
+
+# Validated only after .env is sourced, because that is where BASE_PORT and
+# the orchestrator range actually come from — validating earlier would check
+# values that are about to be overwritten.
+if ! [[ "$PORT_CEILING" =~ ^[0-9]+$ ]] || [[ "$PORT_CEILING" -le 0 ]]; then
+  log_error "Error: ORCHESTRATOR_SSH_PORT_RANGE_START must be a positive integer (got '${PORT_CEILING}')."
+  exit 1
+fi
+if ! [[ "$BASE_PORT" =~ ^[0-9]+$ ]] || [[ "$BASE_PORT" -ge "$PORT_CEILING" ]]; then
+  log_error "Error: ANALYST_BASE_PORT (${BASE_PORT}) must be a number below ORCHESTRATOR_SSH_PORT_RANGE_START (${PORT_CEILING}). Workspace ports would collide with the orchestrator's own 32000-32767 SSH range."
+  exit 1
 fi
 
 TYPE="$DEFAULT_TYPE"
@@ -170,17 +208,31 @@ fi
 mapfile -t PLACEMENT_ARGS < <(placement_args)
 
 COUNTER=0
+ROSTER_LINE=0
 echo "═════════════════════════════════════════════════════════════════════"
 printf "%-20s | %-10s | %-15s\n" "Username" "Port" "Generated Pass"
 echo "─────────────────────────────────────────────────────────────────────"
 
 while IFS= read -r line || [[ -n "$line" ]]; do
+  ROSTER_LINE=$((ROSTER_LINE + 1))
   [[ -z "$line" || "$line" =~ ^# ]] && continue
 
   username=$(echo "$line" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
   [[ -z "$username" ]] && continue
 
   PORT=$((BASE_PORT + COUNTER))
+
+  # Nothing used to bound PORT, so a ~2000-line roster walked straight out of
+  # the workspace band and into the orchestrator's 32000-32767 SSH range.
+  # Fail before creating anything, and name the roster line so the operator
+  # can drop the offending entry instead of bisecting a 2000-line file.
+  if [[ "$PORT" -ge "$PORT_CEILING" ]]; then
+    log_error "Roster line ${ROSTER_LINE} ('${username}') would need published port ${PORT}, which is inside the orchestrator's SSH range (${PORT_CEILING}-32767)."
+    log_error "Refusing to continue: only $((PORT_CEILING - BASE_PORT)) workspace(s) fit between ANALYST_BASE_PORT=${BASE_PORT} and the ceiling."
+    log_error "Fix by shrinking the roster, splitting it into a second roster with a lower ANALYST_BASE_PORT, or raising ORCHESTRATOR_SSH_PORT_RANGE_START. (docker/.env.example: keep ANALYST_BASE_PORT + roster size below ${PORT_CEILING}.)"
+    exit 1
+  fi
+
   COUNTER=$((COUNTER + 1))
 
   SERVICE_NAME="workspace-${TYPE}-${username}"
