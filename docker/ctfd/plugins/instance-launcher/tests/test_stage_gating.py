@@ -30,6 +30,23 @@ from flask import Flask
 from werkzeug.exceptions import HTTPException
 
 
+# ── Marker-setting auth decorator stubs ─────────────────────────────────────
+# See the identical block in test_secret_scrubbing.py for why these are not
+# bare `lambda f: f`: the whole suite runs with the auth decorators
+# neutralized, so without an observable marker nothing here (or in the other
+# file) could catch a deleted @authed_only/@admins_only.
+
+
+def _marked_authed_only(func):
+    setattr(func, "__authed__", True)
+    return func
+
+
+def _marked_admins_only(func):
+    setattr(func, "__admins_only__", True)
+    return func
+
+
 # ── Fake CTFd.models ─────────────────────────────────────────────────────────
 
 class _FakeChallenge:
@@ -65,6 +82,14 @@ class _FakeDb:
     class session:
         @staticmethod
         def rollback():
+            pass
+
+        @staticmethod
+        def commit():
+            pass
+
+        @staticmethod
+        def add(_obj):
             pass
 
 
@@ -171,8 +196,8 @@ def _install_stubs():
 
     ctfd_utils = types.ModuleType("CTFd.utils")
     ctfd_decorators = types.ModuleType("CTFd.utils.decorators")
-    ctfd_decorators.admins_only = lambda f: f
-    ctfd_decorators.authed_only = lambda f: f
+    ctfd_decorators.admins_only = _marked_admins_only
+    ctfd_decorators.authed_only = _marked_authed_only
     ctfd_user = types.ModuleType("CTFd.utils.user")
     ctfd_user.get_current_user = lambda: SimpleNamespace(account_id=1)
 
@@ -342,3 +367,117 @@ def test_api_launch_succeeds_for_visible_challenge():
     assert code == 200
     assert body["success"] is True
     assert body["status"]["access"]["url"] == "https://challenge-11.apps.ctf.local"
+
+
+# ── /admin/mappings/sync shared-secret auth ────────────────────────────────
+# X-Sync-Auth is compared with hmac.compare_digest, which raises TypeError on
+# `str` operands containing any byte >= 0x80 -- so before this was encoded on
+# both sides, a request carrying a single non-ASCII byte in the header
+# produced an unhandled 500 on a machine-to-machine endpoint whose only
+# correct failure mode is 401. Flask/Werkzeug hands header values over as
+# latin-1-decoded str, so a raw 0x80-0xFF byte on the wire arrives here
+# exactly as a non-ASCII str.
+
+SECRET = "shared-secret-value"
+
+
+@pytest.fixture
+def sync_client(monkeypatch):
+    monkeypatch.setattr(routes, "read_secret", lambda _name: SECRET)
+    sync_app = Flask(__name__, static_folder=None)
+    sync_app.register_blueprint(routes.instance_launcher_bp)
+    return sync_app.test_client()
+
+
+def _sync_body():
+    return {"challenge_name": "Bandit 0 -> 1", "instance_type": "web-app"}
+
+
+def test_sync_without_the_header_is_401(sync_client):
+    assert sync_client.post("/plugins/instance-launcher/admin/mappings/sync", json=_sync_body()).status_code == 401
+
+
+def test_sync_with_a_wrong_secret_is_401(sync_client):
+    resp = sync_client.post(
+        "/plugins/instance-launcher/admin/mappings/sync",
+        json=_sync_body(),
+        headers={"X-Sync-Auth": "not-the-secret"},
+    )
+    assert resp.status_code == 401
+
+
+def test_sync_with_the_right_secret_is_200(sync_client, monkeypatch):
+    """The control case: the endpoint still works for scripts/challenges-load.sh."""
+    class _NamedQuery:
+        @staticmethod
+        def filter_by(**_criteria):
+            return SimpleNamespace(first=lambda: _FakeChallenge(5, state="visible"))
+
+    monkeypatch.setattr(routes.Challenges, "query", _NamedQuery)
+    monkeypatch.setattr(routes.InstanceChallengeConfig, "query", _ConfigQuery)
+    _ConfigQuery.rows[5] = _FakeConfig(5)
+
+    resp = sync_client.post(
+        "/plugins/instance-launcher/admin/mappings/sync",
+        json=_sync_body(),
+        headers={"X-Sync-Auth": SECRET},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["challenge_id"] == 5
+
+
+def test_sync_with_an_empty_configured_secret_is_401(sync_client, monkeypatch):
+    """Fail closed when the deployment never provisioned plugin_shared_secret,
+    rather than letting any caller through."""
+    monkeypatch.setattr(routes, "read_secret", lambda _name: "")
+    resp = sync_client.post(
+        "/plugins/instance-launcher/admin/mappings/sync",
+        json=_sync_body(),
+        headers={"X-Sync-Auth": ""},
+    )
+    assert resp.status_code == 401
+
+
+def test_sync_with_a_non_ascii_header_is_401_not_500(sync_client):
+    resp = sync_client.post(
+        "/plugins/instance-launcher/admin/mappings/sync",
+        json=_sync_body(),
+        headers={"X-Sync-Auth": "café-" + SECRET},
+    )
+    assert resp.status_code == 401, f"expected a clean 401, got {resp.status_code}"
+
+
+# ── route access-control contract ─────────────────────────────────────────
+# Every behavioral test in this plugin's suite runs with the auth decorators
+# stubbed to mark-and-call-through, so none of them can distinguish
+# "correctly authed" from "decorator deleted". This table-driven test closes
+# that gap by walking the blueprint's real url_map and asserting each rule
+# carries the marker its decorator implies -- so dropping an admin guard (or
+# adding an unguarded route) now fails CI instead of resting on code review
+# alone.
+
+EXPECTED_AUTH = {
+    "instance_launcher.launch": {"authed": True, "admins": False},
+    "instance_launcher.api_status": {"authed": True, "admins": False},
+    "instance_launcher.api_launch": {"authed": True, "admins": False},
+    "instance_launcher.admin_mappings": {"authed": False, "admins": True},
+    "instance_launcher.admin_delete_mapping": {"authed": False, "admins": True},
+    # Machine-to-machine: authenticated by X-Sync-Auth, not a CTFd session.
+    "instance_launcher.sync_mapping": {"authed": False, "admins": False},
+}
+
+
+@pytest.mark.parametrize("endpoint,expected", sorted(EXPECTED_AUTH.items()))
+def test_every_route_carries_the_expected_auth_decorator(endpoint, expected):
+    contract_app = Flask(__name__, static_folder=None)
+    contract_app.register_blueprint(routes.instance_launcher_bp)
+    view = contract_app.view_functions[endpoint]
+    assert getattr(view, "__authed__", False) is expected["authed"]
+    assert getattr(view, "__admins_only__", False) is expected["admins"]
+
+
+def test_url_map_has_no_routes_beyond_the_ones_this_test_asserts():
+    contract_app = Flask(__name__, static_folder=None)
+    contract_app.register_blueprint(routes.instance_launcher_bp)
+    assert {rule.endpoint for rule in contract_app.url_map.iter_rules()} == set(EXPECTED_AUTH)

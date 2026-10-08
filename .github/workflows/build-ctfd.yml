@@ -74,11 +74,27 @@ jobs:
         working-directory: docker/ctfd/plugins/modal-theme
         run: pytest -q --import-mode=importlib tests/
 
+      - name: Install submission-history test dependencies
+        working-directory: docker/ctfd/plugins/submission-history
+        # No requirements.txt: routes.py's only third-party import is flask,
+        # which in production comes from the CTFd base image (see
+        # docker/ctfd/Dockerfile). test_routes.py drives the blueprint through
+        # a real Flask test client, so flask is installed explicitly here.
+        run: pip install pytest flask
+
+      - name: Run submission-history unit tests
+        working-directory: docker/ctfd/plugins/submission-history
+        run: pytest -q --import-mode=importlib tests/
+
       - name: Install wargame-stages test dependencies
         working-directory: docker/ctfd/plugins/wargame-stages
-        # No requirements.txt: logic.py has no third-party dependencies,
-        # so pytest is the only dependency needed.
-        run: pip install pytest
+        # No requirements.txt: logic.py has no third-party dependencies.
+        # flask isn't one of them in production either (the CTFd base image
+        # supplies it, see docker/ctfd/Dockerfile) -- routes.py imports it at
+        # module level and the test suite registers routes.py's real Blueprint
+        # on a real Flask app to walk its url_map, so it's installed
+        # explicitly here for CI.
+        run: pip install pytest flask
 
       - name: Run wargame-stages unit tests
         working-directory: docker/ctfd/plugins/wargame-stages

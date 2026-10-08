@@ -163,8 +163,23 @@ def _install_stubs():
     ctfd_utils = types.ModuleType("CTFd.utils")
     ctfd_utils.get_config = lambda *_a, **_kw: None
     ctfd_decorators = types.ModuleType("CTFd.utils.decorators")
-    ctfd_decorators.admins_only = lambda f: f
-    ctfd_decorators.authed_only = lambda f: f
+    # Marker-setting rather than bare identity: every behavioral test in this
+    # suite runs with these stubbed, so none of them can tell "correctly
+    # authed" from "decorator deleted". The table-driven contract test at the
+    # bottom of this file walks the blueprint's real url_map and asserts each
+    # rule carries the marker its decorator implies, so that gap is closed in
+    # CI rather than resting on code review. They still call straight
+    # through, so behavior is unchanged.
+    def _marked_admins_only(func):
+        setattr(func, "__admins_only__", True)
+        return func
+
+    def _marked_authed_only(func):
+        setattr(func, "__authed__", True)
+        return func
+
+    ctfd_decorators.admins_only = _marked_admins_only
+    ctfd_decorators.authed_only = _marked_authed_only
     ctfd_user = types.ModuleType("CTFd.utils.user")
     def _raise_outside_request_context():
         # Matches real CTFd/Flask: get_current_user() touches the session
@@ -178,11 +193,12 @@ def _install_stubs():
     ctfd_user.get_current_user = _raise_outside_request_context
     ctfd_user.is_admin = lambda: True
 
-    flask_stub = types.ModuleType("flask")
-    for name in ("Blueprint", "Response", "abort", "flash", "jsonify", "redirect", "render_template", "request", "url_for"):
-        setattr(flask_stub, name, lambda *a, **kw: None)
-    flask_stub.Blueprint = lambda *a, **kw: types.SimpleNamespace(route=lambda *a2, **kw2: (lambda f: f))
-
+    # flask is NOT stubbed: it's a real dependency here (in production the
+    # CTFd base image supplies it, see docker/ctfd/Dockerfile; for CI see
+    # .github/workflows/build-ctfd.yml), so routes.py's blueprint is a real
+    # Flask Blueprint and can be registered on a real app. That's what lets
+    # the access-control contract test at the bottom walk the actual url_map
+    # instead of trusting the source order of the decorators.
     for mod_name, mod in {
         "CTFd": ctfd,
         "CTFd.models": ctfd_models,
@@ -190,7 +206,6 @@ def _install_stubs():
         "CTFd.utils": ctfd_utils,
         "CTFd.utils.decorators": ctfd_decorators,
         "CTFd.utils.user": ctfd_user,
-        "flask": flask_stub,
     }.items():
         sys.modules[mod_name] = mod
 
@@ -295,6 +310,70 @@ class TestReconcileStage:
         assert conflicted.state == "visible"  # left alone, not force-hidden into a stage it doesn't belong to
         assert clean.state == "hidden"
 
+    def test_every_challenge_cross_mapped_to_another_stage_leaves_this_stage_intact(self):
+        """The all-conflict case, which the one-conflict case above misses.
+
+        When every challenge in the stage's category already belongs to a
+        DIFFERENT stage, this stage has nothing to add -- but it must not
+        destroy what it already had either. `own_ids` is empty there, so the
+        delete's `~challenge_id.in_(own_ids)` clause has nothing to exclude and
+        used to degrade to `.filter(True)`, wiping every mapping for this
+        stage. The stage would then report 0 mapped and be permanently
+        unstartable (start() aborts 409 on the count check) until someone
+        edited the database by hand -- and this runs unattended at app startup
+        and after every content push, so it could happen to any deployment
+        whose categories overlap.
+        """
+        other_stage = _stage("krypton", "Cryptography")
+        stage = _stage("bandit", "Linux Basics")
+        c1 = _challenge("Linux Basics")
+        c2 = _challenge("Linux Basics")
+        GameStageChallenge(id=1, stage_id=other_stage.id, challenge_id=c1.id)
+        GameStageChallenge(id=2, stage_id=other_stage.id, challenge_id=c2.id)
+        # This stage's own prior (now stale but not ours to destroy) mapping.
+        GameStageChallenge(id=3, stage_id=stage.id, challenge_id=c1.id)
+
+        mapped = routes_mod._reconcile_stage(stage)
+
+        assert mapped == 0
+        surviving = {
+            (row.stage_id, row.challenge_id)
+            for row in ALL_TABLES[GameStageChallenge]
+        }
+        assert (stage.id, c1.id) in surviving, "reconcile wiped this stage's own mappings"
+        assert (other_stage.id, c1.id) in surviving and (other_stage.id, c2.id) in surviving
+        # The other stage's challenges stay visible: it owns them, not us.
+        assert c1.state == "visible" and c2.state == "visible"
+
+    def test_all_conflict_stage_reconcile_is_idempotent(self):
+        """Re-running the unattended path (app restart, second content push)
+        must not shrink a stage further each time."""
+        other_stage = _stage("krypton", "Cryptography")
+        stage = _stage("bandit", "Linux Basics")
+        c1 = _challenge("Linux Basics")
+        GameStageChallenge(id=1, stage_id=other_stage.id, challenge_id=c1.id)
+        GameStageChallenge(id=2, stage_id=stage.id, challenge_id=c1.id)
+
+        assert routes_mod._reconcile_stage(stage) == 0
+        after_first = len(ALL_TABLES[GameStageChallenge])
+        assert routes_mod._reconcile_stage(stage) == 0
+
+        assert len(ALL_TABLES[GameStageChallenge]) == after_first
+
+    def test_stage_with_no_challenges_at_all_still_clears_stale_mappings(self):
+        """The OTHER empty-`own_ids` case: the category has no challenges in
+        CTFd, so any mapping this stage still holds is stale and should be
+        cleaned up. Guarding the delete must not have turned this into a
+        no-op that leaves a stage permanently unstartable too."""
+        stage = _stage("bandit", "Linux Basics")
+        stale = _challenge("Cryptography")  # moved out of this category
+        GameStageChallenge(id=1, stage_id=stage.id, challenge_id=stale.id)
+
+        mapped = routes_mod._reconcile_stage(stage)
+
+        assert mapped == 0
+        assert ALL_TABLES[GameStageChallenge] == []
+
     def test_reconcile_all_pending_only_touches_pending_stages(self):
         pending = _stage("bandit", "Linux Basics")
         started = _stage("natas", "Web Security", state="active")
@@ -308,3 +387,117 @@ class TestReconcileStage:
         assert summary == {"bandit": 1}
         assert pending_challenge.state == "hidden"
         assert started_challenge.state == "visible"
+
+
+# ── /machine/reconcile shared-secret auth ─────────────────────────────────
+
+SECRET = "shared-secret-value"
+
+
+@pytest.fixture
+def reconcile_client(monkeypatch):
+    """A real Flask test client for the blueprint's /machine/reconcile route.
+
+    X-Sync-Auth is compared with hmac.compare_digest, which raises TypeError
+    on `str` operands containing any byte >= 0x80 -- so before this was
+    encoded on both sides, a request carrying a single non-ASCII byte in the
+    header produced an unhandled 500 on a machine-to-machine endpoint that
+    must never do anything but 401. Flask/Werkzeug passes header values
+    through as latin-1-decoded str, so a raw 0x80-0xFF byte on the wire lands
+    in the request exactly as a non-ASCII str.
+    """
+    from flask import Flask
+
+    monkeypatch.setattr(routes_mod, "read_secret", lambda _name: SECRET)
+    app = Flask(__name__, static_folder=None)
+    app.register_blueprint(routes_mod.wargame_stages_bp)
+    return app.test_client()
+
+
+def test_machine_reconcile_without_the_header_is_401(reconcile_client):
+    assert reconcile_client.post("/plugins/wargame-stages/machine/reconcile").status_code == 401
+
+
+def test_machine_reconcile_with_a_wrong_secret_is_401(reconcile_client):
+    resp = reconcile_client.post(
+        "/plugins/wargame-stages/machine/reconcile", headers={"X-Sync-Auth": "not-the-secret"}
+    )
+    assert resp.status_code == 401
+
+
+def test_machine_reconcile_with_the_right_secret_is_200(reconcile_client):
+    stage = _stage("bandit", "Linux Basics")
+    _challenge("Linux Basics")
+
+    resp = reconcile_client.post(
+        "/plugins/wargame-stages/machine/reconcile", headers={"X-Sync-Auth": SECRET}
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"bandit": 1}
+    assert len(ALL_TABLES[GameStageChallenge]) == 1
+
+
+def test_machine_reconcile_with_an_empty_configured_secret_is_401(reconcile_client, monkeypatch):
+    """Fail closed when the deployment never provisioned the secret, rather
+    than letting any caller through."""
+    monkeypatch.setattr(routes_mod, "read_secret", lambda _name: "")
+    resp = reconcile_client.post(
+        "/plugins/wargame-stages/machine/reconcile", headers={"X-Sync-Auth": ""}
+    )
+    assert resp.status_code == 401
+
+
+def test_machine_reconcile_with_a_non_ascii_header_is_401_not_500(reconcile_client):
+    """The regression: hmac.compare_digest(str, str) raises TypeError for any
+    operand with a byte >= 0x80, which surfaced as a 500 on both machine
+    endpoints instead of the 401 the request deserves."""
+    resp = reconcile_client.post(
+        "/plugins/wargame-stages/machine/reconcile",
+        headers={"X-Sync-Auth": "café-" + SECRET},
+    )
+    assert resp.status_code == 401, f"expected a clean 401, got {resp.status_code}"
+
+
+# ── route access-control contract ─────────────────────────────────────────
+# Every behavioral test above runs with `admins_only`/`authed_only` stubbed to
+# mark-and-call-through, so none of them can distinguish "correctly authed"
+# from "decorator deleted". This table-driven test closes that gap by walking
+# the blueprint's real url_map and asserting each rule carries the marker its
+# decorator implies -- so dropping an admin guard now fails CI instead of
+# resting on code review alone.
+
+EXPECTED_AUTH = {
+    "wargame_stages.overview": {"authed": True, "admins": False},
+    "wargame_stages.scoreboard": {"authed": True, "admins": False},
+    "wargame_stages.admin": {"authed": False, "admins": True},
+    "wargame_stages.export": {"authed": False, "admins": True},
+    "wargame_stages.sync": {"authed": False, "admins": True},
+    # Machine-to-machine: authenticated by X-Sync-Auth, not a CTFd session.
+    "wargame_stages.machine_reconcile": {"authed": False, "admins": False},
+    "wargame_stages.start": {"authed": False, "admins": True},
+    "wargame_stages.lock": {"authed": False, "admins": True},
+    "wargame_stages.close": {"authed": False, "admins": True},
+    "wargame_stages.visibility": {"authed": False, "admins": True},
+}
+
+
+@pytest.mark.parametrize("endpoint,expected", sorted(EXPECTED_AUTH.items()))
+def test_every_route_carries_the_expected_auth_decorator(endpoint, expected):
+    from flask import Flask
+
+    app = Flask(__name__, static_folder=None)
+    app.register_blueprint(routes_mod.wargame_stages_bp)
+    view = app.view_functions[endpoint]
+    assert getattr(view, "__authed__", False) is expected["authed"]
+    assert getattr(view, "__admins_only__", False) is expected["admins"]
+
+
+def test_url_map_has_no_routes_beyond_the_ones_this_test_asserts():
+    """A new route added without updating EXPECTED_AUTH would otherwise go
+    unasserted -- make that a deliberate edit here."""
+    from flask import Flask
+
+    app = Flask(__name__, static_folder=None)
+    app.register_blueprint(routes_mod.wargame_stages_bp)
+    assert {rule.endpoint for rule in app.url_map.iter_rules()} == set(EXPECTED_AUTH)

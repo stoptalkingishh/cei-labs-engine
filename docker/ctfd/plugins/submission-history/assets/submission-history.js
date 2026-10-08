@@ -15,9 +15,15 @@
  * no new browser tab. (An earlier version also linked out to a standalone
  * "view all my submitted flags" page in a new tab; that's been dropped here
  * so the ONLY way to see a submitted flag is this inline toggle, scoped to
- * whichever challenge you're already looking at. The /solves and /api/solves
- * routes still exist server-side as a direct-URL fallback, just with no link
- * to them from the modal.)
+ * whichever challenge you're already looking at.)
+ *
+ * This file calls ONLY /api/solve/<challenge_id> -- never /api/solves or
+ * /solves. Those two are the plugin's bulk routes (every flag this account
+ * has ever earned, in one request) and routes.py now puts them behind
+ * @admins_only: unthrottled and unlogged, they were the highest-leverage
+ * single call for an attacker with any valid session, and a bulk dump also
+ * works against the flag-sharing deterrence this panel exists to provide.
+ * Nothing here needs changing for that -- it never referenced them.
  *
  * Modeled structurally on ../../hint-wallet/assets/hint-wallet.js and
  * ../../instance-launcher/assets/challenge-launch.js: same

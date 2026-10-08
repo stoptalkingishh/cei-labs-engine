@@ -190,8 +190,24 @@ def _install_stubs():
     # test_api_unlock_renders_hint_content_as_markdown below swaps this for
     # a fake that proves routes.py actually calls it on the content.
     ctfd_utils.markdown = lambda text: text
+    # NOT stubbed: CTFd.utils.security.sanitize is deliberately left
+    # unstubbed/absent so sanitize.py falls back to its own stdlib
+    # allowlist implementation -- see sanitize.py's header. The XSS
+    # regression tests at the bottom of this file therefore exercise a real
+    # sanitizer, not a double.
     ctfd_decorators = types.ModuleType("CTFd.utils.decorators")
-    ctfd_decorators.authed_only = lambda f: f
+    # Marker-setting rather than bare identity: the test-suite-wide
+    # access-control contract test at the bottom of this file walks the
+    # blueprint's url_map and asserts each rule carries the marker its
+    # decorator implies, so deleting an @authed_only (or adding a new
+    # undecorated route) fails CI instead of silently passing every
+    # behavioral test. The wrapper still calls straight through, so no
+    # production behavior is simulated differently than before.
+    def _marked_authed_only(func):
+        setattr(func, "__authed__", True)
+        return func
+
+    ctfd_decorators.authed_only = _marked_authed_only
     ctfd_user = types.ModuleType("CTFd.utils.user")
     ctfd_user.get_current_user = lambda: SimpleNamespace(account_id=1)
 
@@ -230,11 +246,14 @@ def _install_stubs():
 
 OrchestratorError = _install_stubs()
 
-# progression.py and track_mapping.py have zero CTFd imports (see their own
-# header comments), so they're loaded for real -- routes.py's
-# `from .progression import is_unlockable` / `from .track_mapping import
-# category_for_track` need the genuine modules registered under the
-# package name, not stubs.
+# progression.py, track_mapping.py and sanitize.py are loaded for real --
+# routes.py's `from .progression import is_unlockable` / `from .track_mapping
+# import category_for_track` / `from .sanitize import sanitize_html` need the
+# genuine modules registered under the package name, not stubs. sanitize.py
+# has no hard CTFd import (it falls back to its own allowlist implementation
+# when `CTFd.utils.security.sanitize` isn't importable, which is the case here
+# because `CTFd.*` is stubbed above) -- so the XSS tests below run against the
+# real sanitizer, not a double.
 def _load_real_submodule(name):
     path = Path(__file__).resolve().parents[1] / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"hint_wallet.{name}", path)
@@ -246,6 +265,7 @@ def _load_real_submodule(name):
 
 progression = _load_real_submodule("progression")
 track_mapping = _load_real_submodule("track_mapping")
+sanitize = _load_real_submodule("sanitize")
 
 module_path = Path(__file__).resolve().parents[1] / "routes.py"
 spec = importlib.util.spec_from_file_location("hint_wallet.routes", module_path)
@@ -481,6 +501,80 @@ def test_api_unlock_forwards_owner_id_and_hint_selection_when_in_window(app_clie
     assert resp.get_json()["content"] == "use ssh -h"
 
 
+def test_api_unlock_sanitizes_hint_content_after_markdown(app_client, monkeypatch):
+    """The XSS boundary: routes.py must run hint content through BOTH
+    CTFd's markdown pipeline and a sanitize allowlist, in that order.
+
+    Without the sanitize step this is stored XSS, not a cosmetic bug:
+    markdown() runs cmark-gfm with CMARK_OPT_UNSAFE, so raw HTML in the hint
+    source passes through untouched, and hint-wallet.js assigns the result to
+    contentDiv.innerHTML. Any foothold in the content pipeline (a content-push
+    job, a wargames maintainer account, a compromised release) would then run
+    in every player's browser, in the CTFd origin, with the player's session
+    -- enough to submit their flags and drive the launcher API.
+
+    The `CTFd.utils.markdown` stub is the identity here, so these payloads
+    reach the sanitizer as authored HTML, which is exactly the shape a raw
+    `<script>`/`<img onerror>` block takes after cmark-gfm's pass-through.
+    """
+    monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
+    _set_track_challenges(_FakeChallengeRow(1, "Bandit 0 -> 1", "Linux Basics"))
+    _set_solves()
+
+    payloads = [
+        "<script>fetch('/api/v1/flags')</script>",
+        "<img src=x onerror=alert(1)>",
+        "<a href=\"javascript:alert(document.domain)\">click</a>",
+        "<iframe src=\"https://evil.example/x\"></iframe>",
+        "<svg onload=alert(1)></svg>",
+    ]
+    for payload in payloads:
+        _install_fake_client(
+            monkeypatch,
+            unlock=lambda *a, _p=payload, **kw: {"success": True, "status": "unlocked", "cost_percent": 10, "content": _p},
+        )
+
+        resp = app_client.post(
+            "/plugins/hint-wallet/api/unlock",
+            json={"track": "bandit", "entry_name": "Bandit 0 -> 1", "tier": 1},
+        )
+
+        assert resp.status_code == 200
+        content = resp.get_json()["content"]
+        lowered = content.lower()
+        for dangerous in ("<script", "onerror", "onload", "javascript:", "<iframe", "<svg"):
+            assert dangerous not in lowered, f"{dangerous!r} survived sanitization: {content!r}"
+
+
+def test_api_unlock_sanitized_hint_content_still_renders_legitimate_markdown(app_client, monkeypatch):
+    """Sanitizing must not destroy the rendering the Markdown step exists for:
+    benign hint content (bold, inline code, a code fence, an https link) has to
+    come through with its tags intact, or the fix would just break hints."""
+    monkeypatch.setattr(routes, "get_current_user", lambda: SimpleNamespace(account_id=7))
+    monkeypatch.setattr(
+        routes, "markdown",
+        lambda text: (
+            "<p>Try <code>ssh -h</code> and <strong>look at /etc/passwd</strong>.</p>"
+            '<p><a href="https://example.com/ref">reference</a></p>'
+        ),
+    )
+    _set_track_challenges(_FakeChallengeRow(1, "Bandit 0 -> 1", "Linux Basics"))
+    _set_solves()
+    _install_fake_client(
+        monkeypatch,
+        unlock=lambda *a, **kw: {"success": True, "status": "unlocked", "cost_percent": 10, "content": "anything"},
+    )
+
+    resp = app_client.post(
+        "/plugins/hint-wallet/api/unlock",
+        json={"track": "bandit", "entry_name": "Bandit 0 -> 1", "tier": 1},
+    )
+
+    content = resp.get_json()["content"]
+    for expected in ("<code>", "<strong>", '<a href="https://example.com/ref"'):
+        assert expected in content, f"legitimate markup {expected!r} was stripped: {content!r}"
+
+
 def test_api_unlock_renders_hint_content_as_markdown(app_client, monkeypatch):
     """routes.py must render `content` through CTFd's own Markdown pipeline
     (same one challenge descriptions use) before it reaches the player --
@@ -657,3 +751,33 @@ def test_api_tiers_no_active_catalog(app_client):
     resp = app_client.get("/plugins/hint-wallet/api/tiers/bandit/Bandit 0 -> 1")
     assert resp.status_code == 409
     assert resp.get_json()["error"] == "no_active_catalog"
+
+
+# ── route access-control contract ─────────────────────────────────────────
+# Every behavioral test above runs with `authed_only` stubbed, so none of them
+# can tell "correctly authed" from "decorator deleted". This table-driven test
+# closes that gap by asserting the decorator itself is present on every rule,
+# walked off the real Flask url_map -- so dropping @authed_only (or adding a
+# route without it) fails CI instead of resting on code review alone.
+
+EXPECTED_AUTH = {
+    "hint_wallet.machine_sync": False,  # machine-to-machine, own HMAC relay
+    "hint_wallet.api_tiers": True,
+    "hint_wallet.api_unlock": True,
+}
+
+
+@pytest.mark.parametrize("endpoint,expected_authed", sorted(EXPECTED_AUTH.items()))
+def test_every_route_carries_the_expected_auth_decorator(endpoint, expected_authed):
+    app = Flask(__name__, static_folder=None)
+    app.register_blueprint(routes.hint_wallet_bp)
+    view = app.view_functions[endpoint]
+    assert getattr(view, "__authed__", False) is expected_authed
+
+
+def test_url_map_has_no_routes_beyond_the_ones_this_test_asserts():
+    """A new route added without updating EXPECTED_AUTH would otherwise be
+    silently unasserted -- force that to be a deliberate edit here."""
+    app = Flask(__name__, static_folder=None)
+    app.register_blueprint(routes.hint_wallet_bp)
+    assert {rule.endpoint for rule in app.url_map.iter_rules()} == set(EXPECTED_AUTH)

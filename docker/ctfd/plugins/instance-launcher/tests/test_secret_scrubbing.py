@@ -23,6 +23,27 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
+# ── Marker-setting auth decorator stubs ─────────────────────────────────────
+# Deliberately NOT bare `lambda f: f`. Every test in this suite (and in
+# test_stage_gating.py, which re-stubs the same decorators) runs with
+# `authed_only`/`admins_only` neutralized, so none of them can tell
+# "correctly authed" from "decorator deleted" -- that made the access-control
+# conclusions a review claim rather than something CI enforces. These set a
+# marker attribute and then call straight through, so behavior is unchanged
+# but the marker contract test in test_stage_gating.py can assert against the
+# real url_map.
+
+
+def _marked_authed_only(func):
+    setattr(func, "__authed__", True)
+    return func
+
+
+def _marked_admins_only(func):
+    setattr(func, "__admins_only__", True)
+    return func
+
+
 # ── Fake CTFd.models ─────────────────────────────────────────────────────────
 
 class _FakeSecretRow:
@@ -156,8 +177,8 @@ def _install_stubs():
 
     ctfd_utils = types.ModuleType("CTFd.utils")
     ctfd_decorators = types.ModuleType("CTFd.utils.decorators")
-    ctfd_decorators.admins_only = lambda f: f
-    ctfd_decorators.authed_only = lambda f: f
+    ctfd_decorators.admins_only = _marked_admins_only
+    ctfd_decorators.authed_only = _marked_authed_only
     ctfd_user = types.ModuleType("CTFd.utils.user")
     ctfd_user.get_current_user = lambda: SimpleNamespace(account_id=1)
 

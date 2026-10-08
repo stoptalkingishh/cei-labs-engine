@@ -73,6 +73,7 @@ from CTFd.utils.user import get_current_user
 
 from .models import HintWalletCatalog
 from .orchestrator_client import OrchestratorClient, OrchestratorError
+from .sanitize import sanitize_html
 from .progression import is_unlockable
 from .track_mapping import category_for_track
 
@@ -275,6 +276,20 @@ def api_unlock():
     # blocks/inline code/bold actually render instead of showing up as
     # literal backticks and run-together prose (the plugin's own JS used to
     # escape+dump this into a single <p>, with no Markdown handling at all).
+    #
+    # markdown() ALONE IS NOT THE SECURITY BOUNDARY, and this used to be a
+    # stored-XSS hole because the second half of CTFd's own pipeline was
+    # missing: markdown() runs cmark-gfm with CMARK_OPT_UNSAFE, so raw HTML in
+    # the hint source passes straight through, and hint-wallet.js assigns the
+    # result to contentDiv.innerHTML. Any foothold in the content pipeline (a
+    # content-push job, a wargames maintainer account, a compromised release)
+    # then executes in every player's browser in the CTFd origin with the
+    # player's session -- enough to submit their flags and drive the launcher
+    # API. sanitize_html() is the missing half (see sanitize.py): CTFd core
+    # applies the same markdown-then-sanitize pair to challenge descriptions
+    # (CTFd.utils.config.pages.build_markdown), and here it's applied
+    # unconditionally, because unlike core's HTML_SANITIZATION config toggle
+    # this content is not admin-authored-and-trusted-by-role.
     if result.get("content"):
-        result["content"] = markdown(result["content"])
+        result["content"] = sanitize_html(markdown(result["content"]))
     return jsonify(result), status_code
