@@ -19,7 +19,7 @@
 # --format='{{index .RepoDigests 0}}'` reports, or query the registry
 # directly: `docker buildx imagetools inspect python:3.12-alpine`. Do not
 # hand-edit the digest -- copy the reported one.
-FROM python:3.12-alpine@sha256:4c47124a8391cb7a9f571164147d154777cf012a4ece5f86097130d7a4478111
+FROM python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72
 
 COPY server.py /server.py
 
