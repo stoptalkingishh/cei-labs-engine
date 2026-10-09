@@ -176,3 +176,31 @@ def range_target_service_name(owner_id: str, instance_key: str) -> str:
 
 def range_attacker_hostname(owner_id: str, base_domain: str) -> str:
     return f"{slugify(owner_id)}-attacker.apps.{base_domain}"
+
+
+# ── In-flight creation footprints ─────────────────────────────────────────────
+# The reaper has to answer "is this pending reservation a crashed worker, or
+# a live creation that's just slow?" before it may abandon it, and the only
+# evidence available is which managed Docker resources already exist. The
+# instance type isn't persisted until finalize(), so a row that is still a
+# reservation could be any of the three; each of them is fully determined by
+# (owner_id, instance_key) alone, so the candidate set is just their union.
+# A resource whose name isn't in here can't have been created by that row's
+# in-flight creation, which is what makes "leave it alone" precise rather
+# than a blanket skip-everything timeout.
+
+def reservation_resource_names(owner_id: str, instance_key: str) -> set:
+    return {
+        service_name(owner_id, instance_key),              # web-app / single-target workload, or range target
+        gateway_service_name(owner_id, instance_key),     # web-app / single-target gateway
+        network_name(owner_id, instance_key),             # web-app / single-target network
+        range_target_service_name(owner_id, instance_key),  # target-attacker target
+    }
+
+
+def range_reservation_resource_names(owner_id: str) -> set:
+    return {
+        range_attacker_service_name(owner_id),
+        range_gateway_service_name(owner_id),
+        range_network_name(owner_id),
+    }

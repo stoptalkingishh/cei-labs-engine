@@ -64,6 +64,21 @@ class ReservationCapacityError(Exception):
         super().__init__(f"{scope} capacity {limit} reached")
 
 
+class ReservationLostError(Exception):
+    """finalize() found no reservation row to write the plan into.
+
+    Raised instead of silently updating 0 rows: a bare UPDATE that affects
+    nothing used to look identical to a successful launch from the caller's
+    side, so the HTTP layer answered 201 with access details for containers
+    nothing in the store knows about (or, once the reaper had also
+    reconciled them away, for containers that no longer existed). The
+    reservation is the only thing that distinguishes "my creation won" from
+    "my row was already deleted underneath me", so losing it has to be an
+    error the caller sees, not a shrug.
+    """
+    pass
+
+
 @dataclass
 class InstanceRecord:
     plan: InstancePlan
@@ -532,11 +547,25 @@ class InstanceStore:
 
     def finalize(self, owner_id: str, instance_key: str, plan: InstancePlan) -> None:
         """Fill in the real plan after a won reservation's Docker resources
-        actually got created."""
-        self._conn().execute(
+        actually got created.
+
+        Raises ``ReservationLostError`` if the reservation is no longer
+        there. This UPDATE used to be a bare statement with no rowcount
+        check, so a row that had been deleted underneath the creator (the
+        reaper's stale-reservation release, a concurrent teardown) made this
+        a silent no-op -- and the request layer then reported the launch as
+        a success, handing the participant a URL for an instance the
+        orchestrator has no record of and can never pause, resume, or
+        reboot."""
+        cursor = self._conn().execute(
             "UPDATE instances SET plan_json = ? WHERE owner_id = ? AND instance_key = ?",
             (_encrypt_plan(self._cipher, _plan_to_json(plan)), owner_id, instance_key),
         )
+        if cursor.rowcount == 0:
+            raise ReservationLostError(
+                f"reservation for {owner_id}/{instance_key} disappeared before the "
+                "created plan could be recorded"
+            )
 
     def release_reservation(self, owner_id: str, instance_key: str) -> None:
         """Roll back a reservation whose Docker creation failed, so the slot
@@ -770,12 +799,47 @@ class InstanceStore:
         ).fetchone()
         return n
 
-    def release_stale_reservations(self, max_age_seconds: int) -> int:
+    def pending_reservations(self) -> list:
+        """(owner_id, instance_key) of every in-flight creation, regardless
+        of age. The reaper pairs this with the live managed Docker resources
+        to work out which of these are still being actively created -- see
+        reaper._release_stale_reservations."""
+        return [
+            (owner_id, instance_key)
+            for owner_id, instance_key in self._conn().execute(
+                "SELECT owner_id, instance_key FROM instances WHERE plan_json IS NULL"
+            ).fetchall()
+        ]
+
+    def release_stale_reservations(
+        self, max_age_seconds: int, exclude: "set[tuple[str, str]]" = frozenset()
+    ) -> int:
+        """Abandon creation reservations older than `max_age_seconds`.
+
+        `exclude` holds (owner_id, instance_key) pairs the caller has
+        positively identified as still being created (their managed Docker
+        resources are live), which must not be dropped no matter how old
+        their row looks -- a launch blocked on a slow image pull is
+        indistinguishable from a dead worker on age alone, and dropping a
+        live one is what let the next orphan sweep delete the containers it
+        was still building. Deleting row-by-row instead of in one statement
+        is what makes that exclusion possible; the extra round trip is
+        irrelevant next to a reaper sweep interval."""
         cutoff = time.time() - max_age_seconds
-        cursor = self._conn().execute(
-            "DELETE FROM instances WHERE plan_json IS NULL AND created_at <= ?", (cutoff,)
-        )
-        return cursor.rowcount
+        conn = self._conn()
+        released = 0
+        for owner_id, instance_key in conn.execute(
+            "SELECT owner_id, instance_key FROM instances WHERE plan_json IS NULL AND created_at <= ?",
+            (cutoff,),
+        ).fetchall():
+            if (owner_id, instance_key) in exclude:
+                continue
+            cursor = conn.execute(
+                "DELETE FROM instances WHERE owner_id = ? AND instance_key = ? AND plan_json IS NULL",
+                (owner_id, instance_key),
+            )
+            released += cursor.rowcount
+        return released
 
 
 class RangeStore:
@@ -868,12 +932,36 @@ class RangeStore:
         ).fetchone()
         return n
 
-    def release_stale_reservations(self, max_age_seconds: int) -> int:
+    def pending_reservations(self) -> list:
+        """owner_id of every in-flight range-attacker creation, regardless of
+        age. See InstanceStore.pending_reservations."""
+        return [
+            (owner_id,)
+            for (owner_id,) in self._conn().execute(
+                "SELECT owner_id FROM ranges WHERE plan_json IS NULL"
+            ).fetchall()
+        ]
+
+    def release_stale_reservations(
+        self, max_age_seconds: int, exclude: "set[tuple[str]]" = frozenset()
+    ) -> int:
+        """See InstanceStore.release_stale_reservations -- same age-only
+        blind spot and the same `exclude` escape hatch, one owner_id key per
+        range row instead of an (owner_id, instance_key) pair."""
         cutoff = time.time() - max_age_seconds
-        cursor = self._conn().execute(
-            "DELETE FROM ranges WHERE plan_json IS NULL AND created_at <= ?", (cutoff,)
-        )
-        return cursor.rowcount
+        conn = self._conn()
+        released = 0
+        for (owner_id,) in conn.execute(
+            "SELECT owner_id FROM ranges WHERE plan_json IS NULL AND created_at <= ?",
+            (cutoff,),
+        ).fetchall():
+            if (owner_id,) in exclude:
+                continue
+            cursor = conn.execute(
+                "DELETE FROM ranges WHERE owner_id = ? AND plan_json IS NULL", (owner_id,)
+            )
+            released += cursor.rowcount
+        return released
 
     def put(self, record: RangeRecord) -> None:
         self._conn().execute(
@@ -915,10 +1003,103 @@ class RangeStore:
         )
 
     def update(self, record: RangeRecord) -> None:
-        """Persist mutated target_keys / last_accessed / stopped back."""
+        """Persist mutated last_accessed / stopped back.
+
+        Deliberately NOT the way to change `target_keys`: this rewrites the
+        whole ``target_keys_json`` column from the in-memory snapshot, so any
+        caller that did get() -> mutate -> update() silently discards keys
+        another caller added in between. Use add_target_key()/
+        remove_target_key() for that -- see their docstrings."""
         self._conn().execute(
-            "UPDATE ranges SET last_accessed = ?, target_keys_json = ?, stopped = ? WHERE owner_id = ?",
-            (record.last_accessed, json.dumps(sorted(record.target_keys)), int(record.stopped), record.owner_id),
+            "UPDATE ranges SET last_accessed = ?, stopped = ? WHERE owner_id = ?",
+            (record.last_accessed, int(record.stopped), record.owner_id),
+        )
+
+    def add_target_key(self, owner_id: str, instance_key: str) -> None:
+        """Atomically record that `instance_key` is one of this range's live
+        targets -- same ``BEGIN IMMEDIATE`` read-modify-write as
+        ``InstanceStore.transition_stopped`` above, for the same reason.
+
+        This used to be ``get()`` -> ``target_keys.add(...)`` -> ``update()``
+        in controller._create_range_target, and the whole column was
+        rewritten from that snapshot. The normal case is two target-attacker
+        challenges of the same team opened at once: both requests read
+        ``{A}``, both add their own key, both write, and one update lands
+        last with the other's key missing. Nothing notices at the time --
+        but teardown_range() iterates exactly this set to find the targets to
+        destroy, so the lost target's container is never torn down and stays
+        reachable from the team's own attacker, with no store row pointing
+        at it, indefinitely."""
+        self._mutate_target_keys(owner_id, add=instance_key)
+
+    def remove_target_key(self, owner_id: str, instance_key: str) -> None:
+        """Atomic counterpart of add_target_key(), used by
+        controller._teardown_record to drop a destroyed target from its
+        range. Same lost-update hazard: a concurrent target creation adding
+        its own key must not be reverted by this removal's stale snapshot."""
+        self._mutate_target_keys(owner_id, remove=instance_key)
+
+    def _mutate_target_keys(self, owner_id: str, add: "str | None" = None, remove: "str | None" = None) -> None:
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT target_keys_json FROM ranges WHERE owner_id = ? AND plan_json IS NOT NULL",
+                (owner_id,),
+            ).fetchone()
+            if row is not None:
+                keys = set(json.loads(row[0]))
+                if add is not None:
+                    keys.add(add)
+                if remove is not None:
+                    keys.discard(remove)
+                conn.execute(
+                    "UPDATE ranges SET target_keys_json = ? WHERE owner_id = ?",
+                    (json.dumps(sorted(keys)), owner_id),
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+
+    def claim_stopped(self, owner_id: str, expected_stopped: bool, new_stopped: bool) -> "RangeRecord | None":
+        """Atomic compare-and-swap on a finalized range row's `stopped` flag,
+        mirroring ``InstanceStore.transition_stopped``: returns the record as
+        it looked immediately before the flip (so the caller owns the
+        matching Docker teardown/recreate) or `None`` if there is nothing to
+        transition.
+
+        Without this, pause_range()/_resume_range_if_stopped() were
+        get() -> flip in Python -> update(), the same read-then-write race
+        transition_stopped() exists to close on the instance store."""
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT plan_json, created_at, last_accessed, target_keys_json, stopped FROM ranges "
+                "WHERE owner_id = ?",
+                (owner_id,),
+            ).fetchone()
+            if row is None or row[0] is None or bool(row[4]) != expected_stopped:
+                conn.execute("COMMIT")
+                return None
+            plan_json, created_at, last_accessed, target_keys_json, stopped = row
+            conn.execute(
+                "UPDATE ranges SET stopped = ? WHERE owner_id = ?",
+                (int(new_stopped), owner_id),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+        return RangeRecord(
+            plan=_range_plan_from_json(_decrypt_plan(self._cipher, plan_json)),
+            created_at=created_at,
+            last_accessed=last_accessed,
+            target_keys=set(json.loads(target_keys_json)),
+            stopped=bool(stopped),
         )
 
     def remove(self, owner_id: str) -> None:

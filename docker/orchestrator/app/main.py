@@ -48,6 +48,7 @@ from . import wallet
 from .config import Config, resolve_offline_mode
 from .controller import (
     CapacityError,
+    DockerServiceMissingError,
     ExtensionsExhaustedError,
     InstanceController,
     InstanceInitializingError,
@@ -60,7 +61,7 @@ from .instance_types import InvalidInstanceRequestError, VALID_TYPES
 from .naming import InvalidIdentifierError
 from .ports import PortAllocator, PortsExhaustedError
 from .reaper import Reaper
-from .store import InstanceStore, RangeStore, WalletStore
+from .store import InstanceStore, RangeStore, ReservationLostError, WalletStore
 from .wallet import WalletIncompleteTracksError, WalletSchemaError, WalletValidationError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -93,6 +94,16 @@ MAX_CONTENT_LENGTH_BYTES = 1024 * 1024
 # every status check. A real deployment's level count is a handful per
 # challenge group, not thousands.
 MAX_SECRET_KEYS_PER_SPEC = 64
+
+# Upper bound on a caller-supplied shutdown countdown. A negative value is
+# just as broken as an absurdly large one, in the other direction: it puts
+# `shutdown_at` in the past, so reaper._sweep_due_shutdowns sees the
+# countdown as already due on its very next sweep and destroys an instance
+# the participant is still actively using. Clamping rather than rejecting
+# keeps a merely-over-large request working; the plugin itself only ever
+# sends the configured defaults (see Config.SHUTDOWN_DELAY_SECONDS /
+# SHUTDOWN_EXTEND_SECONDS), so nothing legitimate lands near this bound.
+MAX_SHUTDOWN_SECONDS = 24 * 60 * 60
 
 
 def _authorized(provided: "str | None", expected: str) -> bool:
@@ -128,6 +139,33 @@ def _access_for_response(plan, include_flag_secrets: bool = False) -> dict:
         return dict(plan.access)
     flag_keys = set(plan.flag_secret_keys or ())
     return {key: value for key, value in plan.access.items() if key not in flag_keys}
+
+
+def _shutdown_seconds(body: dict, key: str, default: int) -> "tuple[int, str | None]":
+    """(clamped_value, error_message) for a shutdown/extend duration taken
+    from a request body.
+
+    Returns an error message rather than raising so the route can answer
+    400. The bare ``int(body.get(...))`` these two call sites used to do sat
+    outside their try blocks, so ``{"delay_seconds": "abc"}`` or
+    ``{"extend_seconds": null}`` -- anything JSON can express that isn't an
+    int -- surfaced as an unhandled 500 with a stack trace instead of a
+    400 the caller can act on. An explicit JSON null is treated as "field
+    omitted" and falls back to `default`, which is how CTFd's plugin already
+    signals "use the configured value" (it omits the key rather than
+    sending null)."""
+    raw = body.get(key)
+    if raw is None:
+        return default, None
+    # bool is an int subclass, and float would silently truncate, so both
+    # are rejected rather than quietly reinterpreted.
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+        return 0, f"'{key}' must be an integer number of seconds"
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0, f"'{key}' must be an integer number of seconds"
+    return max(0, min(value, MAX_SHUTDOWN_SECONDS)), None
 
 
 def _instance_response(record, cfg: "Config | None" = None, include_flag_secrets: bool = False) -> dict:
@@ -330,6 +368,16 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
             return jsonify(error=str(exc)), 400
         except (CapacityError, PortsExhaustedError, InstanceInitializingError) as exc:
             return jsonify(error=str(exc)), 503
+        except ReservationLostError as exc:
+            # The containers were created but the store row this launch was
+            # going to finalize into is gone (the reaper, or a concurrent
+            # teardown, deleted it). Never report this as a 201: a success
+            # here hands the participant a URL for an instance nothing in
+            # the store can pause, resume, or reboot. 503 because a retry is
+            # a reasonable next move -- the leftover containers are reclaimed
+            # by the reaper's orphan sweep once they're provably abandoned.
+            logger.warning("instance creation lost its reservation owner=%s key=%s: %s", owner_id, instance_key, exc)
+            return jsonify(error="creation was interrupted; retry shortly"), 503
         except Exception:
             logger.exception("failed to create instance owner=%s key=%s", owner_id, instance_key)
             return jsonify(error="internal error creating instance"), 500
@@ -401,7 +449,14 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
         # changed.
         record = store.get(owner_id, instance_key)
         was_stopped = record.stopped if record is not None else False
-        ok = controller.reboot(owner_id, instance_key)
+        try:
+            ok = controller.reboot(owner_id, instance_key)
+        except DockerServiceMissingError as exc:
+            # 502, not 404: the instance is NOT gone. Answering 404 here
+            # told the participant's launcher to start over, and the only
+            # thing that does that is a relaunch -- which destroys their
+            # progress over a container someone else removed.
+            return jsonify(error=str(exc), relaunch_required=True), 502
         if not ok:
             return jsonify(error="not found"), 404
         return jsonify(status="resumed" if was_stopped else "rebooting"), 200
@@ -410,7 +465,9 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
     @app.post("/instances/<owner_id>/<instance_key>/schedule-shutdown")
     def schedule_shutdown(owner_id: str, instance_key: str):
         body = request.get_json(silent=True) or {}
-        delay_seconds = int(body.get("delay_seconds", cfg.SHUTDOWN_DELAY_SECONDS))
+        delay_seconds, error = _shutdown_seconds(body, "delay_seconds", cfg.SHUTDOWN_DELAY_SECONDS)
+        if error is not None:
+            return jsonify(error=error), 400
         try:
             shutdown_at = controller.schedule_shutdown(owner_id, instance_key, delay_seconds)
         except NotFoundError as exc:
@@ -420,7 +477,9 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
     @app.post("/instances/<owner_id>/<instance_key>/extend-shutdown")
     def extend_shutdown(owner_id: str, instance_key: str):
         body = request.get_json(silent=True) or {}
-        extend_seconds = int(body.get("extend_seconds", cfg.SHUTDOWN_EXTEND_SECONDS))
+        extend_seconds, error = _shutdown_seconds(body, "extend_seconds", cfg.SHUTDOWN_EXTEND_SECONDS)
+        if error is not None:
+            return jsonify(error=error), 400
         try:
             shutdown_at = controller.extend_shutdown(owner_id, instance_key, extend_seconds)
         except NotFoundError as exc:
@@ -436,7 +495,12 @@ def create_app(config: "Config | None" = None, docker_client=None, start_reaper:
     def reboot_range_attacker(owner_id: str):
         range_record = range_store.get(owner_id)
         was_stopped = range_record.stopped if range_record is not None else False
-        ok = controller.reboot_range_attacker(owner_id)
+        try:
+            ok = controller.reboot_range_attacker(owner_id)
+        except DockerServiceMissingError as exc:
+            # See reboot_instance above: a recorded range with no Docker
+            # service is not a 404.
+            return jsonify(error=str(exc), relaunch_required=True), 502
         if not ok:
             return jsonify(error="not found"), 404
         return jsonify(status="resumed" if was_stopped else "rebooting"), 200
