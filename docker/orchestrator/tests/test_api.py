@@ -216,12 +216,19 @@ def test_idle_then_resume_preserves_credentials_over_http(client):
     # Must clearly signal "resumed a paused environment", not be
     # indistinguishable from "was already running" or "freshly created".
     assert body["status"] == "resumed"
-    assert body["access"] == original_access  # exact same credentials
     assert store.get("team-1", "juice").stopped is False
 
-    # And the instance is genuinely usable again, not just recorded as such.
+    # The 200 idempotent path deliberately serves no `access` at all (see
+    # main.py's create_instance): nothing was rebuilt, and the only caller
+    # discards this body -- it re-reads the credentials through the
+    # owner-scoped GET below. The property this test exists to protect is
+    # that the credentials are STILL THE SAME ONES, so that is asserted
+    # against the response the plugin actually reads them from, and the
+    # instance is genuinely usable again, not just recorded as such.
+    assert "access" not in body
     status = client.get("/instances/team-1/juice", headers=PLUGIN_HEADERS).get_json()
     assert status["stopped"] is False
+    assert status["access"] == original_access  # exact same credentials
 
 
 def test_reboot_of_a_paused_instance_resumes_it_with_same_credentials(client):
@@ -425,6 +432,133 @@ def test_admin_list_ranges(client):
     assert len(body) == 1
     assert body[0]["owner_id"] == "team-1"
     assert body[0]["target_keys"] == ["otw"]
+
+
+# ── credentials and per-team flags in API responses (issue #64) ─────────────
+#
+# `_instance_response` used to embed the plan's whole `access` dict in every
+# response it built. `access` is where instance_types.py puts both the
+# player's genuine connect credentials (ssh_password/novnc_password) AND that
+# team's generated per-team flag values, with nothing in the response marking
+# which is which. The rules now:
+#   * the /admin/* listings carry neither -- one static header must not be
+#     able to read every team's passwords and flags at once;
+#   * the idempotent 200 on POST /instances carries no `access` at all;
+#   * flag values ride only GET /instances/<owner>/<key>, because that is the
+#     one response the CTFd plugin's _persist_and_scrub_secrets feeds and
+#     TeamChallengeSecret (the only thing flags.PerTeamDynamicFlag.compare()
+#     validates against) is written from.
+
+SECRET_KEYS_PAYLOAD = {
+    "type": "single-target",
+    "owner_id": "team-1",
+    "instance_key": "krypton",
+    "spec": {"image": "img", "secret_keys": ["krypton1", "krypton2"]},
+}
+
+
+def test_create_response_carries_connect_info_but_not_per_team_flag_values(client):
+    resp = client.post("/instances", json=SECRET_KEYS_PAYLOAD, headers=PLUGIN_HEADERS)
+    assert resp.status_code == 201
+    access = resp.get_json()["access"]
+    assert "krypton1" not in access and "krypton2" not in access
+    # Ordinary connect info is untouched -- this is a redaction, not a removal.
+    assert access["protocol"] == "ssh"
+    assert access["connect_port"]
+
+
+def test_create_response_still_carries_a_range_attackers_real_credentials(client):
+    """ssh_password/novnc_password are the player's own console credentials,
+    not flag material -- the CTFd launcher renders them so the player can
+    actually get into the box, so they must survive the scrub."""
+    payload = {"type": "target-attacker", "owner_id": "team-1", "instance_key": "otw", "spec": {"target_image": "t", "attacker_image": "k", "secret_keys": ["natas1"]}}
+    resp = client.post("/instances", json=payload, headers=PLUGIN_HEADERS)
+    access = resp.get_json()["access"]
+    assert access["ssh_password"] and access["novnc_password"]
+    assert access["attacker_username"] == "operator"
+    assert "natas1" not in access
+
+
+def test_idempotent_create_returns_status_but_no_credentials_at_all(client):
+    client.post("/instances", json=SECRET_KEYS_PAYLOAD, headers=PLUGIN_HEADERS)
+    resp = client.post("/instances", json=SECRET_KEYS_PAYLOAD, headers=PLUGIN_HEADERS)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "exists"
+    assert "access" not in body
+
+
+def test_status_route_still_carries_flag_values_for_the_plugin_scrub(client):
+    """The one deliberate exception, pinned so it can't be "cleaned up" by
+    someone later: the plugin populates TeamChallengeSecret from this
+    response and flags.PerTeamDynamicFlag.compare() fails closed without it,
+    so removing flag values here breaks every per_team_dynamic flag in the
+    deployment -- silently."""
+    client.post("/instances", json=SECRET_KEYS_PAYLOAD, headers=PLUGIN_HEADERS)
+    generated = client.application.config["store"].get("team-1", "krypton").plan.access
+
+    status = client.get("/instances/team-1/krypton", headers=PLUGIN_HEADERS).get_json()
+    assert status["access"]["krypton1"] == generated["krypton1"]
+    assert status["access"]["krypton2"] == generated["krypton2"]
+
+
+def test_admin_list_instances_never_returns_any_credential_or_flag(client):
+    client.post("/instances", json=SECRET_KEYS_PAYLOAD, headers=PLUGIN_HEADERS)
+    payload = {"type": "target-attacker", "owner_id": "team-2", "instance_key": "otw", "spec": {"target_image": "t", "attacker_image": "k"}}
+    client.post("/instances", json=payload, headers=PLUGIN_HEADERS)
+
+    body = client.get("/admin/instances", headers=ADMIN_HEADERS).get_json()
+    assert len(body) == 2
+    for row in body:
+        assert "access" not in row
+        # Everything an ops dashboard actually renders stays.
+        assert row["owner_id"]
+        assert row["instance_key"]
+        assert row["type"]
+        assert "idle_seconds" in row
+        assert "stopped" in row
+        assert "created_at" in row and "last_accessed" in row
+        assert "shutdown_at" in row and "extensions_used" in row
+
+
+def test_admin_list_ranges_never_returns_the_attacker_credentials(client):
+    payload = {"type": "target-attacker", "owner_id": "team-1", "instance_key": "otw", "spec": {"target_image": "t", "attacker_image": "k"}}
+    client.post("/instances", json=payload, headers=PLUGIN_HEADERS)
+
+    row = client.get("/admin/ranges", headers=ADMIN_HEADERS).get_json()[0]
+    assert "access" not in row
+    assert row["owner_id"] == "team-1"
+    assert row["network"]
+    assert row["target_keys"] == ["otw"]
+    assert "stopped" in row and "created_at" in row
+
+
+# ── per-level key list ceiling (issue #63) ─────────────────────────────────
+
+def test_create_rejects_an_unbounded_secret_keys_list(client):
+    from app.main import MAX_SECRET_KEYS_PER_SPEC
+
+    over = {**SECRET_KEYS_PAYLOAD, "spec": {**SECRET_KEYS_PAYLOAD["spec"], "secret_keys": [f"level{i}" for i in range(MAX_SECRET_KEYS_PER_SPEC + 1)]}}
+    resp = client.post("/instances", json=over, headers=PLUGIN_HEADERS)
+    assert resp.status_code == 400
+    assert "secret_keys" in resp.get_json()["error"]
+
+
+def test_create_accepts_a_secret_keys_list_at_the_ceiling(client):
+    from app.main import MAX_SECRET_KEYS_PER_SPEC
+
+    at = {**SECRET_KEYS_PAYLOAD, "spec": {**SECRET_KEYS_PAYLOAD["spec"], "secret_keys": [f"level{i}" for i in range(MAX_SECRET_KEYS_PER_SPEC)]}}
+    resp = client.post("/instances", json=at, headers=PLUGIN_HEADERS)
+    assert resp.status_code == 201
+
+
+def test_create_rejects_a_non_list_secret_keys_field(client):
+    resp = client.post(
+        "/instances",
+        json={**SECRET_KEYS_PAYLOAD, "spec": {**SECRET_KEYS_PAYLOAD["spec"], "alpha_secret_keys": "krypton3"}},
+        headers=PLUGIN_HEADERS,
+    )
+    assert resp.status_code == 400
 
 
 def test_auth_rejected_when_no_secret_configured():

@@ -20,6 +20,27 @@ log_info()  { echo -e "[$(date '+%H:%M:%S')] ${GREEN}[+]${NC} $*" | tee -a "$LOG
 log_warn()  { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
 log_error() { echo -e "[$(date '+%H:%M:%S')] ${RED}[-]${NC} $*" | tee -a "$LOG_FILE" >&2; }
 
+# 32 alphanumerics, the length every secret here is written to look like it has.
+#
+# The previous `head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32`
+# reads as though it draws 64 random bytes and keeps the alphanumeric ones,
+# but tr *deletes* the other 62/256 of them, so 64 raw bytes yield ~15.5
+# usable characters and the final `head -c 32` almost never has 32 bytes to
+# give. Measured over 15 runs on Linux: 13-20 characters, never 32, never
+# empty, and always exit 0 -- so every auto-generated secret was silently
+# ~90 bits where the code implied ~190, with nothing to indicate a problem.
+# 256 raw bytes clears the 62/256 filter to ~62 characters, comfortably more
+# than the 32 requested, and the length is asserted rather than assumed.
+generate_random_secret() {
+    local value
+    value=$(head -c 256 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32)
+    if [[ ${#value} -ne 32 ]]; then
+        log_error "secret generation produced ${#value} characters, expected 32"
+        return 1
+    fi
+    printf '%s' "$value"
+}
+
 detect_package_manager() {
     if command -v apt-get &>/dev/null; then PM="apt"
     elif command -v dnf &>/dev/null; then PM="dnf"
@@ -107,21 +128,51 @@ configure_docker_env() {
     fi
 
     echo -e "\n${YELLOW}Secrets (leave blank to auto-generate a random value):${NC}"
+    # Secrets are written owner-only. The default umask (022) left every one
+    # of them - the CTFd secret key, both database passwords, the plugin
+    # shared secret, the orchestrator admin password, the CTF key - as
+    # -rw-r--r--. backup-platform.sh already sets umask 077 for the same
+    # reason; the installer did not.
+    local previous_umask
+    previous_umask=$(umask)
+    umask 077
+
     for name in ctfd_secret_key ctfd_db_password ctfd_db_root_password plugin_shared_secret orchestrator_admin_password hint_wallet_sync_secret; do
+        # Re-running the installer is a normal operation (adding a worker to a
+        # live station), and the previous version wrote every one of these
+        # unconditionally. Hitting Enter through the prompt replaced the
+        # database passwords with fresh random values while the running
+        # MariaDB volume kept the old ones -- the next `docker stack deploy`
+        # then restarted CTFd into a permanent authentication failure, with
+        # the old value recorded nowhere. The directory guards above only
+        # covered the very first install. Rotation is deliberate: delete the
+        # file (or use patch-secrets.sh).
+        if [[ -s "$DOCKER_DIR/secrets/${name}.txt" ]]; then
+            log_warn "  ${name} already set — keeping the existing value."
+            log_warn "    To rotate it, delete docker/secrets/${name}.txt first (or use scripts/patch-secrets.sh)."
+            continue
+        fi
         read -rsp "  ${name}: " VALUE
         echo
         if [[ -z "$VALUE" ]]; then
-            VALUE=$(head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32)
+            VALUE=$(generate_random_secret)
             log_info "  generated random value for ${name}"
         fi
         echo "$VALUE" > "$DOCKER_DIR/secrets/${name}.txt"
     done
 
-    read -rp "CTF key (seeds all Juice Shop flags — must be re-used consistently, default: random): " CTF_KEY
-    if [[ -z "$CTF_KEY" ]]; then
-        CTF_KEY=$(head -c 64 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32)
+    if [[ -s "$DOCKER_DIR/secrets/ctf_key.txt" ]]; then
+        log_warn "  ctf_key already set — keeping the existing value."
+        log_warn "    Juice Shop flags are seeded from it; changing it changes every flag."
+    else
+        read -rp "CTF key (seeds all Juice Shop flags — must be re-used consistently, default: random): " CTF_KEY
+        if [[ -z "$CTF_KEY" ]]; then
+            CTF_KEY=$(generate_random_secret)
+        fi
+        echo "$CTF_KEY" > "$DOCKER_DIR/secrets/ctf_key.txt"
     fi
-    echo "$CTF_KEY" > "$DOCKER_DIR/secrets/ctf_key.txt"
+
+    umask "$previous_umask"
 
     # credential_encryption_key must be a valid Fernet key (urlsafe-base64
     # encoded 32 raw bytes) -- app/crypto.py hands it straight to
@@ -129,10 +180,20 @@ configure_docker_env() {
     # it can'''t just be an arbitrary alnum string. Generated with Python
     # (already a hard dependency of every image this stack builds) so the
     # encoding always matches what Fernet itself expects.
+    #
+    # Written before the umask is restored, and that ordering is the point:
+    # this key decrypts every persisted per-team credential and flag, so it is
+    # the most consequential file in the directory. An `umask 077` that covers
+    # the six secrets above but not this one is worse than none, because it
+    # looks deliberate.
     if [[ ! -s "$DOCKER_DIR/secrets/credential_encryption_key.txt" ]]; then
-        python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"             > "$DOCKER_DIR/secrets/credential_encryption_key.txt" 2>/dev/null             || python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"                 > "$DOCKER_DIR/secrets/credential_encryption_key.txt"
+        (umask 077; python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"             > "$DOCKER_DIR/secrets/credential_encryption_key.txt" 2>/dev/null             || python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"                 > "$DOCKER_DIR/secrets/credential_encryption_key.txt")
         log_info "  generated random Fernet key for credential_encryption_key"
     fi
+
+    # Re-state the permissions on anything copied from secrets.example during
+    # the first install, which the umask above never touched.
+    chmod 600 "$DOCKER_DIR/secrets"/*.txt 2>/dev/null || true
 
     log_info "Configuration written to docker/.env and docker/secrets/."
 }

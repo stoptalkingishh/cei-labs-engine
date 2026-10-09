@@ -24,6 +24,16 @@ X-Admin-Auth: <contents of the orchestrator_admin_password Docker secret>
 
 `/healthz` requires nothing.
 
+Request bodies are capped at 1 MiB (`MAX_CONTENT_LENGTH_BYTES` in
+`app/main.py`); anything larger is rejected with `413` before the route body
+runs. This matters most for `/wallet/sync`, the one route that authenticates
+inside the handler via an HMAC body signature rather than through
+`X-Orchestrator-Auth`: its signature check sits downstream of reading the
+body, so without the ceiling a large unauthenticated upload is buffered into
+a container capped at `memory: 256M` (`docker/stack.yml`) before anything
+rejects it. Size it above your largest real hint catalog, not above
+"whatever a client might send".
+
 ## Instance types
 
 - **web-app** — one vulnerable container on a dedicated internal network.
@@ -84,29 +94,71 @@ plugin does this every time a participant opens the challenge page).
 Responses (`201` created / `200` already existed or relaunched):
 
 ```jsonc
-// web-app
+// 201 only
 { "status": "created", "type": "web-app", "access": { "url": "https://team-42-juice-shop.apps.ctf.local" } }
 
-// single-target
+// 201 only
 { "status": "created", "type": "single-target",
   "access": { "connect_host": "ctf.local", "connect_port": 32000, "protocol": "ssh", "note": "..." } }
 
-// target-attacker
+// 201 only
 { "status": "created", "type": "target-attacker",
   "access": { "attacker_url": "https://team-42-attacker.apps.ctf.local",
+              "attacker_username": "operator",
+              "ssh_password": "...", "novnc_password": "...",
               "target_hostname": "chrange-team-42-otw-range-target",
               "note": "Target is reachable only from your attacker workstation, at the hostname above." } }
+
+// 200 — nothing was (re)built, so nothing is re-served
+{ "status": "exists", "type": "web-app" }
+{ "status": "resumed", "type": "web-app" }
 ```
+
+`access` is returned **only on the `201`** — the one case where an
+environment was actually built and the connect info is news to the caller.
+The `200` `exists`/`resumed` responses carry `status` and `type` and no
+credentials: nothing was recreated, and the CTFd plugin discards this body
+anyway (it re-reads the credentials through the owner-scoped
+`GET /instances/<owner_id>/<instance_key>` below).
+
+`access` never contains **per-team flag values** (the per-level secrets
+generated from a spec's `secret_keys`/`alpha_secret_keys`/`fixed_secret_keys`,
+which CTFd persists CTFd-side as `TeamChallengeSecret`). Those are scrubbed
+server-side out of every response except the status route — see "Per-team
+flags in API responses" under `GET /instances/...` below.
 
 `503` if at `ORCHESTRATOR_MAX_INSTANCES` capacity, the SSH port range is
 exhausted, or the creation lost its reservation mid-flight (reaper race — retry
-shortly); `400` for a malformed spec, including out-of-range ports. A creation
-is never reported as `201` unless the store actually recorded it.
+shortly); `400` for a malformed spec, including out-of-range ports or a
+`secret_keys` / `alpha_secret_keys` / `fixed_secret_keys` list longer than
+`MAX_SECRET_KEYS_PER_SPEC` (every entry costs a generated secret in both the
+container env and the persisted plan); `413` if the request body exceeds
+`MAX_CONTENT_LENGTH_BYTES`. A creation is never reported as `201` unless the
+store actually recorded it.
 
 ### `GET /instances/<owner_id>/<instance_key>`
 
 Status + access info. Touches the idle timer. Includes `shutdown_at` /
 `extensions_used` if a post-solve countdown is active. `404` if it doesn't exist.
+
+#### Per-team flags in API responses
+
+This one response **does** carry per-team flag values inside `access`, under
+each level key (`"krypton2": "..."`), and that is deliberate, not an
+oversight: it is the only channel through which CTFd learns them at all. The
+`instance-launcher` plugin's `_persist_and_scrub_secrets` pops each of them
+out of `access` and upserts it into `TeamChallengeSecret` CTFd-side, and that
+row is the only thing `PerTeamDynamicFlag.compare()` validates a submission
+against — nothing else writes it, and no orchestrator round-trip happens at
+solve time. The plugin applies its scrub before the status dict is rendered
+or returned, so the values never reach a player.
+
+Removing them here would break every `per_team_dynamic` flag in the
+deployment, and silently — `compare()` just returns `False` when the row is
+missing. Every other response (`POST /instances`, both `/admin/*` listings)
+is held to the stricter rule and carries no flag values at all. Treat this
+endpoint's response as flag-bearing: never log it, never proxy it to a
+browser.
 
 ### `DELETE /instances/<owner_id>/<instance_key>`
 
@@ -169,7 +221,28 @@ attacker, and the range's network.
 
 ### `GET /admin/instances`, `GET /admin/ranges`, `DELETE /admin/instances/<owner>/<key>`, `DELETE /admin/ranges/<owner>`
 
-Same shapes as above, admin-authenticated, for an ops dashboard.
+Admin-authenticated lifecycle/ops endpoints. The two listings are
+**deliberately credential-free** — they are the one place a caller holding
+only the static `X-Admin-Auth` header could otherwise read every team's
+passwords and per-team flag values at once:
+
+```jsonc
+// GET /admin/instances
+[{ "owner_id": "team-42", "instance_key": "juice-shop", "type": "web-app",
+   "created_at": 1750000000.0, "last_accessed": 1750000123.0,
+   "idle_seconds": 123.0, "stopped": false,
+   "shutdown_at": null, "extensions_used": 0 }]
+
+// GET /admin/ranges
+[{ "owner_id": "team-42", "network": "cei-labs_range_team-42",
+   "target_keys": ["otw"], "created_at": 1750000000.0,
+   "last_accessed": 1750000123.0, "idle_seconds": 123.0, "stopped": false }]
+```
+
+Neither contains `access`. Read an individual instance's connect
+credentials through `GET /instances/<owner_id>/<instance_key>` instead, which
+is scoped to a single owner and gated on `X-Orchestrator-Auth` rather than
+on the admin secret.
 
 ## Isolation model (airgapping)
 

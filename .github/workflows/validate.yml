@@ -6,12 +6,24 @@ on:
   push:
     branches: [main]
 
+# Supersede in-progress runs for the same ref instead of stacking up
+# duplicate runs on every push to a PR branch.
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+# This workflow only ever reads the repository. Pin the default token down to
+# that so a compromised dependency or a careless step cannot write to it.
+permissions:
+  contents: read
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   validate-yaml:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -24,42 +36,17 @@ jobs:
         run: pip install PyYAML
 
       - name: Parse and validate YAML files
-        run: |
-          python3 -c '
-          import os, sys, yaml
-          success = True
-          invalid_files = []
-          for root, dirs, files in os.walk("."):
-              # Skip hidden directories like .git
-              if any(d.startswith(".") for d in root.split(os.sep)):
-                  continue
-              for file in files:
-                  if file.endswith((".yml", ".yaml")):
-                      path = os.path.join(root, file)
-                      try:
-                          with open(path, "r") as f:
-                              # Load all documents if multi-document file
-                              list(yaml.safe_load_all(f))
-                      except Exception as e:
-                          print(f"[-] Invalid YAML format in {path}: {e}", file=sys.stderr)
-                          invalid_files.append(f"{path}: {e}")
-                          success = False
-          if not success:
-              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-                  summary.write("### ❌ YAML Validation Failed\n")
-                  summary.write("The following files failed parsing validation:\n")
-                  for error in invalid_files:
-                      summary.write(f"- `{error}`\n")
-              sys.exit(1)
-          
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-              summary.write("### ✅ YAML Validation Passed\n")
-              summary.write("All YAML configurations parsed cleanly without structural defects.\n")
-          print("[+] All YAML configurations parsed cleanly.")
-          '
+        # Lives in scripts/ so it is runnable locally
+        # (`python3 scripts/validate-yaml.py`) rather than inlined in a
+        # single-quoted shell string. That inline form broke on any
+        # apostrophe in a parser error message, and it hid the walk bug
+        # documented in the script's docstring. The script reports how many
+        # files it checked and fails if that count is zero.
+        run: python3 scripts/validate-yaml.py
 
   validate-stack:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -67,8 +54,15 @@ jobs:
         run: |
           cp docker/.env.example docker/.env
           cp -r docker/secrets.example docker/secrets
+
+          # GitHub's default shell is `bash -e {0}`, so a failing
+          # `docker compose config` would kill the shell before we could
+          # capture $? or write the step summary. `set +e` around the call
+          # keeps the diagnostics, matching validate-ansible/validate-scripts.
+          set +e
           (cd docker && docker compose -f stack.yml config --quiet) > compose_output.txt 2>&1
           exit_code=$?
+          set -e
 
           cat compose_output.txt
 
@@ -88,6 +82,10 @@ jobs:
 
   validate-ansible:
     runs-on: ubuntu-latest
+    # ansible-galaxy collection install and ansible-lint are both
+    # network-bound; ~2.5min observed. 30 gives ample headroom while still
+    # failing in minutes rather than after GitHub's 6-hour default.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -150,16 +148,37 @@ jobs:
 
   validate-dockerfiles:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
 
       - name: Lint Dockerfiles with hadolint
         id: docker_lint
         continue-on-error: true
-        uses: hadolint/hadolint-action@v3.1.0
+        # Pinned by SHA (v3.1.0, the version this workflow already used) so
+        # the action cannot be swapped out from under the required
+        # `validate-dockerfiles` check by a retagged `v3.1.0`. The bundled
+        # hadolint stays at 2.12.0, so this changes no lint behaviour --
+        # upgrading to hadolint 2.15.1 (hadolint-action v3.5.0,
+        # 06be81baf89a55ffd0e24b8f04a4185738dd3387) is a separate change that
+        # needs a CI run to confirm the newer rule set still passes.
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           recursive: true
-          ignore: DL3002,DL3006,DL3007,DL3008,DL3009,DL3013,DL3015,DL3018,DL3042,DL4006,SC2015,SC2028,DL3059
+          # DL3006 (tag the base image) and DL3007 (never `latest`) are no
+          # longer suppressed: every base image in the tree is now pinned to an
+          # explicit digest, and leaving them on masks that regression class.
+          #
+          # SC2015/SC2028 are NOT dead config despite the `SC` prefix --
+          # hadolint implements that subset of shellcheck rules against the
+          # bodies of RUN instructions. SC2015 currently fires on
+          # operator/targets/base-linux/Dockerfile:35, so removing it turns
+          # this required check red.
+          #
+          # Note: neither DL3006 nor DL3007 would catch a base image pinned by
+          # tag but not digest (e.g. `python:3.12-alpine`). That is DL3026,
+          # which hadolint 2.12.0 does not flag here.
+          ignore: DL3002,DL3008,DL3009,DL3013,DL3015,DL3018,DL3042,DL4006,SC2015,SC2028,DL3059
 
       - name: Report Dockerfile summary
         run: |
@@ -178,38 +197,57 @@ jobs:
 
   validate-scripts:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
 
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      - name: Run ShellCheck on all scripts
+      - name: Run ShellCheck on all shell scripts
         run: |
-          if [ -d "scripts" ]; then
-            set +e
-            find scripts/ -type f -name "*.sh" | \
-            xargs -r shellcheck --shell=bash --external-sources --severity=warning > shellcheck_output.txt 2>&1
-            exit_code=$?
-            set -e
-            
-            cat shellcheck_output.txt
-            
-            {
-              echo "### 🐚 Bash Script Analysis (ShellCheck)"
-              if [ $exit_code -eq 0 ]; then
-                echo "✅ All workspace deployment scripts align securely with ShellCheck baseline quality guidelines."
-              else
-                echo "❌ Potential logical pitfalls, portability issues, or shell warnings detected:"
-                echo "\`\`\`text"
-                cat shellcheck_output.txt
-                echo "\`\`\`"
-              fi
-            } >> "$GITHUB_STEP_SUMMARY"
-            
-            exit $exit_code
-          else
-            echo "No scripts directory found, skipping ShellCheck."
+          # Lint the whole repository, not just scripts/. The previous
+          # `find scripts/` silently skipped
+          # docker/ctfd/docker-entrypoint-wrapper.sh -- the one script that
+          # exports Swarm-mounted secrets as environment variables and then
+          # execs into CTFd. It is covered now.
+          #
+          # `-prune` stops the walk descending into VCS/virtualenv/cache
+          # directories instead of listing their contents and filtering
+          # afterwards, which is what made a name-based filter easy to get
+          # subtly wrong in the first place.
+          mapfile -t shell_files < <(find . \
+            -type d \( -name .git -o -name .venv -o -name __pycache__ \) -prune -o \
+            -type f -name "*.sh" -print)
+
+          if [ ${#shell_files[@]} -eq 0 ]; then
+            echo "No shell scripts found -- refusing to report success on an empty scan." >&2
             echo "### 🐚 Bash Script Analysis (ShellCheck)" >> "$GITHUB_STEP_SUMMARY"
-            echo "⚠️ Scripts root hierarchy tracking directory not found. Check skipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ No \`*.sh\` files discovered. The scan is broken, not the repository." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
+
+          printf 'Linting %d shell script(s):\n' "${#shell_files[@]}"
+          printf '  %s\n' "${shell_files[@]}"
+
+          set +e
+          printf '%s\n' "${shell_files[@]}" | \
+            xargs -r shellcheck --shell=bash --external-sources --severity=warning > shellcheck_output.txt 2>&1
+          exit_code=$?
+          set -e
+          
+          cat shellcheck_output.txt
+          
+          {
+            echo "### 🐚 Bash Script Analysis (ShellCheck)"
+            if [ $exit_code -eq 0 ]; then
+              echo "✅ All workspace shell scripts align securely with ShellCheck baseline quality guidelines."
+            else
+              echo "❌ Potential logical pitfalls, portability issues, or shell warnings detected:"
+              echo "\`\`\`text"
+              cat shellcheck_output.txt
+              echo "\`\`\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          
+          exit $exit_code

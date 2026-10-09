@@ -433,7 +433,36 @@ def test_relaunch_tears_down_and_recreates():
     assert docker.create_calls[2].name == first_service_name  # same identity, fresh container
 
 
-def test_parallel_relaunches_converge_on_one_replacement():
+def test_parallel_relaunches_converge_on_one_replacement(monkeypatch):
+    """20 concurrent relaunches of one instance must produce exactly ONE
+    replacement container pair, not one per racing request.
+
+    Synchronization: this used to sleep 0.25s after the winner entered
+    teardown, on the assumption that every other thread would reach
+    claim_for_replacement() and see the pending reservation inside that
+    window. That is a wall-clock guess, not a guarantee -- it asserts a
+    property ("all 19 siblings observed my reservation") that only holds if
+    19 threads can each open a SQLite connection and complete a
+    BEGIN IMMEDIATE within 250ms. Under load they can't, and stragglers then
+    re-enter a *later* claim window after the winner has already finalized,
+    each winning one more replacement: 14 create_calls / 6 winners at
+    sleep=0.05, 42/20 at sleep=0. Observed only as
+    `assert 14 == 4` on len(docker.create_calls).
+
+    Note the sleep=0 result is itself the proof the locking is correct: with
+    no delay, all 20 threads win their claim *sequentially*, one at a time.
+    At most one claim is ever held; the failures are purely a harness race.
+
+    The rendezvous below replaces the sleep with a deterministic one. A None
+    return from claim_for_replacement() is proof -- not a timing assumption --
+    that the caller saw the pending reservation: the row is never deleted on
+    that path (create_or_get falls through to store.reserve(), which fails on
+    the existing row and then polls get() until the winner finalizes). So
+    counting None returns and releasing the winner only once all 19 have
+    been observed guarantees every sibling is already committed to the
+    "wait, don't create" branch. Same barrier-and-no-sleep model as
+    test_store_concurrency's claim test.
+    """
     class BlockingRemovalDocker(FakeDockerOrchestratorClient):
         def __init__(self):
             super().__init__()
@@ -442,7 +471,7 @@ def test_parallel_relaunches_converge_on_one_replacement():
 
         def remove_service(self, name: str) -> None:
             self.removal_started.set()
-            assert self.allow_removal.wait(timeout=5)
+            assert self.allow_removal.wait(timeout=30)
             super().remove_service(name)
 
     worker_count = 20
@@ -473,6 +502,30 @@ def test_parallel_relaunches_converge_on_one_replacement():
         ]
         controllers[0].create_or_get(it.WEB_APP, "team-1", "juice", {"image": "img"})
 
+        # Deterministic rendezvous, installed on the class so every worker's
+        # own store object is instrumented (each store here stands in for a
+        # separate gunicorn worker process, per the comment above). A None
+        # return means that worker observed the winner's pending reservation
+        # and will NOT create anything -- it falls through to reserve(),
+        # which fails on the existing row, and then polls get() until the
+        # winner finalizes. So the Nth None is a hard signal, not a guess.
+        observed_pending = threading.Event()
+        observed_count = 0
+        count_lock = threading.Lock()
+        real_claim = InstanceStore.claim_for_replacement
+
+        def counting_claim(self, owner_id, instance_key):
+            nonlocal observed_count
+            record = real_claim(self, owner_id, instance_key)
+            if record is None:
+                with count_lock:
+                    observed_count += 1
+                    if observed_count >= worker_count - 1:
+                        observed_pending.set()
+            return record
+
+        monkeypatch.setattr(InstanceStore, "claim_for_replacement", counting_claim)
+
         barrier = threading.Barrier(worker_count)
         results = [None] * worker_count
 
@@ -490,9 +543,14 @@ def test_parallel_relaunches_converge_on_one_replacement():
         for thread in threads:
             thread.start()
         assert docker.removal_started.wait(timeout=5)
-        # Keep the winning request inside teardown long enough for every
-        # sibling to observe the pending SQLite reservation.
-        time.sleep(0.25)
+        # Release the winner only once every sibling has provably observed
+        # the pending reservation. No sleep: the previous `time.sleep(0.25)`
+        # here was the entire bug (see this test's docstring) -- it could
+        # elapse before a single sibling reached claim_for_replacement() on a
+        # loaded machine, letting stragglers claim fresh windows afterwards.
+        assert observed_pending.wait(timeout=30), (
+            f"only {observed_count}/{worker_count - 1} siblings observed the pending reservation"
+        )
         docker.allow_removal.set()
         for thread in threads:
             thread.join(timeout=12)

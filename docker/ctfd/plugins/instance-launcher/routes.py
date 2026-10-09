@@ -380,7 +380,12 @@ def sync_mapping():
     function's own X-Sync-Auth check ever runs."""
     provided = request.headers.get("X-Sync-Auth", "")
     expected = read_secret("plugin_shared_secret")
-    if not expected or not hmac.compare_digest(provided, expected):
+    # Compare as bytes, not str: hmac.compare_digest raises TypeError on str
+    # operands containing any byte >= 0x80, so an X-Sync-Auth header with a
+    # non-ASCII byte would turn a rejected request into an unhandled 500
+    # instead of the 401 it is. Same encode-then-compare the orchestrator
+    # already does on its own side (docker/orchestrator/app/main.py).
+    if not expected or not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
         abort(401)
 
     body = request.get_json(force=True, silent=True) or {}
