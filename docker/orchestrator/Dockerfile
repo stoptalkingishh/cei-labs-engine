@@ -1,4 +1,4 @@
-FROM python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 # Runs as root (the image default) because it needs to read
 # /var/run/docker.sock, which is only accessible to root/the docker group on
 # the host — see the security note on the `orchestrator` service in
