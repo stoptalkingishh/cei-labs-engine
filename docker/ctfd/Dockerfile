@@ -1,4 +1,4 @@
-FROM ctfd/ctfd:3.8.6@sha256:5b780b3628f2fe7bc0cdf9567d51244c2e8b5bb93f227fdac0532c94ae43f7c7
+FROM ctfd/ctfd:3.8.9@sha256:84aff1e50b6a6f931b5da90c6f5b7c623ba4583217a9b00e9d4c1b7c53b9739f
 
 USER root
 
