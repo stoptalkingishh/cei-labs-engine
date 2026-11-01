@@ -1,6 +1,6 @@
 """docker/orchestrator/app/wallet.py
 
-Validation for the signed three-track hint-wallet catalog bundle posted to
+Validation for the signed required-track hint-wallet catalog bundle posted to
 POST /wallet/sync by the Wargames deploy job's `sync_hint_wallet_bundle()`
 (see docker/orchestrator/docs/P0-FIX-LOG-2026-07-23.md for the full
 contract, and CEI-Labs-Wargames/docs/hint-wallet-sync-deployment.md and
@@ -23,7 +23,7 @@ pool.
 import hashlib
 import json
 
-REQUIRED_TRACKS = frozenset({"bandit", "krypton", "natas"})
+REQUIRED_TRACKS = frozenset({"bandit", "krypton", "natas", "sentinel"})
 
 
 class WalletSchemaError(Exception):
@@ -31,7 +31,7 @@ class WalletSchemaError(Exception):
 
 
 class WalletIncompleteTracksError(Exception):
-    """Bundle doesn't contain exactly the three required tracks -> 400 incomplete_tracks."""
+    """Bundle doesn't contain exactly the required tracks -> 400 incomplete_tracks."""
 
 
 class WalletValidationError(Exception):
@@ -98,9 +98,9 @@ def validate_bundle(bundle) -> list:
                 _require(isinstance(tier_obj.get("content"), str) and tier_obj["content"], "tier content must be a non-empty string")
         _require(isinstance(manifest.get("digest"), str) and manifest["digest"], "manifest digest must be a non-empty string")
 
-    # Track completeness: exactly the three required tracks, no duplicates, no extras.
+    # Track completeness: every required track exactly once, no duplicates or extras.
     tracks = [manifest["track"] for manifest in manifests]
-    if len(manifests) != 3 or set(tracks) != REQUIRED_TRACKS or len(set(tracks)) != len(tracks):
+    if len(manifests) != len(REQUIRED_TRACKS) or set(tracks) != REQUIRED_TRACKS or len(set(tracks)) != len(tracks):
         raise WalletIncompleteTracksError(
             f"bundle must contain exactly the tracks {sorted(REQUIRED_TRACKS)} once each, got {sorted(tracks)}"
         )
